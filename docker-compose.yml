@@ -1,0 +1,190 @@
+# ============================================================
+# ConnectSphere — Docker Compose (Development)
+#
+# Services:
+#   mongo      → primary database
+#   redis      → session cache, pub/sub, rate limiting
+#   zookeeper  → coordination layer required by Kafka
+#   kafka      → event streaming (call recording, notifications)
+#   kafka-ui   → browser UI to inspect Kafka topics (dev only)
+#
+# Usage:
+#   docker compose up -d          # start all
+#   docker compose up -d mongo    # start just mongo
+#   docker compose logs -f kafka  # tail kafka logs
+#   docker compose down -v        # stop + remove volumes
+# ============================================================
+
+services:
+
+  # ──────────────────────────────────────────────
+  # MongoDB — Primary Database
+  # Stores: users, rooms, messages, recordings
+  # ──────────────────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: cs_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"          # expose to host for debugging with Compass
+    environment:
+      MONGO_INITDB_DATABASE: connectsphere
+    volumes:
+      - mongo_data:/data/db   # persist data across restarts
+    networks:
+      - cs_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────────
+  # Redis — Cache + Pub/Sub + Rate Limiting
+  #
+  # What is Redis?
+  #   An in-memory key-value store. Blazing fast (~100k ops/sec).
+  #
+  # Why do we need it?
+  #   1. Store JWT refresh token blacklist (logout invalidation)
+  #   2. Cache room state so Socket.io workers can share state
+  #   3. Rate limiting API endpoints (e.g. max 5 login attempts)
+  #   4. Pub/Sub for Socket.io horizontal scaling (multiple servers)
+  # ──────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: cs_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes   # enable AOF persistence
+    volumes:
+      - redis_data:/data
+    networks:
+      - cs_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ──────────────────────────────────────────────
+  # ZooKeeper — Kafka's Coordination Service
+  #
+  # What is ZooKeeper?
+  #   A distributed coordination system. Kafka uses it to:
+  #   - Track which Kafka brokers are alive
+  #   - Elect a leader broker
+  #   - Store topic/partition metadata
+  #
+  # Note: Newer Kafka (KRaft mode) can run without ZooKeeper,
+  # but the Confluent image we use still benefits from it for
+  # production-like setup.
+  # ──────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: cs_zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - cs_network
+    healthcheck:
+      # This image's zookeeper.properties.template doesn't map
+      # ZOOKEEPER_4LW_COMMANDS_WHITELIST at all (checked the template — it's
+      # not in the supported env var list), so "ruok" stays blocked no matter
+      # what we set. "srvr" is whitelisted by default, so use that instead.
+      test: ["CMD", "bash", "-c", "echo srvr | nc localhost 2181 | grep Mode"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────────
+  # Kafka — Event Streaming Platform
+  #
+  # What is Kafka?
+  #   A distributed, fault-tolerant message queue designed for
+  #   high throughput. Unlike Redis pub/sub, Kafka PERSISTS messages
+  #   and consumers can replay them.
+  #
+  # Why do we need it for ConnectSphere?
+  #   1. Call recording pipeline: backend emits audio/video chunks
+  #      → Kafka topic → consumer processes with ffmpeg → uploads to S3
+  #   2. Notification events: "user joined room" → email / push
+  #   3. Analytics: track call quality metrics asynchronously
+  #   4. Audit log: who joined/left which room, when
+  # ──────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: cs_kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"            # used by backend running on host
+      - "9093:9093"            # used by services inside Docker network
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # PLAINTEXT_HOST = reachable from your laptop (port 9092)
+      # PLAINTEXT      = reachable from other Docker containers (port 9093)
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_HOST://localhost:9092,PLAINTEXT://kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1   # 1 = single broker (dev only)
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 24               # keep messages for 24h in dev
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - cs_network
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ──────────────────────────────────────────────
+  # Kafka UI — Browser UI for Kafka (dev only)
+  # Visit: http://localhost:8080
+  # See topics, messages, consumer groups
+  # ──────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: cs_kafka_ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - cs_network
+
+# ──────────────────────────────────────────────
+# Named Volumes — data persists across restarts
+# ──────────────────────────────────────────────
+volumes:
+  mongo_data:
+  redis_data:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:
+
+# ──────────────────────────────────────────────
+# Network — all services can reach each other
+# by service name (e.g. "mongo", "redis", "kafka")
+# ──────────────────────────────────────────────
+networks:
+  cs_network:
+    driver: bridge

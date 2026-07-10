@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Global styles */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  @apply bg-gray-950 text-white font-sans antialiased;
+  margin: 0;
+}
