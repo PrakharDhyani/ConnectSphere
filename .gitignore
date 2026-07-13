@@ -58,3 +58,10 @@ coverage/
 # ========================
 *.pem
 .cache/
+
+# ========================
+# Claude Code
+# Machine-specific local settings (paths, personal permission grants) —
+# .claude/settings.json (shared team config) stays tracked.
+# ========================
+.claude/settings.local.json
