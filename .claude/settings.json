@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm audit *)"
+      "Bash(npm audit *)",
+      "Bash(sleep 4 && cat /tmp/backend_dev.log)",
+      "Read(//tmp/**)",
+      "Bash(curl -s -i -X POST http://localhost:5000/api/auth/register -H 'Content-Type: application/json' -d '{\"name\":\"Test User\",\"email\":\"test1@example.com\",\"password\":\"Passw0rd123\"}')",
+      "Bash(curl -s -i -X POST http://localhost:5000/api/auth/register -H 'Content-Type: application/json' -d '{\"name\":\"Bad Pass\",\"email\":\"test2@example.com\",\"password\":\"weak\"}')",
+      "Bash(curl -s -i -X POST http://localhost:5000/api/auth/register -H 'Content-Type: application/json' -d '{\"email\":\"test3@example.com\",\"password\":\"Passw0rd123\"}')"
     ]
   }
 }
