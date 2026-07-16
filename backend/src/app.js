@@ -13,6 +13,7 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import { rateLimit } from "express-rate-limit";
 import { logger } from "./utils/logger.js";
+import { passport, configurePassport } from "./config/passport.js";
 
 // ── Route imports (we'll build these in upcoming phases) ──
 import authRoutes from "./routes/auth.routes.js";
@@ -54,6 +55,11 @@ app.use(express.urlencoded({ extended: true }));
 
 // ── Cookie parsing — needed to read the httpOnly refresh-token cookie ──
 app.use(cookieParser());
+
+// ── Passport (Google OAuth) — stateless, no sessions; JWTs take over
+//    after the one callback request ──
+configurePassport();
+app.use(passport.initialize());
 
 // ── HTTP request logging (morgan → winston) ──
 app.use(
