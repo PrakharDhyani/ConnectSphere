@@ -1,5 +1,9 @@
 import { Router } from "express";
-const router = Router();
-router.get("/", (req, res) => res.json({ message: "User routes — coming in Phase 2" }));
-export default router;
+import { authenticate } from "../middleware/authenticate.js";
+import { getMe } from "../controllers/user.controller.js";
 
+const router = Router();
+
+router.get("/me", authenticate, getMe);
+
+export default router;
