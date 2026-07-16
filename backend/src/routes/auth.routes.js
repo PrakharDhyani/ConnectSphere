@@ -6,10 +6,19 @@ import {
   refresh,
   logout,
   googleCallback,
+  verifyEmail,
+  resendVerification,
+  forgotPassword,
+  resetPassword,
 } from "../controllers/auth.controller.js";
 import { passport } from "../config/passport.js";
 import { validate } from "../middleware/validate.js";
-import { registerSchema, loginSchema } from "../validators/auth.validator.js";
+import {
+  registerSchema,
+  loginSchema,
+  emailSchema,
+  resetPasswordSchema,
+} from "../validators/auth.validator.js";
 
 const router = Router();
 
@@ -27,6 +36,12 @@ router.post("/register", authLimiter, validate(registerSchema), register);
 router.post("/login", authLimiter, validate(loginSchema), login);
 router.post("/refresh", authLimiter, refresh);
 router.post("/logout", logout);
+
+// ── Email verification & password reset ──
+router.get("/verify-email", verifyEmail);
+router.post("/resend-verification", authLimiter, validate(emailSchema), resendVerification);
+router.post("/forgot-password", authLimiter, validate(emailSchema), forgotPassword);
+router.post("/reset-password", authLimiter, validate(resetPasswordSchema), resetPassword);
 
 // ── Google OAuth ──
 // If creds aren't configured, the strategy was never registered — return a

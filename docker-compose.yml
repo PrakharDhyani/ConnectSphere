@@ -171,6 +171,28 @@ services:
     networks:
       - cs_network
 
+  # ──────────────────────────────────────────────
+  # MailDev — local SMTP catcher for dev (free, self-hosted)
+  #
+  # What it does:
+  #   Accepts SMTP on port 1025 but never delivers anywhere — instead it
+  #   shows every "sent" email in a web UI at http://localhost:1080.
+  #   Lets us build/test email flows (verification, password reset) with
+  #   zero external service and nothing actually leaving the machine.
+  #
+  # Production: swap the backend's SMTP_* env vars to a real provider
+  #   (Resend, Brevo, etc.) — no code change needed.
+  # ──────────────────────────────────────────────
+  maildev:
+    image: maildev/maildev:2.1.0
+    container_name: cs_maildev
+    restart: unless-stopped
+    ports:
+      - "1080:1080"   # web UI
+      - "1025:1025"   # SMTP
+    networks:
+      - cs_network
+
 # ──────────────────────────────────────────────
 # Named Volumes — data persists across restarts
 # ──────────────────────────────────────────────

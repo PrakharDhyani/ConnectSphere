@@ -21,7 +21,8 @@
 8. [Feature: Auth Middleware & Protected Routes](#8-feature-auth-middleware--protected-routes)
 9. [Feature: Refresh Token Rotation & Logout (Redis)](#9-feature-refresh-token-rotation--logout-redis)
 10. [Feature: Google OAuth 2.0](#10-feature-google-oauth-20)
-11. [Testing / Verification Methodology](#11-testing--verification-methodology)
+11. [Feature: Email Verification & Password Reset](#11-feature-email-verification--password-reset)
+12. [Testing / Verification Methodology](#12-testing--verification-methodology)
 
 ---
 
@@ -443,7 +444,81 @@ after logout → 401.
 
 ---
 
-## 11. Testing / Verification Methodology
+## 11. Feature: Email Verification & Password Reset
+
+### The Feature
+Confirm users own their email (verification link on signup + resend), and let them
+recover access via a "forgot password" email flow.
+
+### Ways to Implement the Tokens
+1. **Signed JWT as the token** — stateless, but can't be revoked/single-used without
+   extra tracking, and a leaked signing secret forges valid links.
+2. **Random token stored raw** (DB/Redis) — simple, but a store leak hands over live tokens.
+3. **Random token, store only its hash (chosen)** — high-entropy random token emailed to
+   the user; only its SHA-256 hash is stored. A store leak exposes nothing usable.
+
+### What We Did
+- `services/authToken.service.js` — `crypto.randomBytes(32)` token; store
+  `SHA-256(token)` in Redis as `verify_email:<hash>` (24h TTL) / `reset_password:<hash>`
+  (1h TTL), value = userId. **SHA-256 (fast hash) is correct here** — the token is
+  already 256 bits of randomness, so there's nothing to brute-force (unlike a password,
+  which needs slow bcrypt).
+- **Single-use via `GETDEL`** — look-up-and-delete is atomic, so a token can't be
+  replayed or race-used. Verified: reusing a consumed verify link → `?status=invalid`.
+- `services/email.service.js` — one nodemailer transport configured entirely from env.
+  Dev → **MailDev** container (SMTP :1025, web UI :1080) which *catches* mail and never
+  delivers, so nothing leaves the machine and no paid service is needed. Prod → point
+  `SMTP_*` at Resend/Brevo, **zero code change**.
+- **Verification:** on register, `dispatchVerificationEmail` sends
+  `SERVER_URL/api/auth/verify-email?token=…`. That endpoint is a `GET` (it's a link
+  click), consumes the token, sets `emailVerified: true`, and redirects to the frontend
+  with a status. Email sending is **best-effort** — wrapped in try/catch so a mail hiccup
+  never fails the registration itself (user can `/resend-verification`).
+- **Password reset:** `POST /forgot-password` → `POST /reset-password`. The reset link
+  points at the frontend (`CLIENT_URL/reset-password?token=…`) since it needs a form; the
+  actual change is the POST.
+- **Anti-enumeration** on both `/forgot-password` and `/resend-verification` — always the
+  same generic 200 ("if an account exists…"), regardless of whether the email is
+  registered or already verified. Same principle as the login 401.
+- **Reset kills all sessions.** Extended `refreshToken.service.js` with a per-user
+  reverse index (`user_sessions:<userId>` Redis set of jtis) so `revokeAllUserSessions()`
+  can drop every refresh token at once. On reset we also set `emailVerified: true`
+  (clicking the emailed link proves ownership).
+
+### Challenges / Design Notes
+- **Set-membership TTL:** Redis sets have no per-member expiry, so the `user_sessions`
+  set could accumulate stale jtis after their `refresh:` keys expire. Mitigated by giving
+  the set the same TTL (refreshed on each new token) and making revoke tolerant of stale
+  entries (deleting a missing key is a no-op).
+- **Why the verify link hits the backend but the reset link hits the frontend:**
+  verification is a one-click GET with no user input → backend can handle + redirect.
+  Reset needs the user to type a new password → must land on a frontend form first.
+- **Email as best-effort vs blocking:** chose non-blocking for registration (better UX,
+  resend exists) but the reset/verify *tokens* are always created first so the flow is
+  never left in a half state.
+
+### Verification (live, real stack — MailDev + Redis + Mongo)
+Register → verification email captured in MailDev → extracted the link → GET verified it
+(`302 …?status=success`) → confirmed `emailVerified: true` in Mongo → **reused the token
+→ `?status=invalid`** (single-use holds). Forgot-password → identical generic 200 for
+both a real and a nonexistent email → reset email captured → reset-password `200` →
+**`user_sessions` set gone + both of the user's refresh tokens revoked** → old refresh
+cookie `401`, old password `401`, new password `200`.
+
+### Interview Q&A
+- *Why hash the token if it's not a password?* Defense-in-depth: a Redis dump shouldn't
+  contain usable tokens. Fast hash is fine because the token is already high-entropy —
+  the bcrypt "make it slow" logic only matters for low-entropy secrets (passwords).
+- *Why does password reset revoke sessions but a normal password change might not?* Reset
+  is the "I may be compromised / locked out" path — you must assume existing sessions are
+  hostile and kill them. That's what the reverse index enables.
+- *How do you stop the reset flow from leaking which emails are registered?* Identical
+  response + timing-insensitive handling; the email either goes out or doesn't, but the
+  API says the same thing either way.
+- *Dev email without a paid provider?* MailDev (or MailHog) — a local SMTP sink with a web
+  UI; swap env vars for a real provider in prod.
+
+## 12. Testing / Verification Methodology
 
 We don't have automated tests yet (planned: Jest + supertest). Until then, every
 feature is verified **end-to-end against the real running stack** — real MongoDB,
@@ -473,14 +548,17 @@ real Redis, real HTTP — never assumed from reading code:
 
 ## Current Status / Next Steps
 
-**Done (feature/auth branch):** User model · register · login · auth middleware ·
-`/users/me` · refresh rotation · logout · Google OAuth — **fully verified end-to-end**,
-including a real browser round-trip confirmed in MongoDB + Redis.
+**Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
+auth middleware · `/users/me` · refresh rotation · logout · Google OAuth — fully verified
+end-to-end including a real browser round-trip.
+
+**Done — `feature/auth-extras` (current branch):** email verification (+resend) ·
+password reset · session revocation on reset · MailDev for local email — all verified
+live against MailDev + Redis + Mongo.
 
 **Next:**
-1. Decide: email verification + password reset now, or PR what we have and follow up
-2. PR `feature/auth` → `develop`
-3. Then: user profiles (avatar upload → S3-compatible storage, via **MinIO** — free,
+1. PR `feature/auth-extras` → `develop`
+2. Then: user profiles (avatar upload → S3-compatible storage, via **MinIO** — free,
    self-hosted, same `@aws-sdk/client-s3` API we already use) → rooms → mediasoup video core
 
 ## Note: No Paid Cloud Services
@@ -499,4 +577,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-16 (auth-extras)*
