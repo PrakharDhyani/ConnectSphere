@@ -11,6 +11,7 @@ import EmailVerifiedPage from "@/pages/EmailVerifiedPage.jsx";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage.jsx";
 import ResetPasswordPage from "@/pages/ResetPasswordPage.jsx";
 import DashboardPage from "@/pages/DashboardPage.jsx";
+import ProfilePage from "@/pages/ProfilePage.jsx";
 import NotFoundPage from "@/pages/NotFoundPage.jsx";
 
 export default function App() {
@@ -39,6 +40,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <ProfilePage />
           </ProtectedRoute>
         }
       />

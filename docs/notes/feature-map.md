@@ -311,3 +311,55 @@ enforces everything.
 - [src/pages/DashboardPage.jsx](../../frontend/src/pages/DashboardPage.jsx) — first protected page: user card, verify-email banner + resend, logout
 - [src/App.jsx](../../frontend/src/App.jsx) — all routes + the one-time `bootstrapAuth()` effect
 - [src/pages/HomePage.jsx](../../frontend/src/pages/HomePage.jsx) / [NotFoundPage.jsx](../../frontend/src/pages/NotFoundPage.jsx) — linked up (NotFound was an **empty file** that crashed the build — found & fixed)
+
+---
+
+## F11. User profiles — name edit + avatar upload (MinIO) ✅
+
+**Tool & technology:** MinIO (S3-compatible object storage, self-hosted, free),
+`@aws-sdk/client-s3`, multer (multipart file parsing), Joi, React
+(FormData upload), Docker Compose.
+
+**What needs to be done:** let a logged-in user change their display name and
+upload an avatar image — with the file stored in real object storage (not the
+database, not the server's disk), size/type-limited, and safe against privilege
+smuggling.
+
+**How it's done:** files belong in object storage; we code against the official
+AWS S3 SDK but point it at **MinIO** in Docker (free-tier rule) —
+`forcePathStyle: true` is the one MinIO-specific flag. multer parses the
+`multipart/form-data` upload **into memory** (never to disk — the buffer streams
+straight to the bucket), capped at 2MB, images only. The avatar key is
+deterministic (`avatars/<userId>.<ext>`) so re-uploads overwrite — no orphaned
+files, no cleanup job; a `?v=<timestamp>` query busts browser caches. `PATCH
+/users/me` takes only whitelisted fields (Joi + stripUnknown — a smuggled
+`"role": "admin"` is silently dropped, and there's a test proving it). Storage
+follows the same graceful-degradation pattern as Google OAuth: no S3 env vars →
+clear 501, dev stays bootable.
+
+**Workflow (avatar upload):**
+1. Profile page: user picks a file → JS wraps it in `FormData` → `POST /api/users/me/avatar`
+2. `authenticate` → multer parses the multipart body (rejects >2MB / non-image with 400)
+3. Controller: storage configured? → `uploadAvatar(userId, buffer, mimetype)`
+4. Storage service: ensure bucket exists (auto-create, idempotent) → `PutObject` to `avatars/<userId>.<ext>`
+5. Returned URL saved on the user → response carries the updated safe user → UI swaps the image
+
+**File by file:**
+- [src/services/storage.service.js](../../backend/src/services/storage.service.js) — S3 client for MinIO, lazy bucket creation, `uploadAvatar`, `storageEnabled` (501 pattern)
+- [src/validators/user.validator.js](../../backend/src/validators/user.validator.js) — `updateMeSchema` (partial update, `.min(1)` rejects empty bodies)
+- [src/controllers/user.controller.js](../../backend/src/controllers/user.controller.js) — `updateMe`, `uploadAvatar` (+ existing `getMe`), one `toSafeUser` whitelist
+- [src/routes/user.routes.js](../../backend/src/routes/user.routes.js) — multer config (memory, 2MB, image filter) + a wrapper that turns multer's own errors into 400s (they carry no statusCode → would surface as 500s)
+- [docker-compose.yml](../../docker-compose.yml) — `minio` service (:9000 API, :9001 console) + volume
+- [tests/users.profile.test.js](../../backend/tests/users.profile.test.js) — 10 tests: name update persists, 401/400 paths, **role-smuggling stripped**, upload happy path (bytes reach storage, URL reaches Mongo), non-image 400, oversize 400
+- [tests/helpers/harness.js](../../backend/tests/helpers/harness.js) — storage mock capturing `{userId, size, mimetype, url}` into `h.uploads`
+- [frontend/src/pages/ProfilePage.jsx](../../frontend/src/pages/ProfilePage.jsx) — avatar picker (hidden file input + FormData), name form, verified badge
+- [frontend/src/pages/DashboardPage.jsx](../../frontend/src/pages/DashboardPage.jsx) — header now links to `/profile` with the avatar thumbnail
+- [frontend/src/App.jsx](../../frontend/src/App.jsx) — protected `/profile` route
+
+**Backend env vars (add to `backend/.env` to enable):**
+```
+S3_ENDPOINT=http://localhost:9000
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_BUCKET=connectsphere
+```

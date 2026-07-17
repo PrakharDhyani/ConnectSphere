@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import Button from "@/components/ui/Button.jsx";
@@ -26,7 +26,17 @@ export default function DashboardPage() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
         <span className="text-xl font-bold text-brand-400">🌐 ConnectSphere</span>
         <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-400">{user?.name}</span>
+          <Link to="/profile" className="flex items-center gap-2 text-sm text-gray-400 hover:text-brand-400">
+            {user?.avatarUrl ? (
+              <img src={user.avatarUrl} alt="" className="w-7 h-7 rounded-full object-cover" />
+            ) : (
+              <span className="w-7 h-7 rounded-full bg-brand-900 flex items-center justify-center
+                text-xs font-bold text-brand-200">
+                {user?.name?.[0]?.toUpperCase() ?? "?"}
+              </span>
+            )}
+            {user?.name}
+          </Link>
           <Button variant="secondary" onClick={handleLogout}>Log out</Button>
         </div>
       </header>

@@ -45,6 +45,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 12. [Testing / Verification Methodology](#12-testing--verification-methodology)
 13. [Feature: Automated Test Harness (Jest + supertest)](#13-feature-automated-test-harness-jest--supertest)
 14. [Feature: Auth UI — the frontend half of auth](#14-feature-auth-ui--the-frontend-half-of-auth)
+15. [Feature: User Profiles — name edit & avatar upload (MinIO)](#15-feature-user-profiles--name-edit--avatar-upload-minio)
 
 ---
 
@@ -716,6 +717,53 @@ full stack queued for next session (needs Docker up).
   token, session restored.
 - *Why single-flight refresh?* Refresh tokens are single-use (rotation). Two
   parallel refreshes = the second kills the session the first just created.
+
+---
+
+## 15. Feature: User Profiles — name edit & avatar upload (MinIO)
+
+*(Full template entry: [feature-map F11](notes/feature-map.md))*
+
+### The Feature
+`PATCH /users/me` (display name) + `POST /users/me/avatar` (image upload to
+S3-compatible storage) + a React profile page. First feature built **full-stack
+in one branch**, and first use of object storage.
+
+### Ways to Implement File Storage
+1. Store images in MongoDB (base64/GridFS) — bloats the DB, no CDN path. Rejected.
+2. Server's local disk — dies on redeploy, breaks with >1 server. Rejected.
+3. **(chosen)** Object storage via the S3 API — but **MinIO** self-hosted in
+   Docker instead of AWS (free-tier rule). Same SDK, env-var swap to real
+   S3/R2 in prod.
+
+### What We Did
+- `services/storage.service.js` — S3 client (`forcePathStyle: true`, the one
+  MinIO-specific flag), lazy auto-create bucket, deterministic key
+  `avatars/<userId>.<ext>` (re-upload overwrites → zero orphan cleanup),
+  `?v=<ts>` cache-buster. Same 501 graceful-degradation pattern as OAuth.
+- multer in **memory** mode (buffer → straight to bucket, never disk), 2MB cap,
+  JPEG/PNG/WebP only; a wrapper adds statusCode 400 to multer's own errors
+  (they'd otherwise surface as 500s).
+- `updateMeSchema`: partial update, `.min(1)`; stripUnknown kills smuggled
+  `role: "admin"` — with a regression test proving the DB stays `user`.
+- Frontend: FormData upload with hidden file input, avatar preview/initials
+  fallback, dashboard header avatar → profile link.
+- Test harness grew a storage mock capturing uploads (`h.uploads`) — 10 new
+  tests, suite now **47 green**.
+
+### Challenges
+- multer errors (e.g. LIMIT_FILE_SIZE) carry no `statusCode` → our error
+  handler would report 500 for a user mistake; fixed with the wrapper.
+- Cache-busting: deterministic keys mean the URL never changes — browsers would
+  show the old avatar forever without the version query.
+
+### Interview Q&A
+- *Why memory storage for multer, not disk?* The file's destination is the
+  bucket; a disk hop adds I/O, cleanup, and breaks on multi-instance deploys.
+- *Why is a stable object key better than a random one per upload?* Overwrite
+  semantics = no orphaned files, no GC job; version query handles caching.
+- *How would this scale to recordings?* Same service, new prefix + presigned
+  URLs (SDK already installed) so clients upload directly to storage.
 
 ---
 

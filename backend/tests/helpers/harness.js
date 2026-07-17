@@ -46,6 +46,7 @@ delete process.env.GOOGLE_CLIENT_SECRET;
 export function startHarness() {
   const redis = makeFakeRedis();
   const emails = { verifications: [], resets: [] };
+  const uploads = []; // { userId, size, mimetype, url } per storage upload
 
   // ── (2) Mock the external edges. Jest matches by resolved path, so the
   //        specifiers here (relative to this file) target the same modules
@@ -66,6 +67,18 @@ export function startHarness() {
     getTransporter: jest.fn(),
   }));
 
+  // Object storage → captured in-memory. Tests get real URLs back without
+  // MinIO running; `uploads` records every call for assertions.
+  jest.unstable_mockModule(src("services/storage.service.js"), () => ({
+    storageEnabled: () => true,
+    allowedAvatarMimeTypes: ["image/jpeg", "image/png", "image/webp"],
+    uploadAvatar: jest.fn(async (userId, buffer, mimetype) => {
+      const url = `http://localhost:9000/connectsphere/avatars/${userId}`;
+      uploads.push({ userId: String(userId), size: buffer.length, mimetype, url });
+      return url;
+    }),
+  }));
+
   jest.unstable_mockModule(src("utils/logger.js"), () => ({
     logger: {
       info() {},
@@ -76,7 +89,7 @@ export function startHarness() {
     },
   }));
 
-  const handle = { app: null, redis, emails };
+  const handle = { app: null, redis, emails, uploads };
   let mongod;
 
   beforeAll(async () => {
@@ -103,6 +116,7 @@ export function startHarness() {
     redis.__flush();
     emails.verifications.length = 0;
     emails.resets.length = 0;
+    uploads.length = 0;
   });
 
   return handle;
