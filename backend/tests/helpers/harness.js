@@ -101,6 +101,8 @@ export function startHarness() {
     ({ app: handle.app } = await import("../../src/app.js"));
     const { User } = await import("../../src/models/User.js");
     await User.syncIndexes(); // materialize unique(email) / sparse(googleId)
+    const { Room } = await import("../../src/models/Room.js");
+    await Room.syncIndexes(); // materialize unique(code)
   });
 
   afterAll(async () => {

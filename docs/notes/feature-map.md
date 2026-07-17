@@ -363,3 +363,44 @@ S3_ACCESS_KEY=minioadmin
 S3_SECRET_KEY=minioadmin
 S3_BUCKET=connectsphere
 ```
+
+---
+
+## F12. Rooms — create, list, join by code ✅
+
+**Tool & technology:** Mongoose (new `Room` model, ObjectId refs, unique index,
+`$addToSet`), crypto (invite codes), Joi, TanStack Query on the frontend
+(first real use — queries + mutations + cache invalidation).
+
+**What needs to be done:** the container every future call/chat/whiteboard
+lives in: users create rooms, get a short invite code to share, others join
+with the code, members open the room page. Non-members must be kept out.
+
+**How it's done:** a `Room` document holds `name`, a generated 6-hex-char
+`code` (unique-indexed; ~16.7M combinations — unguessable-by-scanning but easy
+to read out loud), `owner`, and a `members` array. Model invariants live in a
+`pre("validate")` hook: code auto-generated, owner always a member. Join uses
+one atomic `findOneAndUpdate` + `$addToSet` (add-if-absent → idempotent, no
+read-then-write race). Room access is membership-gated: member → 200,
+non-member → **403** (the room exists; the join flow is the door), bad/malformed
+id → 404 (a malformed ObjectId would throw a CastError → 500 without the guard).
+Frontend: dashboard becomes the rooms hub using react-query — the room list is
+**server state** (`useQuery ["rooms"]`), mutations invalidate the cache and the
+list refetches itself.
+
+**Workflow (invite a friend):**
+1. Alice: create form → `POST /api/rooms {name}` → model generates code `a1b2c3`, Alice is owner+member → she lands on `/room/<id>`
+2. Alice clicks the invite-code button (copies to clipboard), sends it to Bob
+3. Bob: join form → `POST /api/rooms/join {code}` → `$addToSet` adds him (twice = still once) → lands in the room
+4. Both see it under "Your rooms" (`GET /api/rooms` = rooms where `members` contains me)
+5. A stranger with the room's URL but no membership → 403 page with "ask for the code"
+
+**File by file:**
+- [src/models/Room.js](../../backend/src/models/Room.js) — schema, `generateCode`, owner-is-member + auto-code hook
+- [src/validators/room.validator.js](../../backend/src/validators/room.validator.js) — name rule; code normalized to lowercase (codes read over the phone survive)
+- [src/controllers/room.controller.js](../../backend/src/controllers/room.controller.js) — create (collision-retry on the unique index), list, membership-gated get, idempotent join; `toSafeRoom` whitelist
+- [src/routes/room.routes.js](../../backend/src/routes/room.routes.js) — `router.use(authenticate)` (every room endpoint needs login)
+- [tests/rooms.test.js](../../backend/tests/rooms.test.js) — 9 tests: create/validation/401, list isolation between users, join + idempotency + case-normalization + unknown/malformed code, member/non-member/bad-id gate (suite: **56 green**)
+- [frontend/src/pages/DashboardPage.jsx](../../frontend/src/pages/DashboardPage.jsx) — rooms hub: react-query list + create/join mutations with cache invalidation
+- [frontend/src/pages/RoomPage.jsx](../../frontend/src/pages/RoomPage.jsx) — room view: copy-invite-code, 403/404 states, Phase-3 video placeholder
+- [frontend/src/App.jsx](../../frontend/src/App.jsx) — protected `/room/:roomId` route

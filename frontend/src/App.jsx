@@ -12,6 +12,7 @@ import ForgotPasswordPage from "@/pages/ForgotPasswordPage.jsx";
 import ResetPasswordPage from "@/pages/ResetPasswordPage.jsx";
 import DashboardPage from "@/pages/DashboardPage.jsx";
 import ProfilePage from "@/pages/ProfilePage.jsx";
+import RoomPage from "@/pages/RoomPage.jsx";
 import NotFoundPage from "@/pages/NotFoundPage.jsx";
 
 export default function App() {
@@ -51,8 +52,14 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-
-      {/* Phase 3: <Route path="/room/:roomId" element={<RoomPage />} /> */}
+      <Route
+        path="/room/:roomId"
+        element={
+          <ProtectedRoute>
+            <RoomPage />
+          </ProtectedRoute>
+        }
+      />
 
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

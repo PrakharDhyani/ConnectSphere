@@ -46,6 +46,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 13. [Feature: Automated Test Harness (Jest + supertest)](#13-feature-automated-test-harness-jest--supertest)
 14. [Feature: Auth UI — the frontend half of auth](#14-feature-auth-ui--the-frontend-half-of-auth)
 15. [Feature: User Profiles — name edit & avatar upload (MinIO)](#15-feature-user-profiles--name-edit--avatar-upload-minio)
+16. [Feature: Rooms — create, list, join by code](#16-feature-rooms--create-list-join-by-code)
 
 ---
 
@@ -767,25 +768,83 @@ in one branch**, and first use of object storage.
 
 ---
 
+## 16. Feature: Rooms — create, list, join by code
+
+*(Full template entry: [feature-map F12](notes/feature-map.md))*
+
+### The Feature
+The container everything else attaches to: create a room → share a 6-char
+invite code → others join → members open the room page. Full-stack: Room
+model + 4 endpoints + rooms dashboard + room page.
+
+### Ways to Implement Joining
+1. Join by room ID — IDs are long, ugly, and leak enumeration surface. Rejected.
+2. Invite links with signed tokens — heavier than needed pre-launch. Later.
+3. **(chosen)** Short random code (6 hex chars, unique-indexed) — human-shareable
+   ("a1b2c3"), unguessable by scanning (16.7M), O(1) lookup.
+
+### What We Did
+- `Room` model with a `pre("validate")` hook enforcing two invariants at the
+  model level (nobody can forget them): code auto-generated, **owner is always
+  a member**.
+- Join = one atomic `findOneAndUpdate` + **`$addToSet`** — add-if-absent, so
+  joining twice can't duplicate membership and there's no read-then-write race.
+- Membership gate on `GET /rooms/:id`: member 200 / non-member **403** (room
+  exists — the join flow is the door) / unknown-or-malformed id 404. The
+  malformed-id case needs an explicit `isValidObjectId` guard — otherwise
+  mongoose throws a CastError and the user sees a 500 for a typo.
+- Create retries on the unique-index collision (E11000) with a fresh code —
+  1-in-16M shouldn't fail a user's request.
+- Frontend: dashboard is now the rooms hub — **first real TanStack Query
+  usage**: `useQuery(["rooms"])` for the list, mutations for create/join that
+  `invalidateQueries` so the list refetches itself. RoomPage: copy-invite-code
+  button, distinct 403/404 screens, Phase-3 video placeholder.
+- 9 new tests → suite **56 green**.
+
+### Challenges
+- Deciding 403 vs 404 for non-members: 404 would hide the room's existence
+  (more private), but the UX needs "you're not in — go get the code," and codes
+  (not ids) are the secret here. Documented trade-off.
+- Case-insensitive codes: Joi `.lowercase()` normalizes, so a code read out
+  loud as "A1B2C3" still joins.
+
+### Interview Q&A
+- *Why `$addToSet` over "read members, push, save"?* Atomic — two simultaneous
+  joins can't race; and it's idempotent for free.
+- *Why is the invite code its own unique index and not the `_id`?* IDs are
+  permanent and enumerable; codes are short, shareable, and could later be
+  rotated/expired without changing the room's identity.
+- *Where does video attach?* The RoomPage placeholder — mediasoup signaling
+  joins over Socket.io, keyed by this room id (Phase 3).
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
 auth middleware · `/users/me` · refresh rotation · logout · Google OAuth — fully verified
 end-to-end including a real browser round-trip.
 
-**Done — `feature/auth-extras`:** email verification (+resend) · password reset ·
-session revocation on reset · MailDev for local email — all verified live against
-MailDev + Redis + Mongo. **PR opened → `develop`.**
+**Done — the whole auth surface (backend + frontend):** register/login · refresh
+rotation · logout · Google OAuth · email verification · password reset · **Auth UI**
+(§14: session restore across reloads, silent refresh, protected routes).
 
-**Done — automated test harness (this branch):** Jest + supertest, in-memory
-Mongo + Redis fake + captured-email spies. **37 tests, 5 suites, all green**;
-auth logic surface 90–100% covered (§13). `npm test` needs no Docker.
+**Done — test harness (§13):** Jest + supertest, in-memory Mongo + Redis fake +
+captured email/storage spies. **56 tests, 7 suites, all green**, no Docker needed.
+
+**Done — User Profiles (§15):** name edit + avatar upload to MinIO, profile page.
+
+**Done — Rooms (§16):** create / list / join-by-code + rooms dashboard + room page.
+
+**Branch state (stacked — merge PRs in this order):**
+`feature/auth-extras` → `feature/auth-frontend` → `feature/user-profiles` → `feature/rooms`,
+each based on the previous; merging them into `develop` in that order keeps every diff clean.
 
 **Next:**
-1. Merge `feature/auth-extras` → `develop` once the PR is reviewed.
-2. Then: user profiles (avatar upload → S3-compatible storage, via **MinIO** — free,
-   self-hosted, same `@aws-sdk/client-s3` API we already use) → rooms → mediasoup video core.
-   With the harness in place, each new feature ships with tests, so verification is fast.
+1. Merge the branch chain into `develop`.
+2. Live end-to-end pass with Docker up (register → verify → avatar → room round-trip),
+   incl. MinIO's first real upload.
+3. Then Phase 3 begins: Socket.io chat in rooms → mediasoup video core → whiteboard.
 
 ## Note: No Paid Cloud Services
 
@@ -803,4 +862,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-17 (automated test harness — Jest + supertest)*
+*Last updated: 2026-07-17 (Auth UI · User Profiles + MinIO · Rooms — first full-stack feature run)*
