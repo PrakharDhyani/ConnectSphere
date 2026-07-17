@@ -9,6 +9,26 @@
 
 ---
 
+## 📚 Detailed Notes (newbie-level, file-by-file)
+
+This journal stays the **interview-prep** view (decisions, trade-offs, Q&A).
+The **detailed walkthroughs** — every file explained from `index.js` to the test
+suite — live in three parts under `docs/notes/`:
+
+| Part | Covers |
+|---|---|
+| [Part 0 — Technologies](notes/part-0-technologies.md) | **Start here.** Every single technology explained from zero — no assumed knowledge: HTTP/JSON/ports, Node, Express, MongoDB, **Redis**, **Kafka**, **ZooKeeper**, Docker, JWT, bcrypt, OAuth, React, Vite, Jest… what each is, why we use it, where it lives |
+| [Feature Map](notes/feature-map.md) | Every feature in one fixed template: **tool & technology → what needs to be done → how it's done → workflow → file by file** |
+| [Part 1 — Foundations](notes/part-1-foundations.md) | Everything common to backend & frontend: Docker Compose, git/GitHub workflow, `.env`, how FE↔BE talk (Vite proxy, CORS, cookies), shared tooling, ports |
+| [Part 2 — Backend, file by file](notes/part-2-backend-auth.md) | The whole backend in request-pipeline order: `index.js`, `app.js`, `config/`, `utils/`, `middleware/`, `models/`, `validators/`, `services/`, `controllers/`, `routes/`, `sockets/`, and the entire `tests/` folder |
+| [Part 3 — Frontend](notes/part-3-frontend.md) | The React scaffold file by file + the Auth UI feature; grows with every feature |
+
+**Workflow from here:** every feature is built **full-stack** — backend + frontend
+together on one `feature/*` branch — and documented in both this journal (the
+"why") and the parts above (the "how, line by line").
+
+---
+
 ## Table of Contents
 
 1. [Project Overview & Architecture](#1-project-overview--architecture)
