@@ -30,6 +30,9 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many attempts, please try again later." },
+  // See app.js globalLimiter — disabled under test so the shared loopback IP
+  // doesn't accumulate hits across a suite and trip the 20/window cap.
+  skip: () => process.env.NODE_ENV === "test",
 });
 
 router.post("/register", authLimiter, validate(registerSchema), register);

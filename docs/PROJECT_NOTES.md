@@ -23,6 +23,7 @@
 10. [Feature: Google OAuth 2.0](#10-feature-google-oauth-20)
 11. [Feature: Email Verification & Password Reset](#11-feature-email-verification--password-reset)
 12. [Testing / Verification Methodology](#12-testing--verification-methodology)
+13. [Feature: Automated Test Harness (Jest + supertest)](#13-feature-automated-test-harness-jest--supertest)
 
 ---
 
@@ -520,9 +521,14 @@ cookie `401`, old password `401`, new password `200`.
 
 ## 12. Testing / Verification Methodology
 
-We don't have automated tests yet (planned: Jest + supertest). Until then, every
-feature is verified **end-to-end against the real running stack** — real MongoDB,
-real Redis, real HTTP — never assumed from reading code:
+> **Update:** automated tests now exist — see §13. This section documents the
+> **manual** end-to-end methodology used while building each feature (and still
+> the way OAuth / the browser round-trip get verified). The two are complementary:
+> the Jest suite guards the logic on every change; manual E2E proves the real
+> infra wiring.
+
+Until the harness landed, every feature was verified **end-to-end against the real
+running stack** — real MongoDB, real Redis, real HTTP — never assumed from reading code:
 
 - **curl with `-i`** to assert status codes, headers (Set-Cookie flags), and bodies.
 - **Negative paths always tested** alongside happy paths: duplicate email, weak
@@ -546,20 +552,120 @@ real Redis, real HTTP — never assumed from reading code:
 
 ---
 
+## 13. Feature: Automated Test Harness (Jest + supertest)
+
+### The Feature
+A fast, dependency-free API test suite that drives the **real Express app** through
+HTTP and asserts on status codes, bodies, cookies, and persisted state — so every
+future change re-verifies the whole auth surface in ~15s instead of by hand.
+**37 tests across 5 suites, all green.**
+
+### Ways to Implement
+1. **Hit a real running stack in CI** (spin up Mongo + Redis containers, boot the
+   server) — highest fidelity, but slow, flaky, and needs Docker on every CI box.
+2. **Mock everything, unit-test controllers in isolation** — fast, but tests the
+   mocks more than the app; misses routing, middleware order, validation, cookies.
+3. **Integration tests against the exported app, external edges faked (chosen)** —
+   `supertest` drives the actual `app` (real routes/middleware/controllers/models),
+   with only the *edges* replaced: in-memory Mongo, an in-memory Redis fake, and
+   spied-out email/logger. Real behaviour, zero infra, runs anywhere.
+
+### What We Did
+- **`supertest` on the exported `app`** — the `app.js`/`index.js` split (§3) pays off:
+  we import `app` without ever calling `listen()`, Kafka, or Socket.io.
+- **MongoDB → `mongodb-memory-server`** — a real `mongod` spun up in-memory per suite.
+  Real queries, real indexes (`unique(email)`, `sparse(googleId)` via `syncIndexes()`),
+  no Docker. Fits the free/self-hosted constraint (no Atlas needed for tests).
+- **Redis → a hand-written in-memory fake** (`tests/helpers/fakeRedis.js`)
+  implementing *exactly* the command surface the services touch
+  (`set {EX}`, `get`, `getDel`, `sAdd`, `sRem`, `sMembers`, `expire`, `del`). No
+  `redis-server`, no second binary. TTLs accepted-but-not-enforced (nothing asserts
+  wall-clock eviction; token expiry is tested via JWT `expiresIn`).
+- **Email → spies that *capture* the URL** — instead of sending, the mocked
+  `sendVerificationEmail` / `sendPasswordResetEmail` push `{to, url}` into an array,
+  so a test pulls the real one-time token straight out of the link. This is the
+  MailDev workflow (§11) reduced to an in-process array.
+- **Logger → silenced mock** — no winston file handles leaking into the test process
+  (which otherwise trips Jest's "open handle / did not exit" warnings).
+- **Shared harness** (`tests/helpers/harness.js`) wires all of the above and does
+  per-test cleanup (`deleteMany` on every collection — keeping indexes — + flush the
+  Redis fake + clear captured emails), so tests are independent and order-agnostic.
+- **Coverage where it matters:** controllers ~90%, `token`/`authToken`/`refreshToken`
+  services & validators & auth middleware 100%. The uncovered files are the mocked
+  edges and the Google-OAuth / browser path — deliberately proven live in §10, not here.
+
+### Challenges (the real ones)
+1. **ESM + Jest.** The project is `"type": "module"`; Jest's mocking predates native
+   ESM. Fixes: run under `node --experimental-vm-modules node_modules/jest/bin/jest.js`
+   (works on Windows *and* CI — no `cross-env` needed, unlike inline `NODE_OPTIONS=`),
+   `transform: {}` to disable Babel, and `jest.unstable_mockModule(...)` + dynamic
+   `await import()` instead of the hoisted `jest.mock()`.
+2. **Mock path resolution.** `jest.unstable_mockModule("../../src/config/redis.js")`
+   failed with *"Cannot find module … from tests/xyz.test.js"* — the specifier is
+   resolved relative to the **entry test file**, not the `harness.js` that calls it.
+   Since test files sit at a different depth than the helper, the relative path was
+   wrong. Fix: compute an **absolute** path to `src/` from `import.meta.url` and pass
+   that — it resolves to the same module id regardless of which test file calls in.
+3. **Rate limiter vs. the test client.** The in-process `express-rate-limit` counts
+   every request from the same loopback IP, so a suite firing >20 auth requests would
+   start getting spurious `429`s. Fix: `skip: () => process.env.NODE_ENV === "test"`
+   on both limiters — a one-line, clearly-scoped source change (the limiter is still
+   fully wired in dev/prod).
+4. **Env read at import time.** `token.js` computes `REFRESH_TOKEN_TTL_SECONDS` and
+   the JWT secrets are read when modules load — so the harness sets `process.env`
+   at its own module top level, *before* the dynamic `import()` of `app.js`.
+
+### What the Suite Actually Asserts (mirrors the manual E2E of §7–§11)
+Register (happy / dup 409 / weak-pw 400 / bad-email 400 / verification email sent) ·
+login (happy / wrong-pw 401 / unknown-email identical 401 / validation) ·
+refresh **rotation** (new cookie ≠ old) + **theft detection** (replayed pre-rotation
+cookie → 401) · logout (cookie cleared + token revoked, idempotent) · email verify
+(link works, **reuse → invalid**, bad/missing token) · resend & forgot-password
+(generic 200, no enumeration oracle) · reset (new pw works / old fails / **all
+sessions revoked** / invalid token 400 / weak pw 400) · `/users/me`
+(valid 200 / no header / malformed / garbage / wrong-secret / **expired** / deleted-user 404) ·
+health + 404 envelope + Google 501.
+
+### Interview Q&A
+- *Why fake Redis by hand instead of `redis-mock`?* We use `node-redis` v4 (promise
+  API, `getDel`, `sAdd`…); most mocks target `ioredis`. The service layer only touches
+  ~8 commands, so a 40-line fake is less risk than a mismatched library — and it keeps
+  `npm test` with **zero external processes**.
+- *Integration vs unit tests — why lean integration here?* The bugs that actually bite
+  auth live in the *wiring*: middleware order, cookie flags, validation, the
+  rotate-then-revoke sequence. Driving the real `app` catches those; isolated unit
+  tests of a controller would mock exactly the parts most likely to be wrong.
+- *How do you test a one-time email token without email?* Capture the link the code
+  would have sent (spy records the URL), parse the token out, and use it — same token
+  the user would click, no SMTP involved.
+- *Why disable rate limiting in tests rather than test it?* The limit is config, not
+  logic; testing "20 then 429" is inherently timing/IP-coupled and flaky. We assert the
+  *behaviours* the limiter protects and keep the limiter live in real environments.
+- *Is 79% total coverage low?* The denominator includes infra we mock on purpose
+  (redis/email transports) and the OAuth/browser path proven live in §10. The
+  **logic** surface — controllers, services, validators, auth middleware — is 90–100%.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
 auth middleware · `/users/me` · refresh rotation · logout · Google OAuth — fully verified
 end-to-end including a real browser round-trip.
 
-**Done — `feature/auth-extras` (current branch):** email verification (+resend) ·
-password reset · session revocation on reset · MailDev for local email — all verified
-live against MailDev + Redis + Mongo.
+**Done — `feature/auth-extras`:** email verification (+resend) · password reset ·
+session revocation on reset · MailDev for local email — all verified live against
+MailDev + Redis + Mongo. **PR opened → `develop`.**
+
+**Done — automated test harness (this branch):** Jest + supertest, in-memory
+Mongo + Redis fake + captured-email spies. **37 tests, 5 suites, all green**;
+auth logic surface 90–100% covered (§13). `npm test` needs no Docker.
 
 **Next:**
-1. PR `feature/auth-extras` → `develop`
+1. Merge `feature/auth-extras` → `develop` once the PR is reviewed.
 2. Then: user profiles (avatar upload → S3-compatible storage, via **MinIO** — free,
-   self-hosted, same `@aws-sdk/client-s3` API we already use) → rooms → mediasoup video core
+   self-hosted, same `@aws-sdk/client-s3` API we already use) → rooms → mediasoup video core.
+   With the harness in place, each new feature ships with tests, so verification is fast.
 
 ## Note: No Paid Cloud Services
 
@@ -577,4 +683,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-16 (auth-extras)*
+*Last updated: 2026-07-17 (automated test harness — Jest + supertest)*

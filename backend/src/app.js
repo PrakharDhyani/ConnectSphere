@@ -46,6 +46,10 @@ const globalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
+  // Disabled under test — the in-process limiter counts every supertest
+  // request from the same loopback IP, so a suite that fires >max requests
+  // would start getting 429s unrelated to what it's asserting.
+  skip: () => process.env.NODE_ENV === "test",
 });
 app.use(globalLimiter);
 
