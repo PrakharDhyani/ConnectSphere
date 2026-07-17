@@ -44,6 +44,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 11. [Feature: Email Verification & Password Reset](#11-feature-email-verification--password-reset)
 12. [Testing / Verification Methodology](#12-testing--verification-methodology)
 13. [Feature: Automated Test Harness (Jest + supertest)](#13-feature-automated-test-harness-jest--supertest)
+14. [Feature: Auth UI — the frontend half of auth](#14-feature-auth-ui--the-frontend-half-of-auth)
 
 ---
 
@@ -664,6 +665,57 @@ health + 404 envelope + Google 501.
 - *Is 79% total coverage low?* The denominator includes infra we mock on purpose
   (redis/email transports) and the OAuth/browser path proven live in §10. The
   **logic** surface — controllers, services, validators, auth middleware — is 90–100%.
+
+---
+
+## 14. Feature: Auth UI — the frontend half of auth
+
+*(Full template entry: [feature-map F10](notes/feature-map.md) · deep dive: [Part 3](notes/part-3-frontend.md))*
+
+### The Feature
+React pages + plumbing for everything the auth backend already does: login,
+register, Google button, forgot/reset password, email-verified landing page, a
+protected dashboard — and sessions that survive page reloads.
+
+### Ways to Implement (where does the token live?)
+1. localStorage — survives reloads but readable by any XSS. Rejected.
+2. Plain cookie for everything — CSRF surface widens. Rejected.
+3. **(chosen)** Access token in memory (zustand) + refresh token in the
+   httpOnly cookie the backend already sets; reloads restored by one silent
+   `/refresh` call at boot.
+
+### What We Did
+- `stores/auth.store.js` — zustand store with **three** states
+  (`loading/authed/guest`); `loading` exists so protected pages spinner during
+  boot instead of flashing the login page at logged-in users.
+- `lib/api.js` — one axios instance: request interceptor attaches the Bearer
+  token; response interceptor catches 401s, silently refreshes (**single-flight**
+  — rotation makes refresh single-use, so parallel 401s must share one refresh)
+  and retries; `bootstrapAuth()` restores the session at app start.
+- react-hook-form + zod on every form; zod schemas mirror the backend Joi rules
+  (instant field errors; server still enforces).
+- Pages: Login (+ reset-success/oauth-error messages), Register, AuthCallback
+  (post-Google), EmailVerified, Forgot/ResetPassword, Dashboard (verify-email
+  banner + resend, logout).
+- Google = `<a href="/api/auth/google">` — OAuth is a redirect dance, cannot be fetch.
+
+### Challenges
+- **The scaffold had never been run:** `NotFoundPage.jsx` was an empty file
+  imported by `App.jsx` — instant crash on first real run. Fixed.
+- JSX lint trap: raw `'` in text fails `react/no-unescaped-entities` in CI.
+
+### Verification
+`npm run lint` + `npm run build` clean. Live browser round-trip against the
+full stack queued for next session (needs Docker up).
+
+### Interview Q&A
+- *Why not localStorage for tokens?* Any XSS reads localStorage; memory +
+  httpOnly cookie is the hardened-SPA standard.
+- *How does a reload keep you logged in if the token is in memory?* It doesn't —
+  the httpOnly cookie does. Boot calls `/refresh`; cookie valid → new access
+  token, session restored.
+- *Why single-flight refresh?* Refresh tokens are single-use (rotation). Two
+  parallel refreshes = the second kills the session the first just created.
 
 ---
 

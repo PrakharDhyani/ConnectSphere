@@ -267,25 +267,47 @@ wiring where auth bugs live).
 
 ---
 
-## F10. Auth UI — frontend (next, in progress)
+## F10. Auth UI — frontend ✅
 
 **Tool & technology:** React 18, react-router, zustand, axios (interceptors),
-react-hook-form + zod, Tailwind, TanStack Query.
+react-hook-form + zod, Tailwind.
 
 **What needs to be done:** the browser half of auth — register/login forms,
 staying logged in across reloads, protected pages, Google button, and the
 verify/reset landing pages the backend already redirects to.
 
-**How it's done:** access token in a zustand store (memory only), refresh via
-the httpOnly cookie the backend already sets; axios interceptors attach the
-token and silently `/refresh`-and-retry on 401; on app boot one silent refresh
-restores the session; `<ProtectedRoute>` gates private pages. Full plan +
-file map: [Part 3 §3](part-3-frontend.md).
+**How it's done:** access token in a zustand store (**memory only** — never
+localStorage), refresh via the httpOnly cookie the backend already sets; axios
+interceptors attach the token to every request and silently `/refresh`-and-retry
+on 401 (**single-flight**: parallel 401s share one refresh call, because refresh
+tokens are single-use); on app boot one silent refresh restores the session;
+`<ProtectedRoute>` shows a spinner during bootstrap (never flash the login page
+at a logged-in user), then renders or bounces to `/login`. zod schemas mirror
+the backend's Joi rules for instant field errors — UX only, the server still
+enforces everything.
 
 **Workflow (page reload while logged in):**
 1. App boots → store is empty (memory was wiped)
-2. Bootstrap: `POST /api/auth/refresh` — browser attaches the cookie automatically
-3. Valid → new access token into the store → `GET /users/me` → user into the store → render
-4. Invalid → stay logged out → protected routes bounce to `/login`
+2. `bootstrapAuth()`: `POST /api/auth/refresh` — browser attaches the cookie automatically
+3. Valid → new access token into the store → `GET /users/me` → user into the store → status `authed`
+4. Invalid → status `guest` → protected routes bounce to `/login`
 
-**File by file:** *(filled in as we build — see Part 3)*
+**Workflow (access token expires mid-session):**
+1. Any API call → 401
+2. Response interceptor: not an /auth/ URL, not retried yet → call `/refresh` (single-flight)
+3. New token stored → original request retried with it → caller never sees the 401
+4. Refresh itself fails → `clearAuth()` → user is logged out for real
+
+**File by file:**
+- [src/stores/auth.store.js](../../frontend/src/stores/auth.store.js) — `{user, accessToken, status}` + set/clear; readable outside React (`getState()`)
+- [src/lib/api.js](../../frontend/src/lib/api.js) — the axios instance, both interceptors, `refreshAccessToken` (single-flight), `bootstrapAuth`
+- [src/components/ProtectedRoute.jsx](../../frontend/src/components/ProtectedRoute.jsx) — spinner while `loading`, `<Navigate to="/login">` for guests
+- [src/components/ui/](../../frontend/src/components/ui/) — `Input` (forwardRef for react-hook-form), `Button`, `AuthCard` (shared centered layout)
+- [src/pages/LoginPage.jsx](../../frontend/src/pages/LoginPage.jsx) — form + Google link (`<a href="/api/auth/google">` — full-page redirect, OAuth can't be a fetch); shows reset-success + oauth-error messages
+- [src/pages/RegisterPage.jsx](../../frontend/src/pages/RegisterPage.jsx) — zod mirror of the backend password policy; logged in immediately on success
+- [src/pages/AuthCallbackPage.jsx](../../frontend/src/pages/AuthCallbackPage.jsx) — post-Google landing: runs bootstrap, routes to dashboard or `/login?error=oauth`
+- [src/pages/EmailVerifiedPage.jsx](../../frontend/src/pages/EmailVerifiedPage.jsx) — reads `?status=` from the backend redirect
+- [src/pages/ForgotPasswordPage.jsx](../../frontend/src/pages/ForgotPasswordPage.jsx) / [ResetPasswordPage.jsx](../../frontend/src/pages/ResetPasswordPage.jsx) — the reset pair (`?token=` from the email)
+- [src/pages/DashboardPage.jsx](../../frontend/src/pages/DashboardPage.jsx) — first protected page: user card, verify-email banner + resend, logout
+- [src/App.jsx](../../frontend/src/App.jsx) — all routes + the one-time `bootstrapAuth()` effect
+- [src/pages/HomePage.jsx](../../frontend/src/pages/HomePage.jsx) / [NotFoundPage.jsx](../../frontend/src/pages/NotFoundPage.jsx) — linked up (NotFound was an **empty file** that crashed the build — found & fixed)

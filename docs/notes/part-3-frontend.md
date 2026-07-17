@@ -142,5 +142,41 @@ src/
 | Logout button | `POST /api/auth/logout` + `clearAuth()` |
 | Silent bootstrap / 401 retry | `POST /api/auth/refresh` |
 
-*(Sections below will be filled in as the feature is built — implementation
-notes, challenges hit, and the verification story, same convention as always.)*
+### How it was actually built (file-by-file details: [feature-map F10](feature-map.md))
+
+The plan above was implemented as designed. The pieces worth understanding deeply:
+
+**The auth store** (`stores/auth.store.js`) has a third state besides
+logged-in/logged-out: **`status: "loading"`**. On a hard reload the app cannot
+know yet whether you're logged in (the cookie is invisible to JS!) — it has to
+ask the server. Until that answer arrives, protected pages show a spinner.
+Without this three-state design you get the classic SPA bug: logged-in users
+see the login page flash on every reload.
+
+**The interceptors** (`lib/api.js`) hide token mechanics from every future
+feature. Any component just calls `api.get("/rooms")`; attaching the
+Authorization header and recovering from expiry happen invisibly. Two
+subtleties:
+- **Single-flight refresh:** refresh tokens are single-use (rotation!). If five
+  requests 401 simultaneously and each fired its own `/refresh`, the first
+  would rotate the token and the other four would kill the session. So all
+  callers share one in-flight refresh promise.
+- **No retry for `/auth/*` URLs:** a 401 from login means "wrong password" —
+  refreshing wouldn't help, and retrying would double-submit forms.
+
+**Google button is an `<a>`, not a fetch** — OAuth is a chain of full-page
+redirects; the browser must physically navigate away to Google and back.
+
+### Verification
+
+`npm run lint` clean · `npm run build` clean (342 kB JS, 169 modules).
+Live end-to-end verification against the running backend (register → cookie →
+reload-restores-session → verify link → reset flow) is the next session's first
+task — it needs Docker (Mongo/Redis/MailDev) up.
+
+### Challenges
+- **`NotFoundPage.jsx` was an empty file** while `App.jsx` imported its default
+  export — the scaffold frontend crashed on load and nobody knew, because it had
+  never been run. *A scaffold you never ran is a scaffold that doesn't work.*
+- react/no-unescaped-entities: JSX won't take a raw `'` in text (`isn't` →
+  `isn&apos;t`) — tiny, but it fails CI lint.
