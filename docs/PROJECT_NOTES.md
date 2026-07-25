@@ -9,7 +9,7 @@
 
 ---
 
-## 📚 Detailed Notes (newbie-level, file-by-file)
+## 📚 Detailed Notes (file-by-file, local companion docs)
 
 This journal stays the **interview-prep** view (decisions, trade-offs, Q&A).
 The **detailed walkthroughs** — every file explained from `index.js` to the test
