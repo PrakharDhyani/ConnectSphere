@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api.js";
 import { disconnectSocket } from "@/lib/socket.js";
@@ -9,6 +9,7 @@ import Input from "@/components/ui/Input.jsx";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const clearAuth = useAuthStore((s) => s.clearAuth);
@@ -83,6 +84,12 @@ export default function DashboardPage() {
       </header>
 
       <main className="max-w-4xl mx-auto px-6 py-10 space-y-6">
+        {location.state?.message && (
+          <p className="text-sm text-brand-300 bg-brand-950/40 border border-brand-900 rounded-lg p-3">
+            {location.state.message}
+          </p>
+        )}
+
         {!user?.emailVerified && (
           <div className="flex items-center justify-between gap-4 bg-yellow-950/40 border border-yellow-900 rounded-lg p-4">
             <p className="text-sm text-yellow-300">

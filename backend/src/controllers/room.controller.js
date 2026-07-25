@@ -1,7 +1,11 @@
 import mongoose from "mongoose";
 import { Room } from "../models/Room.js";
+import { Message } from "../models/Message.js";
+import { io } from "../sockets/index.js";
+import { roomKey } from "../sockets/chat.handlers.js";
 
-// Response whitelist — one place decides what a room looks like to clients.
+// Lightweight shape for lists/create/join — one place decides what a room looks
+// like to clients.
 function toSafeRoom(room) {
   return {
     id: room._id,
@@ -13,11 +17,48 @@ function toSafeRoom(room) {
   };
 }
 
+// Detailed shape for the room page — includes the full member list (populated)
+// and whether the caller owns it, so the UI can show owner-only actions.
+function toRoomDetail(room, userId) {
+  const ownerId = room.owner.toString();
+  return {
+    id: room._id,
+    name: room.name,
+    code: room.code,
+    owner: ownerId,
+    isOwner: ownerId === userId,
+    createdAt: room.createdAt,
+    memberCount: room.members.length,
+    members: room.members.map((m) => ({
+      id: m._id,
+      name: m.name,
+      avatarUrl: m.avatarUrl,
+      isOwner: m._id.toString() === ownerId,
+    })),
+  };
+}
+
 const notFound = () => {
   const error = new Error("Room not found");
   error.statusCode = 404;
   return error;
 };
+
+const forbidden = (message) => {
+  const error = new Error(message);
+  error.statusCode = 403;
+  return error;
+};
+
+// Load a room by :id or throw the right error (404 for missing/malformed id).
+async function loadRoom(id, { populateMembers = false } = {}) {
+  if (!mongoose.isValidObjectId(id)) throw notFound();
+  const query = Room.findById(id);
+  if (populateMembers) query.populate("members", "name avatarUrl");
+  const room = await query;
+  if (!room) throw notFound();
+  return room;
+}
 
 export async function createRoom(req, res, next) {
   try {
@@ -54,23 +95,14 @@ export async function listMyRooms(req, res, next) {
 
 export async function getRoom(req, res, next) {
   try {
-    // A malformed id would make findById throw a CastError (→ 500); treat
-    // "not even a valid id" as the same 404 a missing room gets.
-    if (!mongoose.isValidObjectId(req.params.id)) throw notFound();
-
-    const room = await Room.findById(req.params.id);
-    if (!room) throw notFound();
+    const room = await loadRoom(req.params.id, { populateMembers: true });
 
     // Membership gate. 403, not 404: the room exists, you're just not in it —
     // and the join-by-code flow is the door.
-    const isMember = room.members.some((m) => m.toString() === req.user.id);
-    if (!isMember) {
-      const error = new Error("You are not a member of this room");
-      error.statusCode = 403;
-      throw error;
-    }
+    const isMember = room.members.some((m) => m._id.toString() === req.user.id);
+    if (!isMember) throw forbidden("You are not a member of this room");
 
-    res.json({ success: true, data: { room: toSafeRoom(room) } });
+    res.json({ success: true, data: { room: toRoomDetail(room, req.user.id) } });
   } catch (error) {
     next(error);
   }
@@ -91,6 +123,75 @@ export async function joinRoom(req, res, next) {
     if (!room) throw notFound();
 
     res.json({ success: true, data: { room: toSafeRoom(room) } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// PATCH /:id — owner renames the room. Broadcasts so members currently in the
+// room see the new name live.
+export async function renameRoom(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id);
+    if (room.owner.toString() !== req.user.id) {
+      throw forbidden("Only the room owner can rename it");
+    }
+
+    room.name = req.body.name;
+    await room.save();
+
+    io?.to(roomKey(room._id)).emit("room:updated", {
+      roomId: room._id.toString(),
+      name: room.name,
+    });
+
+    res.json({ success: true, data: { room: toSafeRoom(room) } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// POST /:id/leave — a member removes themselves. The owner can't leave (they'd
+// orphan the room); they must delete it. Idempotent: leaving a room you're not
+// in still ends in the same state, so it succeeds.
+export async function leaveRoom(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id);
+    if (room.owner.toString() === req.user.id) {
+      const error = new Error("The owner can't leave — delete the room instead");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    room.members = room.members.filter((m) => m.toString() !== req.user.id);
+    await room.save();
+
+    // Hint anyone still in the room to refresh their member list.
+    io?.to(roomKey(room._id)).emit("room:members-changed", {
+      roomId: room._id.toString(),
+    });
+
+    res.json({ success: true, message: "You have left the room" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// DELETE /:id — owner deletes the room and all its messages, and tells any
+// connected members the room is gone so their UI can bounce them out.
+export async function deleteRoom(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id);
+    if (room.owner.toString() !== req.user.id) {
+      throw forbidden("Only the room owner can delete it");
+    }
+
+    await Message.deleteMany({ room: room._id });
+    await room.deleteOne();
+
+    io?.to(roomKey(room._id)).emit("room:closed", { roomId: room._id.toString() });
+
+    res.json({ success: true, message: "Room deleted" });
   } catch (error) {
     next(error);
   }

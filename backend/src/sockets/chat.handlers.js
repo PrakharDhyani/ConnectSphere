@@ -19,7 +19,9 @@ import { Room } from "../models/Room.js";
 import { Message } from "../models/Message.js";
 import { logger } from "../utils/logger.js";
 
-const roomKey = (roomId) => `room:${roomId}`;
+// The Socket.io room name for an app room. Exported so REST controllers can
+// broadcast to the same group (e.g. "room:closed" when a room is deleted).
+export const roomKey = (roomId) => `room:${roomId}`;
 
 async function isMember(roomId, userId) {
   const room = await Room.findById(roomId).select("members").lean();

@@ -48,6 +48,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 15. [Feature: User Profiles — name edit & avatar upload (MinIO)](#15-feature-user-profiles--name-edit--avatar-upload-minio)
 16. [Feature: Rooms — create, list, join by code](#16-feature-rooms--create-list-join-by-code)
 17. [Feature: Real-time Chat in Rooms (Socket.io)](#17-feature-real-time-chat-in-rooms-socketio)
+18. [Feature: Room Polish — member list, rename, leave, delete](#18-feature-room-polish--member-list-rename-leave-delete)
 
 ---
 
@@ -897,6 +898,62 @@ and persisted history — all passed.
 
 ---
 
+## 18. Feature: Room Polish — member list, rename, leave, delete
+
+*(Full template entry: [feature-map F14](notes/feature-map.md))*
+
+### The Feature
+Round out rooms into something fully manageable: a real member roster (not just
+who's online), owner rename + delete, and member leave — with connected members
+gracefully bounced out when a room is deleted.
+
+### What We Did
+- `GET /rooms/:id` now populates members (`{id, name, avatarUrl, isOwner}`) and
+  returns `isOwner` for the caller so the UI can gate owner-only actions. List
+  endpoints stay lightweight — detail lives only on the single-room view.
+- **Permission rules:** rename/delete are **owner-only** (403 otherwise); a
+  member can **leave** but the **owner can't** (they'd orphan the room → 400,
+  must delete). Leave is idempotent.
+- **Delete cleans up:** removes the room *and* its messages (`deleteMany`), then
+  broadcasts `room:closed` over the socket so members currently in the room get
+  navigated back to the dashboard instead of staring at a dead page.
+- **Broadcasting from REST:** the controller imports the socket `io` + the shared
+  `roomKey` helper and emits `room:closed` / `room:updated` / `room:members-changed`.
+  `io?.` guards the no-socket case (tests never call `initSocket`).
+- Frontend: members sidebar (online dot + owner badge), inline rename, confirm
+  dialogs for leave/delete, socket lifecycle listeners, and dashboard flash messages.
+
+### Challenges
+- **403 vs 404 for non-owner actions:** a member (or outsider) hitting
+  rename/delete gets 403 "owner only" — the room exists, they just lack rights.
+  Consistent with the read gate (§16).
+- **Broadcasting from HTTP land:** the REST controller lives outside the socket
+  layer, so it imports `io` (a live ESM binding, `undefined` until `initSocket`)
+  and the `roomKey` prefix from the socket module — with a `?.` guard so the same
+  code is safe in tests where no socket server exists.
+- **Dev port churn (again):** the rapid edit→nodemon-restart cycle kept leaving a
+  zombie node on :5000 (EADDRINUSE). Standard fix each time: stop the task, kill
+  the port holder, one clean start. A production process manager (pm2) wouldn't
+  have this; it's purely a dev-loop artifact.
+
+### Verification
+Automated: 10 new tests (**suite 72 green**). Live 2-client script: member-list
+detail, owner rename ok + member rename 403, delete broadcasts `room:closed` to a
+connected member + 404 after, member leave 200 + owner leave 400 — all passed.
+
+### Interview Q&A
+- *Why does the owner have to delete instead of leave?* Membership includes the
+  owner; letting them leave would orphan a room nobody can administer. Leaving is
+  for members; owners delete (or, future work, transfer ownership first).
+- *How does a user sitting in a deleted room find out?* The delete handler
+  broadcasts `room:closed` to the Socket.io room; every connected client's
+  listener bounces them to the dashboard. No polling, no stale page.
+- *Why populate members only on the detail endpoint, not the list?* The list can
+  be long; populating every room's members on the dashboard is wasteful. Detail
+  is one room, one populate — pay the cost only where the roster is shown.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -915,12 +972,15 @@ captured email/storage spies. **56 tests, 7 suites, all green**, no Docker neede
 **Done — Rooms (§16):** create / list / join-by-code + rooms dashboard + room page.
 
 **Done — Real-time Chat (§17, Phase 3):** Socket.io live messaging + presence +
-typing + durable history, verified live with 2 clients. **62 tests green.**
+typing + durable history, verified live with 2 clients.
+
+**Done — Room Polish (§18):** member list, owner rename/delete, member leave,
+`room:closed` broadcast. **72 tests green.**
 
 **Branch state (stacked — merge PRs in this order):**
 `feature/auth-extras` → `feature/auth-frontend` → `feature/user-profiles` →
-`feature/rooms` → `feature/room-chat`, each based on the previous; merge into
-`develop` in that order to keep every diff clean.
+`feature/rooms` → `feature/room-chat` → `feature/room-polish`, each based on the
+previous; merge into `develop` in that order to keep every diff clean.
 
 **Next:**
 1. Merge the branch chain into `develop`.
@@ -943,4 +1003,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-25 (Phase 3 begins — real-time chat in rooms via Socket.io)*
+*Last updated: 2026-07-25 (real-time chat + room polish: member list, rename, leave, delete)*

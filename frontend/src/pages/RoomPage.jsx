@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api.js";
+import { getSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useRoomChat } from "@/hooks/useRoomChat.js";
 import Button from "@/components/ui/Button.jsx";
@@ -23,9 +24,14 @@ function Avatar({ user, size = "md" }) {
 
 export default function RoomPage() {
   const { roomId } = useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const me = useAuthStore((s) => s.user);
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [actionError, setActionError] = useState(null);
   const scrollRef = useRef(null);
 
   const { data: room, isLoading, error } = useQuery({
@@ -37,10 +43,57 @@ export default function RoomPage() {
   const { messages, presence, typingName, error: chatError, sendMessage, notifyTyping } =
     useRoomChat(room ? roomId : null);
 
-  // Auto-scroll to the newest message.
+  // React to room-lifecycle events pushed over the socket (see room.controller).
+  useEffect(() => {
+    if (!room) return;
+    const socket = getSocket();
+    const refresh = (p) => p.roomId === roomId && queryClient.invalidateQueries({ queryKey: ["room", roomId] });
+    const onClosed = (p) => {
+      if (p.roomId !== roomId) return;
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
+      navigate("/dashboard", { state: { message: "That room was closed by its owner." } });
+    };
+    socket.on("room:updated", refresh);
+    socket.on("room:members-changed", refresh);
+    socket.on("room:closed", onClosed);
+    return () => {
+      socket.off("room:updated", refresh);
+      socket.off("room:members-changed", refresh);
+      socket.off("room:closed", onClosed);
+    };
+  }, [room, roomId, queryClient, navigate]);
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, typingName]);
+
+  const renameMut = useMutation({
+    mutationFn: (name) => api.patch(`/rooms/${roomId}`, { name }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["room", roomId] });
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
+      setEditingName(false);
+    },
+    onError: (err) => setActionError(err.response?.data?.error?.message || "Rename failed"),
+  });
+
+  const leaveMut = useMutation({
+    mutationFn: () => api.post(`/rooms/${roomId}/leave`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
+      navigate("/dashboard", { state: { message: "You left the room." } });
+    },
+    onError: (err) => setActionError(err.response?.data?.error?.message || "Could not leave"),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: () => api.delete(`/rooms/${roomId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
+      navigate("/dashboard", { state: { message: "Room deleted." } });
+    },
+    onError: (err) => setActionError(err.response?.data?.error?.message || "Could not delete"),
+  });
 
   async function copyCode() {
     await navigator.clipboard.writeText(room.code).catch(() => {});
@@ -54,7 +107,7 @@ export default function RoomPage() {
     if (!text) return;
     setDraft("");
     const ack = await sendMessage(text);
-    if (!ack?.ok) setDraft(text); // restore on failure so nothing is lost
+    if (!ack?.ok) setDraft(text);
   }
 
   if (isLoading) {
@@ -80,6 +133,8 @@ export default function RoomPage() {
     );
   }
 
+  const onlineIds = new Set(presence.map((p) => p.id));
+
   return (
     <div className="min-h-screen flex flex-col">
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
@@ -87,24 +142,48 @@ export default function RoomPage() {
         <Link to="/dashboard" className="text-sm text-gray-400 hover:text-brand-400">← Dashboard</Link>
       </header>
 
-      <div className="flex-1 max-w-5xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_220px] gap-4">
+      <div className="flex-1 max-w-5xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_240px] gap-4">
         {/* Chat column */}
         <section className="flex flex-col bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden min-h-[70vh]">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800">
-            <div>
-              <h1 className="font-bold">{room.name}</h1>
-              <p className="text-xs text-gray-500">{presence.length} online</p>
-            </div>
-            <Button variant="secondary" onClick={copyCode}>
-              {copied ? "Copied ✓" : `Invite: ${room.code}`}
-            </Button>
+          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 gap-3">
+            {editingName ? (
+              <form
+                className="flex items-center gap-2 flex-1"
+                onSubmit={(e) => { e.preventDefault(); if (nameDraft.trim().length >= 2) renameMut.mutate(nameDraft.trim()); }}
+              >
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  maxLength={100}
+                  className="flex-1 px-2 py-1 rounded bg-gray-950 border border-gray-700 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                />
+                <Button type="submit" loading={renameMut.isPending}>Save</Button>
+                <button type="button" onClick={() => setEditingName(false)} className="text-sm text-gray-400 hover:text-gray-200">Cancel</button>
+              </form>
+            ) : (
+              <div className="min-w-0">
+                <h1 className="font-bold truncate flex items-center gap-2">
+                  {room.name}
+                  {room.isOwner && (
+                    <button
+                      onClick={() => { setNameDraft(room.name); setEditingName(true); setActionError(null); }}
+                      className="text-xs text-gray-500 hover:text-brand-400"
+                      title="Rename room"
+                    >
+                      ✎
+                    </button>
+                  )}
+                </h1>
+                <p className="text-xs text-gray-500">{presence.length} online · {room.memberCount} member{room.memberCount === 1 ? "" : "s"}</p>
+              </div>
+            )}
+            <Button variant="secondary" onClick={copyCode}>{copied ? "Copied ✓" : `Invite: ${room.code}`}</Button>
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
             {messages.length === 0 && (
-              <p className="text-gray-500 text-sm text-center mt-8">
-                No messages yet — say hello 👋
-              </p>
+              <p className="text-gray-500 text-sm text-center mt-8">No messages yet — say hello 👋</p>
             )}
             {messages.map((m) => {
               const mine = m.sender?.id === me?.id;
@@ -118,18 +197,14 @@ export default function RoomPage() {
                         {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       </span>
                     </p>
-                    <p className={`inline-block px-3 py-2 rounded-2xl text-sm break-words ${
-                      mine ? "bg-brand-600 text-white" : "bg-gray-800 text-gray-100"
-                    }`}>
+                    <p className={`inline-block px-3 py-2 rounded-2xl text-sm break-words ${mine ? "bg-brand-600 text-white" : "bg-gray-800 text-gray-100"}`}>
                       {m.text}
                     </p>
                   </div>
                 </div>
               );
             })}
-            {typingName && (
-              <p className="text-xs text-gray-500 italic">{typingName} is typing…</p>
-            )}
+            {typingName && <p className="text-xs text-gray-500 italic">{typingName} is typing…</p>}
           </div>
 
           {chatError && <p className="px-5 py-2 text-sm text-red-400">{chatError}</p>}
@@ -140,34 +215,57 @@ export default function RoomPage() {
               onChange={(e) => { setDraft(e.target.value); notifyTyping(); }}
               placeholder="Type a message…"
               maxLength={2000}
-              className="flex-1 px-3 py-2 rounded-lg bg-gray-950 border border-gray-700 text-white
-                placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              className="flex-1 px-3 py-2 rounded-lg bg-gray-950 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
             />
             <Button type="submit" disabled={!draft.trim()}>Send</Button>
           </form>
         </section>
 
-        {/* Presence sidebar */}
-        <aside className="bg-gray-900 border border-gray-800 rounded-2xl p-4 h-fit">
-          <h2 className="text-sm font-semibold text-gray-300 mb-3">
-            Online — {presence.length}
-          </h2>
-          <ul className="space-y-2">
-            {presence.map((u) => (
-              <li key={u.id} className="flex items-center gap-2 text-sm">
-                <span className="relative">
-                  <Avatar user={u} size="sm" />
-                  <span className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-green-500 border border-gray-900" />
-                </span>
-                <span className="text-gray-300">{u.id === me?.id ? "You" : u.name}</span>
-              </li>
-            ))}
-            {presence.length === 0 && <li className="text-xs text-gray-500">Connecting…</li>}
-          </ul>
+        {/* Members + actions sidebar */}
+        <aside className="bg-gray-900 border border-gray-800 rounded-2xl p-4 h-fit space-y-4">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-300 mb-3">Members — {room.memberCount}</h2>
+            <ul className="space-y-2">
+              {room.members.map((u) => {
+                const online = onlineIds.has(u.id);
+                return (
+                  <li key={u.id} className="flex items-center gap-2 text-sm">
+                    <span className="relative">
+                      <Avatar user={u} size="sm" />
+                      <span className={`absolute bottom-0 right-0 w-2 h-2 rounded-full border border-gray-900 ${online ? "bg-green-500" : "bg-gray-600"}`} />
+                    </span>
+                    <span className="text-gray-300 truncate">{u.id === me?.id ? "You" : u.name}</span>
+                    {u.isOwner && <span className="text-[10px] uppercase tracking-wide text-brand-400 border border-brand-800 rounded px-1">owner</span>}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
 
-          <p className="text-xs text-gray-600 mt-6 border-t border-gray-800 pt-3">
-            🎥 Video calls attach to this room next.
-          </p>
+          {actionError && <p className="text-xs text-red-400">{actionError}</p>}
+
+          <div className="border-t border-gray-800 pt-3 space-y-2">
+            {room.isOwner ? (
+              <Button
+                variant="danger"
+                className="w-full"
+                loading={deleteMut.isPending}
+                onClick={() => { if (window.confirm("Delete this room and all its messages? This can't be undone.")) deleteMut.mutate(); }}
+              >
+                Delete room
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                className="w-full"
+                loading={leaveMut.isPending}
+                onClick={() => { if (window.confirm("Leave this room?")) leaveMut.mutate(); }}
+              >
+                Leave room
+              </Button>
+            )}
+            <p className="text-xs text-gray-600 pt-1">🎥 Video calls attach to this room next.</p>
+          </div>
         </aside>
       </div>
     </div>
