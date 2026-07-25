@@ -12,12 +12,11 @@ const userSchema = new Schema(
       maxlength: 100,
     },
     // Not required at the schema level: guest users have no email. Regular
-    // signup still enforces it in the register validator. sparse + unique lets
-    // many guests omit email without colliding (same trick as googleId).
+    // signup still enforces it in the register validator. Uniqueness is a
+    // PARTIAL index (declared below) rather than inline unique, so emailless
+    // guests are excluded from it entirely.
     email: {
       type: String,
-      unique: true,
-      sparse: true,
       lowercase: true,
       trim: true,
       match: [/^\S+@\S+\.\S+$/, "Invalid email format"],
@@ -65,6 +64,15 @@ const userSchema = new Schema(
     },
   },
   { timestamps: true } // adds createdAt / updatedAt automatically
+);
+
+// Unique email ONLY for real accounts. A partial index enforces uniqueness
+// solely on documents whose email is a string, so multiple emailless guests
+// never collide. (A plain sparse+unique index still collides on an explicit
+// null; a partial index is the robust fix.)
+userSchema.index(
+  { email: 1 },
+  { unique: true, partialFilterExpression: { email: { $type: "string" } } }
 );
 
 // TTL cleanup for ephemeral guests (expireAfterSeconds: 0 = delete once
