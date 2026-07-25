@@ -34,6 +34,22 @@ function freshGame(hostId) {
 
 const currentColor = (g) => g.order[g.turnIdx] || null;
 
+// A blank lobby to render before anyone has taken a seat (no game object yet).
+function emptyLobby() {
+  return {
+    status: "lobby",
+    seats: { red: null, green: null, yellow: null, blue: null },
+    order: [],
+    turn: null,
+    dice: null,
+    rolled: false,
+    movable: [],
+    tokens: { red: [0, 0, 0, 0], green: [0, 0, 0, 0], yellow: [0, 0, 0, 0], blue: [0, 0, 0, 0] },
+    winner: null,
+    hostId: null,
+  };
+}
+
 function publicState(g) {
   return {
     status: g.status,
@@ -83,7 +99,7 @@ export function registerLudoHandlers(io, socket) {
 
   socket.on("ludo:sync", ({ roomId } = {}, cb) => {
     const g = games.get(roomId);
-    cb?.(g ? publicState(g) : null);
+    cb?.(g ? publicState(g) : emptyLobby());
   });
 
   socket.on("ludo:join", async ({ roomId } = {}, cb) => {
