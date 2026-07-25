@@ -49,6 +49,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 16. [Feature: Rooms — create, list, join by code](#16-feature-rooms--create-list-join-by-code)
 17. [Feature: Real-time Chat in Rooms (Socket.io)](#17-feature-real-time-chat-in-rooms-socketio)
 18. [Feature: Room Polish — member list, rename, leave, delete](#18-feature-room-polish--member-list-rename-leave-delete)
+19. [Feature: Video Calls — mediasoup WebRTC SFU](#19-feature-video-calls--mediasoup-webrtc-sfu)
 
 ---
 
@@ -954,6 +955,72 @@ connected member + 404 after, member leave 200 + owner leave 400 — all passed.
 
 ---
 
+## 19. Feature: Video Calls — mediasoup WebRTC SFU
+
+*(Full template entry: [feature-map F15](notes/feature-map.md) — the headline feature)*
+
+### The Feature
+Live audio/video in a room: publish your camera/mic once, see/hear everyone
+else, and people joining mid-call appear automatically. Built on the Socket.io
+layer from §17.
+
+### Ways to Implement Group Video
+1. **P2P mesh** — every browser connects directly to every other. Dead simple
+   for 2, but each person uploads N-1 copies → melts past ~3–4 people. Rejected.
+2. **MCU** (server mixes everyone into one stream) — light on clients, but huge
+   server CPU and no per-user layout control. Rejected.
+3. **(chosen) SFU** — each browser uploads ONE stream to the server, which
+   selectively forwards it to the others. Uploads stay constant regardless of
+   room size; clients get individual streams. **mediasoup** is the SFU.
+
+### What We Did
+- **Server (mediasoup):** a `Worker` at boot; a `Router` per room (Opus/VP8);
+  each peer gets a **send** + **recv** `WebRtcTransport`; `Producer`s (incoming
+  tracks) and `Consumer`s (outgoing) tracked per-peer so leave/disconnect closes
+  exactly them, and the router frees when the call empties.
+- **Signaling over Socket.io** (not media!): `getRtpCapabilities`, create/connect
+  transport, produce, getProducers, consume, resume, leave — all membership-gated.
+  The audio/video itself flows over the transports' UDP.
+- **Client (mediasoup-client):** a `useMediaRoom` hook loads a `Device`, does
+  `getUserMedia`, produces mic+cam, consumes existing + newly-arriving producers,
+  and toggles mic/camera. Imperative objects (device/transports/consumers) live in
+  refs; only the streams are React state. A `VideoTile` renders each MediaStream.
+- **Windows win:** mediasoup's native worker was the big risk (historically
+  Linux/macOS/WSL only) — **it runs natively on Windows 11 here (3.21.0)**, so no
+  Docker-for-backend or WSL needed.
+
+### Challenges / Design Notes
+- **Signaling vs media split** is the whole mental model: Socket.io only carries
+  the *setup*; the tracks travel over WebRTC UDP transports.
+- **Consume paused, then resume:** consumers start paused so no frames arrive
+  before the `<video>` is wired up; the client resumes once ready.
+- **`<video>` can't take a stream as a prop** — must set `el.srcObject`
+  imperatively in an effect (VideoTile).
+- **Cleanup is easy to leak:** closing a transport closes its producers/consumers,
+  so leave/disconnect/unmount just close transports + stop local tracks.
+- **Local tile muted + mirrored** — never play your own mic (echo), mirror for a
+  natural selfie.
+
+### Verification
+mediasoup runs natively (probe). Server-side signaling script proved capabilities
++ send/recv transport creation + ICE candidates + membership gate. Lint + build
+clean; 72 backend tests green. **The full A/V loop (produce↔consume) needs a real
+browser + camera → manual 2-tab test** (open two browsers, same room, Join call).
+
+### Interview Q&A
+- *Why an SFU over a mesh?* Mesh upload cost is O(N) per person and collapses
+  past a few users; an SFU keeps each client's upload at one stream.
+- *Does the video go through Socket.io?* No — Socket.io only negotiates setup;
+  media flows over the mediasoup WebRTC transports (UDP).
+- *How does a late joiner see people already talking?* `media:getProducers`
+  returns everyone currently producing; the joiner consumes each, and
+  `media:newProducer` keeps them in sync afterward.
+- *What's needed for production?* A Worker pool (~1/core), the Socket.io Redis
+  adapter + sticky sessions for multi-instance, and a **TURN** server (coturn)
+  for users behind strict NATs.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -977,15 +1044,23 @@ typing + durable history, verified live with 2 clients.
 **Done — Room Polish (§18):** member list, owner rename/delete, member leave,
 `room:closed` broadcast. **72 tests green.**
 
+**Done — Video Calls (§19):** mediasoup SFU + WebRTC signaling + client video
+grid + mic/cam controls. mediasoup runs natively on Windows; signaling verified
+server-side. **Manual 2-tab A/V test is the one open verification.**
+
+**Also done:** dependency hygiene — `npm audit fix` (backend prod vulns → 0) and
+react-router upgraded v6 → v7.
+
 **Branch state (stacked — merge PRs in this order):**
 `feature/auth-extras` → `feature/auth-frontend` → `feature/user-profiles` →
-`feature/rooms` → `feature/room-chat` → `feature/room-polish`, each based on the
-previous; merge into `develop` in that order to keep every diff clean.
+`feature/rooms` → `feature/room-chat` → `feature/room-polish` → `feature/video`,
+each based on the previous; merge into `develop` in that order.
 
 **Next:**
-1. Merge the branch chain into `develop`.
-2. Phase 3 continues: **mediasoup video core** (WebRTC SFU) — signaling rides the
-   socket layer we just built; then whiteboard, then recording (Kafka pipeline).
+1. **Manual 2-tab browser test** of the video call (needs a webcam).
+2. Merge the branch chain into `develop`.
+3. Then: whiteboard (Socket.io), recording (Kafka pipeline → ffmpeg → MinIO),
+   and a TURN server (coturn) for NAT traversal before any real deployment.
 
 ## Note: No Paid Cloud Services
 
@@ -1003,4 +1078,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-25 (real-time chat + room polish: member list, rename, leave, delete)*
+*Last updated: 2026-07-25 (video calls — mediasoup WebRTC SFU; + dep hygiene & react-router v7)*
