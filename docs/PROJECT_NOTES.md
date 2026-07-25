@@ -1124,11 +1124,21 @@ code), and ephemeral guest join-via-link with room-scoped access. **81 tests gre
 → `feature/landing-guest`, each based on the previous; merge into `develop` in
 that order.
 
+**Done — Screen share:** `getDisplayMedia` → a mediasoup producer tagged
+camera/screen; screen tiles render large. Guest-join 500 (duplicate-null email)
+fixed via a **partial** unique index + dev-only `syncIndexes` self-heal.
+
+**Direction shift (2026-07-25):** repositioning to a **fun group-hangout
+platform** (video is just the room; USP = group fun). Planned: mini-games
+(ludo, skribbl, quiz), watch-party (**synced YouTube embeds** — not ad-stripping,
+which violates ToS), Excalidraw whiteboard. Rename to a French name (TBD).
+**Responsive (mobile/tablet/laptop) is now a hard requirement.**
+
 **Next:**
-1. **Manual browser tests** — video (2 tabs, webcam) + the guest join-link flow.
-2. Merge the branch chain into `develop`.
-3. Then: whiteboard (Socket.io), recording (Kafka → ffmpeg → MinIO), TURN
-   (coturn) for NAT traversal, and — for guests — mini-games once built.
+1. **Manual browser tests** — video + screen share (2 tabs, webcam) + guest link.
+2. **Responsive pass** on every page (mobile/tablet).
+3. Then the fun features: whiteboard (Excalidraw), a mini-game (skribbl), watch-party.
+4. Merge the branch chain into `develop`; later coturn (TURN) for real-network calls.
 
 ## Note: No Paid Cloud Services
 
