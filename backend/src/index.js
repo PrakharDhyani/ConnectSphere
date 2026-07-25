@@ -18,6 +18,7 @@ import { app } from "./app.js";
 import { connectMongo } from "./config/mongo.js";
 import { connectRedis } from "./config/redis.js";
 import { connectKafka } from "./config/kafka.js";
+import { createMediasoupWorker } from "./config/mediasoup.js";
 import { initSocket } from "./sockets/index.js";
 import { logger } from "./utils/logger.js";
 
@@ -29,6 +30,7 @@ async function bootstrap() {
     await connectMongo();
     await connectRedis();
     await connectKafka();
+    await createMediasoupWorker(); // media server for video calls
 
     // HTTP server wraps Express so Socket.io can share the same port
     const httpServer = http.createServer(app);
