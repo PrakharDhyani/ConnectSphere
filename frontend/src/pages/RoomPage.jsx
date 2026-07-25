@@ -7,7 +7,7 @@ import { useAuthStore } from "@/stores/auth.store.js";
 import { useRoomChat } from "@/hooks/useRoomChat.js";
 import { useMediaRoom } from "@/hooks/useMediaRoom.js";
 import VideoTile from "@/components/VideoTile.jsx";
-import GamePanel from "@/components/GamePanel.jsx";
+import GamesHub from "@/components/GamesHub.jsx";
 import Button from "@/components/ui/Button.jsx";
 
 // Excalidraw is heavy (~1.8 MB) — load it only when the whiteboard is opened.
@@ -178,7 +178,7 @@ export default function RoomPage() {
 
       {view === "game" && (
         <div className="flex-1 w-full max-w-6xl mx-auto px-2 sm:px-4 py-4">
-          <GamePanel roomId={roomId} />
+          <GamesHub roomId={roomId} />
         </div>
       )}
 
