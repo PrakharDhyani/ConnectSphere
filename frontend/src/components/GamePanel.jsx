@@ -49,7 +49,6 @@ export default function GamePanel({ roomId }) {
   const guessedSet = new Set(state?.guessed || []);
   const canGuess = status === "drawing" && !isDrawer && !iGuessed;
 
-  const iAmReady = Boolean(lobby.find((p) => p.id === me?.id)?.ready);
   const isHost = state?.hostId === me?.id;
   const allReady = lobby.length >= 2 && lobby.every((p) => p.ready);
   const inLobby = status === "lobby" || status === "ended";
@@ -110,9 +109,26 @@ export default function GamePanel({ roomId }) {
                 {lobby.map((p) => (
                   <li key={p.id} className="flex items-center justify-between text-sm">
                     <span className={p.id === me?.id ? "text-brand-300" : "text-gray-300"}>
-                      {p.name}{p.id === state.hostId ? " 👑" : ""}
+                      {p.name}{p.id === state.hostId ? " 👑" : ""}{p.id === me?.id ? " (you)" : ""}
                     </span>
-                    <span className={p.ready ? "text-green-400" : "text-gray-500"}>{p.ready ? "Ready ✓" : "Not ready"}</span>
+                    {p.id === me?.id ? (
+                      <button
+                        type="button"
+                        onClick={() => setReady(!p.ready)}
+                        title="Tap to toggle ready"
+                        className={`font-medium rounded px-2 py-0.5 transition-colors ${
+                          p.ready
+                            ? "text-green-400 hover:bg-green-950/40"
+                            : "text-gray-400 hover:text-white hover:bg-gray-800"
+                        }`}
+                      >
+                        {p.ready ? "Ready ✓" : "Tap to ready"}
+                      </button>
+                    ) : (
+                      <span className={p.ready ? "text-green-400" : "text-gray-500"}>
+                        {p.ready ? "Ready ✓" : "Not ready"}
+                      </span>
+                    )}
                   </li>
                 ))}
                 {lobby.length === 0 && <li className="text-xs text-gray-500">Waiting for players…</li>}
@@ -122,9 +138,6 @@ export default function GamePanel({ roomId }) {
             {startError && <p className="text-sm text-red-400 mt-3">{startError}</p>}
 
             <div className="mt-5 flex flex-col items-center gap-2">
-              <Button variant={iAmReady ? "secondary" : "primary"} onClick={() => setReady(!iAmReady)}>
-                {iAmReady ? "✓ Ready (tap to unready)" : "I'm ready"}
-              </Button>
               {isHost && (
                 <div className="flex items-center gap-2">
                   <label className="text-sm text-gray-400">Rounds</label>
@@ -139,7 +152,11 @@ export default function GamePanel({ roomId }) {
                 </div>
               )}
               <p className="text-xs text-gray-600">
-                {allReady ? (isHost ? "Everyone's ready!" : "Waiting for the host to start…") : "Need 2+ players, all ready."}
+                {allReady
+                  ? isHost
+                    ? "Everyone's ready!"
+                    : "Waiting for the host to start…"
+                  : "Tap your status above to ready up. Need 2+ players, all ready."}
               </p>
             </div>
           </div>
