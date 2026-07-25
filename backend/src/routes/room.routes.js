@@ -8,6 +8,7 @@ import {
   getRoom,
   joinRoom,
 } from "../controllers/room.controller.js";
+import { getRoomMessages } from "../controllers/message.controller.js";
 
 const router = Router();
 
@@ -18,5 +19,6 @@ router.post("/", validate(createRoomSchema), createRoom);
 router.get("/", listMyRooms);
 router.post("/join", validate(joinRoomSchema), joinRoom);
 router.get("/:id", getRoom);
+router.get("/:id/messages", getRoomMessages);
 
 export default router;

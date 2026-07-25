@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api.js";
+import { disconnectSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
@@ -51,6 +52,7 @@ export default function DashboardPage() {
 
   async function handleLogout() {
     await api.post("/auth/logout").catch(() => {});
+    disconnectSocket(); // drop the realtime connection on logout
     clearAuth();
     navigate("/");
   }

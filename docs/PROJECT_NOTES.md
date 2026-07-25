@@ -47,6 +47,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 14. [Feature: Auth UI — the frontend half of auth](#14-feature-auth-ui--the-frontend-half-of-auth)
 15. [Feature: User Profiles — name edit & avatar upload (MinIO)](#15-feature-user-profiles--name-edit--avatar-upload-minio)
 16. [Feature: Rooms — create, list, join by code](#16-feature-rooms--create-list-join-by-code)
+17. [Feature: Real-time Chat in Rooms (Socket.io)](#17-feature-real-time-chat-in-rooms-socketio)
 
 ---
 
@@ -831,6 +832,71 @@ model + 4 endpoints + rooms dashboard + room page.
 
 ---
 
+## 17. Feature: Real-time Chat in Rooms (Socket.io)
+
+*(Full template entry: [feature-map F13](notes/feature-map.md) — Phase 3 begins here)*
+
+### The Feature
+Live chat inside a room: instant messages for everyone present, a "who's online"
+presence list, typing indicator, and durable history that survives reload.
+Members only. First real-time feature — sets the socket patterns video reuses.
+
+### Ways to Implement Real-time
+1. HTTP polling ("any new messages?" every 2s) — simple, but laggy and wasteful. Rejected.
+2. Raw WebSocket — no reconnection/fallback/rooms; you rebuild all of it. Rejected.
+3. **(chosen)** Socket.io — WebSocket + auto-reconnect + server-side "rooms" +
+   polling fallback. Redis adapter is the documented path to multi-instance scale.
+
+### What We Did
+- **Socket auth via the handshake:** a socket has no per-message header, so the
+  client sends its access token once at connect (`auth: { token }`); an
+  `io.use()` middleware verifies the JWT and loads the user onto `socket.user`.
+- **Rooms & presence:** each app room → a Socket.io room `room:<id>`; presence =
+  distinct users among the sockets in it (de-duped, so multiple tabs = one
+  person), recomputed and broadcast on join/leave/disconnect.
+- **Server-authored messages:** `message:send` re-checks membership (never trust
+  the client), persists to a new `Message` model, then broadcasts `message:new`
+  to the whole room *including the sender* → everyone renders it once.
+- **History over REST** (`GET /rooms/:id/messages`, membership-gated, keyset
+  `?before=` pagination) — live delivery + durable backlog, the standard split.
+- **Frontend:** a socket singleton (token via callback so reconnects use a fresh
+  token), a `useRoomChat` hook (history + join + live subscriptions), and a chat
+  UI (bubbles, presence sidebar, typing line, auto-scroll).
+
+### Challenges
+- **Presence on disconnect:** `disconnecting` fires while the socket still lists
+  its rooms, so a naive recompute counts the leaver. Fixed by deferring the
+  recompute one tick (`setImmediate`) until after it's actually gone.
+- **Duplicate messages:** optimistic append + the server echo = each message
+  twice. Fixed by *not* appending optimistically — render only the server's
+  `message:new` echo (also gives the real id/timestamp).
+- **Dev-server port churn (real ops lesson):** rapid file saves triggered
+  overlapping nodemon restarts that fought over port 5000 (EADDRINUSE) and
+  spawned zombie node processes. Fixed by killing the port holders and doing one
+  clean start. Also: node-redis' reconnect strategy *gives up and closes* after
+  N tries — if Redis blips during a restart, the client stays closed until the
+  server restarts. Both are dev-only but worth knowing.
+
+### Verification
+Automated: 6 REST history tests (**suite 62 green**). Live: a 2-client Node
+script against the running server proved bad-token rejection, join + presence
+(2 online), Alice→Bob live delivery + ack, empty-message + non-member guards,
+and persisted history — all passed.
+
+### Interview Q&A
+- *How do you authenticate a WebSocket?* Not per-message — verify the token in
+  the connection handshake once, attach the user to the socket, trust it for the
+  connection's life (reconnect re-runs it with a fresh token).
+- *Why broadcast the sender's own message back instead of rendering locally?*
+  One source of truth: the server assigns id/timestamp and everyone (sender
+  included) renders the same echo → no duplicates, no divergence.
+- *Why keep history in Mongo if Socket.io already delivers messages?* Sockets are
+  ephemeral — a reload or late join has no backlog. Live = socket, history = DB.
+- *How would presence/chat scale past one server?* The Socket.io Redis adapter
+  pub/subs events across instances; Redis is already in the stack.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -848,15 +914,18 @@ captured email/storage spies. **56 tests, 7 suites, all green**, no Docker neede
 
 **Done — Rooms (§16):** create / list / join-by-code + rooms dashboard + room page.
 
+**Done — Real-time Chat (§17, Phase 3):** Socket.io live messaging + presence +
+typing + durable history, verified live with 2 clients. **62 tests green.**
+
 **Branch state (stacked — merge PRs in this order):**
-`feature/auth-extras` → `feature/auth-frontend` → `feature/user-profiles` → `feature/rooms`,
-each based on the previous; merging them into `develop` in that order keeps every diff clean.
+`feature/auth-extras` → `feature/auth-frontend` → `feature/user-profiles` →
+`feature/rooms` → `feature/room-chat`, each based on the previous; merge into
+`develop` in that order to keep every diff clean.
 
 **Next:**
 1. Merge the branch chain into `develop`.
-2. Live end-to-end pass with Docker up (register → verify → avatar → room round-trip),
-   incl. MinIO's first real upload.
-3. Then Phase 3 begins: Socket.io chat in rooms → mediasoup video core → whiteboard.
+2. Phase 3 continues: **mediasoup video core** (WebRTC SFU) — signaling rides the
+   socket layer we just built; then whiteboard, then recording (Kafka pipeline).
 
 ## Note: No Paid Cloud Services
 
@@ -874,4 +943,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-17 (Auth UI · User Profiles + MinIO · Rooms — first full-stack feature run)*
+*Last updated: 2026-07-25 (Phase 3 begins — real-time chat in rooms via Socket.io)*
