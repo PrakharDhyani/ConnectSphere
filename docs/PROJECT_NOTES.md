@@ -9,6 +9,26 @@
 
 ---
 
+## 📚 Detailed Notes (file-by-file, local companion docs)
+
+This journal stays the **interview-prep** view (decisions, trade-offs, Q&A).
+The **detailed walkthroughs** — every file explained from `index.js` to the test
+suite — live in three parts under `docs/notes/`:
+
+| Part | Covers |
+|---|---|
+| [Part 0 — Technologies](notes/part-0-technologies.md) | **Start here.** Every single technology explained from zero — no assumed knowledge: HTTP/JSON/ports, Node, Express, MongoDB, **Redis**, **Kafka**, **ZooKeeper**, Docker, JWT, bcrypt, OAuth, React, Vite, Jest… what each is, why we use it, where it lives |
+| [Feature Map](notes/feature-map.md) | Every feature in one fixed template: **tool & technology → what needs to be done → how it's done → workflow → file by file** |
+| [Part 1 — Foundations](notes/part-1-foundations.md) | Everything common to backend & frontend: Docker Compose, git/GitHub workflow, `.env`, how FE↔BE talk (Vite proxy, CORS, cookies), shared tooling, ports |
+| [Part 2 — Backend, file by file](notes/part-2-backend-auth.md) | The whole backend in request-pipeline order: `index.js`, `app.js`, `config/`, `utils/`, `middleware/`, `models/`, `validators/`, `services/`, `controllers/`, `routes/`, `sockets/`, and the entire `tests/` folder |
+| [Part 3 — Frontend](notes/part-3-frontend.md) | The React scaffold file by file + the Auth UI feature; grows with every feature |
+
+**Workflow from here:** every feature is built **full-stack** — backend + frontend
+together on one `feature/*` branch — and documented in both this journal (the
+"why") and the parts above (the "how, line by line").
+
+---
+
 ## Table of Contents
 
 1. [Project Overview & Architecture](#1-project-overview--architecture)
@@ -21,7 +41,14 @@
 8. [Feature: Auth Middleware & Protected Routes](#8-feature-auth-middleware--protected-routes)
 9. [Feature: Refresh Token Rotation & Logout (Redis)](#9-feature-refresh-token-rotation--logout-redis)
 10. [Feature: Google OAuth 2.0](#10-feature-google-oauth-20)
-11. [Testing / Verification Methodology](#11-testing--verification-methodology)
+11. [Feature: Email Verification & Password Reset](#11-feature-email-verification--password-reset)
+12. [Testing / Verification Methodology](#12-testing--verification-methodology)
+13. [Feature: Automated Test Harness (Jest + supertest)](#13-feature-automated-test-harness-jest--supertest)
+14. [Feature: Auth UI — the frontend half of auth](#14-feature-auth-ui--the-frontend-half-of-auth)
+15. [Feature: User Profiles — name edit & avatar upload (MinIO)](#15-feature-user-profiles--name-edit--avatar-upload-minio)
+16. [Feature: Rooms — create, list, join by code](#16-feature-rooms--create-list-join-by-code)
+17. [Feature: Real-time Chat in Rooms (Socket.io)](#17-feature-real-time-chat-in-rooms-socketio)
+18. [Feature: Room Polish — member list, rename, leave, delete](#18-feature-room-polish--member-list-rename-leave-delete)
 
 ---
 
@@ -443,11 +470,90 @@ after logout → 401.
 
 ---
 
-## 11. Testing / Verification Methodology
+## 11. Feature: Email Verification & Password Reset
 
-We don't have automated tests yet (planned: Jest + supertest). Until then, every
-feature is verified **end-to-end against the real running stack** — real MongoDB,
-real Redis, real HTTP — never assumed from reading code:
+### The Feature
+Confirm users own their email (verification link on signup + resend), and let them
+recover access via a "forgot password" email flow.
+
+### Ways to Implement the Tokens
+1. **Signed JWT as the token** — stateless, but can't be revoked/single-used without
+   extra tracking, and a leaked signing secret forges valid links.
+2. **Random token stored raw** (DB/Redis) — simple, but a store leak hands over live tokens.
+3. **Random token, store only its hash (chosen)** — high-entropy random token emailed to
+   the user; only its SHA-256 hash is stored. A store leak exposes nothing usable.
+
+### What We Did
+- `services/authToken.service.js` — `crypto.randomBytes(32)` token; store
+  `SHA-256(token)` in Redis as `verify_email:<hash>` (24h TTL) / `reset_password:<hash>`
+  (1h TTL), value = userId. **SHA-256 (fast hash) is correct here** — the token is
+  already 256 bits of randomness, so there's nothing to brute-force (unlike a password,
+  which needs slow bcrypt).
+- **Single-use via `GETDEL`** — look-up-and-delete is atomic, so a token can't be
+  replayed or race-used. Verified: reusing a consumed verify link → `?status=invalid`.
+- `services/email.service.js` — one nodemailer transport configured entirely from env.
+  Dev → **MailDev** container (SMTP :1025, web UI :1080) which *catches* mail and never
+  delivers, so nothing leaves the machine and no paid service is needed. Prod → point
+  `SMTP_*` at Resend/Brevo, **zero code change**.
+- **Verification:** on register, `dispatchVerificationEmail` sends
+  `SERVER_URL/api/auth/verify-email?token=…`. That endpoint is a `GET` (it's a link
+  click), consumes the token, sets `emailVerified: true`, and redirects to the frontend
+  with a status. Email sending is **best-effort** — wrapped in try/catch so a mail hiccup
+  never fails the registration itself (user can `/resend-verification`).
+- **Password reset:** `POST /forgot-password` → `POST /reset-password`. The reset link
+  points at the frontend (`CLIENT_URL/reset-password?token=…`) since it needs a form; the
+  actual change is the POST.
+- **Anti-enumeration** on both `/forgot-password` and `/resend-verification` — always the
+  same generic 200 ("if an account exists…"), regardless of whether the email is
+  registered or already verified. Same principle as the login 401.
+- **Reset kills all sessions.** Extended `refreshToken.service.js` with a per-user
+  reverse index (`user_sessions:<userId>` Redis set of jtis) so `revokeAllUserSessions()`
+  can drop every refresh token at once. On reset we also set `emailVerified: true`
+  (clicking the emailed link proves ownership).
+
+### Challenges / Design Notes
+- **Set-membership TTL:** Redis sets have no per-member expiry, so the `user_sessions`
+  set could accumulate stale jtis after their `refresh:` keys expire. Mitigated by giving
+  the set the same TTL (refreshed on each new token) and making revoke tolerant of stale
+  entries (deleting a missing key is a no-op).
+- **Why the verify link hits the backend but the reset link hits the frontend:**
+  verification is a one-click GET with no user input → backend can handle + redirect.
+  Reset needs the user to type a new password → must land on a frontend form first.
+- **Email as best-effort vs blocking:** chose non-blocking for registration (better UX,
+  resend exists) but the reset/verify *tokens* are always created first so the flow is
+  never left in a half state.
+
+### Verification (live, real stack — MailDev + Redis + Mongo)
+Register → verification email captured in MailDev → extracted the link → GET verified it
+(`302 …?status=success`) → confirmed `emailVerified: true` in Mongo → **reused the token
+→ `?status=invalid`** (single-use holds). Forgot-password → identical generic 200 for
+both a real and a nonexistent email → reset email captured → reset-password `200` →
+**`user_sessions` set gone + both of the user's refresh tokens revoked** → old refresh
+cookie `401`, old password `401`, new password `200`.
+
+### Interview Q&A
+- *Why hash the token if it's not a password?* Defense-in-depth: a Redis dump shouldn't
+  contain usable tokens. Fast hash is fine because the token is already high-entropy —
+  the bcrypt "make it slow" logic only matters for low-entropy secrets (passwords).
+- *Why does password reset revoke sessions but a normal password change might not?* Reset
+  is the "I may be compromised / locked out" path — you must assume existing sessions are
+  hostile and kill them. That's what the reverse index enables.
+- *How do you stop the reset flow from leaking which emails are registered?* Identical
+  response + timing-insensitive handling; the email either goes out or doesn't, but the
+  API says the same thing either way.
+- *Dev email without a paid provider?* MailDev (or MailHog) — a local SMTP sink with a web
+  UI; swap env vars for a real provider in prod.
+
+## 12. Testing / Verification Methodology
+
+> **Update:** automated tests now exist — see §13. This section documents the
+> **manual** end-to-end methodology used while building each feature (and still
+> the way OAuth / the browser round-trip get verified). The two are complementary:
+> the Jest suite guards the logic on every change; manual E2E proves the real
+> infra wiring.
+
+Until the harness landed, every feature was verified **end-to-end against the real
+running stack** — real MongoDB, real Redis, real HTTP — never assumed from reading code:
 
 - **curl with `-i`** to assert status codes, headers (Set-Cookie flags), and bodies.
 - **Negative paths always tested** alongside happy paths: duplicate email, weak
@@ -471,17 +577,415 @@ real Redis, real HTTP — never assumed from reading code:
 
 ---
 
+## 13. Feature: Automated Test Harness (Jest + supertest)
+
+### The Feature
+A fast, dependency-free API test suite that drives the **real Express app** through
+HTTP and asserts on status codes, bodies, cookies, and persisted state — so every
+future change re-verifies the whole auth surface in ~15s instead of by hand.
+**37 tests across 5 suites, all green.**
+
+### Ways to Implement
+1. **Hit a real running stack in CI** (spin up Mongo + Redis containers, boot the
+   server) — highest fidelity, but slow, flaky, and needs Docker on every CI box.
+2. **Mock everything, unit-test controllers in isolation** — fast, but tests the
+   mocks more than the app; misses routing, middleware order, validation, cookies.
+3. **Integration tests against the exported app, external edges faked (chosen)** —
+   `supertest` drives the actual `app` (real routes/middleware/controllers/models),
+   with only the *edges* replaced: in-memory Mongo, an in-memory Redis fake, and
+   spied-out email/logger. Real behaviour, zero infra, runs anywhere.
+
+### What We Did
+- **`supertest` on the exported `app`** — the `app.js`/`index.js` split (§3) pays off:
+  we import `app` without ever calling `listen()`, Kafka, or Socket.io.
+- **MongoDB → `mongodb-memory-server`** — a real `mongod` spun up in-memory per suite.
+  Real queries, real indexes (`unique(email)`, `sparse(googleId)` via `syncIndexes()`),
+  no Docker. Fits the free/self-hosted constraint (no Atlas needed for tests).
+- **Redis → a hand-written in-memory fake** (`tests/helpers/fakeRedis.js`)
+  implementing *exactly* the command surface the services touch
+  (`set {EX}`, `get`, `getDel`, `sAdd`, `sRem`, `sMembers`, `expire`, `del`). No
+  `redis-server`, no second binary. TTLs accepted-but-not-enforced (nothing asserts
+  wall-clock eviction; token expiry is tested via JWT `expiresIn`).
+- **Email → spies that *capture* the URL** — instead of sending, the mocked
+  `sendVerificationEmail` / `sendPasswordResetEmail` push `{to, url}` into an array,
+  so a test pulls the real one-time token straight out of the link. This is the
+  MailDev workflow (§11) reduced to an in-process array.
+- **Logger → silenced mock** — no winston file handles leaking into the test process
+  (which otherwise trips Jest's "open handle / did not exit" warnings).
+- **Shared harness** (`tests/helpers/harness.js`) wires all of the above and does
+  per-test cleanup (`deleteMany` on every collection — keeping indexes — + flush the
+  Redis fake + clear captured emails), so tests are independent and order-agnostic.
+- **Coverage where it matters:** controllers ~90%, `token`/`authToken`/`refreshToken`
+  services & validators & auth middleware 100%. The uncovered files are the mocked
+  edges and the Google-OAuth / browser path — deliberately proven live in §10, not here.
+
+### Challenges (the real ones)
+1. **ESM + Jest.** The project is `"type": "module"`; Jest's mocking predates native
+   ESM. Fixes: run under `node --experimental-vm-modules node_modules/jest/bin/jest.js`
+   (works on Windows *and* CI — no `cross-env` needed, unlike inline `NODE_OPTIONS=`),
+   `transform: {}` to disable Babel, and `jest.unstable_mockModule(...)` + dynamic
+   `await import()` instead of the hoisted `jest.mock()`.
+2. **Mock path resolution.** `jest.unstable_mockModule("../../src/config/redis.js")`
+   failed with *"Cannot find module … from tests/xyz.test.js"* — the specifier is
+   resolved relative to the **entry test file**, not the `harness.js` that calls it.
+   Since test files sit at a different depth than the helper, the relative path was
+   wrong. Fix: compute an **absolute** path to `src/` from `import.meta.url` and pass
+   that — it resolves to the same module id regardless of which test file calls in.
+3. **Rate limiter vs. the test client.** The in-process `express-rate-limit` counts
+   every request from the same loopback IP, so a suite firing >20 auth requests would
+   start getting spurious `429`s. Fix: `skip: () => process.env.NODE_ENV === "test"`
+   on both limiters — a one-line, clearly-scoped source change (the limiter is still
+   fully wired in dev/prod).
+4. **Env read at import time.** `token.js` computes `REFRESH_TOKEN_TTL_SECONDS` and
+   the JWT secrets are read when modules load — so the harness sets `process.env`
+   at its own module top level, *before* the dynamic `import()` of `app.js`.
+
+### What the Suite Actually Asserts (mirrors the manual E2E of §7–§11)
+Register (happy / dup 409 / weak-pw 400 / bad-email 400 / verification email sent) ·
+login (happy / wrong-pw 401 / unknown-email identical 401 / validation) ·
+refresh **rotation** (new cookie ≠ old) + **theft detection** (replayed pre-rotation
+cookie → 401) · logout (cookie cleared + token revoked, idempotent) · email verify
+(link works, **reuse → invalid**, bad/missing token) · resend & forgot-password
+(generic 200, no enumeration oracle) · reset (new pw works / old fails / **all
+sessions revoked** / invalid token 400 / weak pw 400) · `/users/me`
+(valid 200 / no header / malformed / garbage / wrong-secret / **expired** / deleted-user 404) ·
+health + 404 envelope + Google 501.
+
+### Interview Q&A
+- *Why fake Redis by hand instead of `redis-mock`?* We use `node-redis` v4 (promise
+  API, `getDel`, `sAdd`…); most mocks target `ioredis`. The service layer only touches
+  ~8 commands, so a 40-line fake is less risk than a mismatched library — and it keeps
+  `npm test` with **zero external processes**.
+- *Integration vs unit tests — why lean integration here?* The bugs that actually bite
+  auth live in the *wiring*: middleware order, cookie flags, validation, the
+  rotate-then-revoke sequence. Driving the real `app` catches those; isolated unit
+  tests of a controller would mock exactly the parts most likely to be wrong.
+- *How do you test a one-time email token without email?* Capture the link the code
+  would have sent (spy records the URL), parse the token out, and use it — same token
+  the user would click, no SMTP involved.
+- *Why disable rate limiting in tests rather than test it?* The limit is config, not
+  logic; testing "20 then 429" is inherently timing/IP-coupled and flaky. We assert the
+  *behaviours* the limiter protects and keep the limiter live in real environments.
+- *Is 79% total coverage low?* The denominator includes infra we mock on purpose
+  (redis/email transports) and the OAuth/browser path proven live in §10. The
+  **logic** surface — controllers, services, validators, auth middleware — is 90–100%.
+
+---
+
+## 14. Feature: Auth UI — the frontend half of auth
+
+*(Full template entry: [feature-map F10](notes/feature-map.md) · deep dive: [Part 3](notes/part-3-frontend.md))*
+
+### The Feature
+React pages + plumbing for everything the auth backend already does: login,
+register, Google button, forgot/reset password, email-verified landing page, a
+protected dashboard — and sessions that survive page reloads.
+
+### Ways to Implement (where does the token live?)
+1. localStorage — survives reloads but readable by any XSS. Rejected.
+2. Plain cookie for everything — CSRF surface widens. Rejected.
+3. **(chosen)** Access token in memory (zustand) + refresh token in the
+   httpOnly cookie the backend already sets; reloads restored by one silent
+   `/refresh` call at boot.
+
+### What We Did
+- `stores/auth.store.js` — zustand store with **three** states
+  (`loading/authed/guest`); `loading` exists so protected pages spinner during
+  boot instead of flashing the login page at logged-in users.
+- `lib/api.js` — one axios instance: request interceptor attaches the Bearer
+  token; response interceptor catches 401s, silently refreshes (**single-flight**
+  — rotation makes refresh single-use, so parallel 401s must share one refresh)
+  and retries; `bootstrapAuth()` restores the session at app start.
+- react-hook-form + zod on every form; zod schemas mirror the backend Joi rules
+  (instant field errors; server still enforces).
+- Pages: Login (+ reset-success/oauth-error messages), Register, AuthCallback
+  (post-Google), EmailVerified, Forgot/ResetPassword, Dashboard (verify-email
+  banner + resend, logout).
+- Google = `<a href="/api/auth/google">` — OAuth is a redirect dance, cannot be fetch.
+
+### Challenges
+- **The scaffold had never been run:** `NotFoundPage.jsx` was an empty file
+  imported by `App.jsx` — instant crash on first real run. Fixed.
+- JSX lint trap: raw `'` in text fails `react/no-unescaped-entities` in CI.
+
+### Verification
+`npm run lint` + `npm run build` clean. Live browser round-trip against the
+full stack queued for next session (needs Docker up).
+
+### Interview Q&A
+- *Why not localStorage for tokens?* Any XSS reads localStorage; memory +
+  httpOnly cookie is the hardened-SPA standard.
+- *How does a reload keep you logged in if the token is in memory?* It doesn't —
+  the httpOnly cookie does. Boot calls `/refresh`; cookie valid → new access
+  token, session restored.
+- *Why single-flight refresh?* Refresh tokens are single-use (rotation). Two
+  parallel refreshes = the second kills the session the first just created.
+
+---
+
+## 15. Feature: User Profiles — name edit & avatar upload (MinIO)
+
+*(Full template entry: [feature-map F11](notes/feature-map.md))*
+
+### The Feature
+`PATCH /users/me` (display name) + `POST /users/me/avatar` (image upload to
+S3-compatible storage) + a React profile page. First feature built **full-stack
+in one branch**, and first use of object storage.
+
+### Ways to Implement File Storage
+1. Store images in MongoDB (base64/GridFS) — bloats the DB, no CDN path. Rejected.
+2. Server's local disk — dies on redeploy, breaks with >1 server. Rejected.
+3. **(chosen)** Object storage via the S3 API — but **MinIO** self-hosted in
+   Docker instead of AWS (free-tier rule). Same SDK, env-var swap to real
+   S3/R2 in prod.
+
+### What We Did
+- `services/storage.service.js` — S3 client (`forcePathStyle: true`, the one
+  MinIO-specific flag), lazy auto-create bucket, deterministic key
+  `avatars/<userId>.<ext>` (re-upload overwrites → zero orphan cleanup),
+  `?v=<ts>` cache-buster. Same 501 graceful-degradation pattern as OAuth.
+- multer in **memory** mode (buffer → straight to bucket, never disk), 2MB cap,
+  JPEG/PNG/WebP only; a wrapper adds statusCode 400 to multer's own errors
+  (they'd otherwise surface as 500s).
+- `updateMeSchema`: partial update, `.min(1)`; stripUnknown kills smuggled
+  `role: "admin"` — with a regression test proving the DB stays `user`.
+- Frontend: FormData upload with hidden file input, avatar preview/initials
+  fallback, dashboard header avatar → profile link.
+- Test harness grew a storage mock capturing uploads (`h.uploads`) — 10 new
+  tests, suite now **47 green**.
+
+### Challenges
+- multer errors (e.g. LIMIT_FILE_SIZE) carry no `statusCode` → our error
+  handler would report 500 for a user mistake; fixed with the wrapper.
+- Cache-busting: deterministic keys mean the URL never changes — browsers would
+  show the old avatar forever without the version query.
+- **AWS SDK v3 ↔ MinIO hang (found on first live run).** `PutObject` hung
+  forever. Root cause: since ~Jan 2025 the SDK adds a default `crc32` integrity
+  checksum sent with `aws-chunked` streaming framing, which MinIO stalls on.
+  Fix: `requestChecksumCalculation/responseChecksumValidation: "WHEN_REQUIRED"`
+  (pre-2025 behaviour; real S3 accepts it too) + request timeouts so storage
+  can never hang a request. **Debugging lesson:** an isolated SDK probe
+  succeeded while the app "hung" — the real red herring was Windows `curl.exe`
+  failing to read a Git-Bash `/tmp/` path (never sent the request), which
+  *looked* like a server hang. Always confirm the client actually sent the bytes.
+- **Private-by-default buckets.** The upload succeeded but the avatar URL 403'd
+  in the browser — MinIO buckets are private. Added a public-read bucket policy
+  scoped to `avatars/*` only (nothing else exposed). Verified: anonymous GET → 200.
+
+### Interview Q&A
+- *Why memory storage for multer, not disk?* The file's destination is the
+  bucket; a disk hop adds I/O, cleanup, and breaks on multi-instance deploys.
+- *Why is a stable object key better than a random one per upload?* Overwrite
+  semantics = no orphaned files, no GC job; version query handles caching.
+- *How would this scale to recordings?* Same service, new prefix + presigned
+  URLs (SDK already installed) so clients upload directly to storage.
+
+---
+
+## 16. Feature: Rooms — create, list, join by code
+
+*(Full template entry: [feature-map F12](notes/feature-map.md))*
+
+### The Feature
+The container everything else attaches to: create a room → share a 6-char
+invite code → others join → members open the room page. Full-stack: Room
+model + 4 endpoints + rooms dashboard + room page.
+
+### Ways to Implement Joining
+1. Join by room ID — IDs are long, ugly, and leak enumeration surface. Rejected.
+2. Invite links with signed tokens — heavier than needed pre-launch. Later.
+3. **(chosen)** Short random code (6 hex chars, unique-indexed) — human-shareable
+   ("a1b2c3"), unguessable by scanning (16.7M), O(1) lookup.
+
+### What We Did
+- `Room` model with a `pre("validate")` hook enforcing two invariants at the
+  model level (nobody can forget them): code auto-generated, **owner is always
+  a member**.
+- Join = one atomic `findOneAndUpdate` + **`$addToSet`** — add-if-absent, so
+  joining twice can't duplicate membership and there's no read-then-write race.
+- Membership gate on `GET /rooms/:id`: member 200 / non-member **403** (room
+  exists — the join flow is the door) / unknown-or-malformed id 404. The
+  malformed-id case needs an explicit `isValidObjectId` guard — otherwise
+  mongoose throws a CastError and the user sees a 500 for a typo.
+- Create retries on the unique-index collision (E11000) with a fresh code —
+  1-in-16M shouldn't fail a user's request.
+- Frontend: dashboard is now the rooms hub — **first real TanStack Query
+  usage**: `useQuery(["rooms"])` for the list, mutations for create/join that
+  `invalidateQueries` so the list refetches itself. RoomPage: copy-invite-code
+  button, distinct 403/404 screens, Phase-3 video placeholder.
+- 9 new tests → suite **56 green**.
+
+### Challenges
+- Deciding 403 vs 404 for non-members: 404 would hide the room's existence
+  (more private), but the UX needs "you're not in — go get the code," and codes
+  (not ids) are the secret here. Documented trade-off.
+- Case-insensitive codes: Joi `.lowercase()` normalizes, so a code read out
+  loud as "A1B2C3" still joins.
+
+### Interview Q&A
+- *Why `$addToSet` over "read members, push, save"?* Atomic — two simultaneous
+  joins can't race; and it's idempotent for free.
+- *Why is the invite code its own unique index and not the `_id`?* IDs are
+  permanent and enumerable; codes are short, shareable, and could later be
+  rotated/expired without changing the room's identity.
+- *Where does video attach?* The RoomPage placeholder — mediasoup signaling
+  joins over Socket.io, keyed by this room id (Phase 3).
+
+---
+
+## 17. Feature: Real-time Chat in Rooms (Socket.io)
+
+*(Full template entry: [feature-map F13](notes/feature-map.md) — Phase 3 begins here)*
+
+### The Feature
+Live chat inside a room: instant messages for everyone present, a "who's online"
+presence list, typing indicator, and durable history that survives reload.
+Members only. First real-time feature — sets the socket patterns video reuses.
+
+### Ways to Implement Real-time
+1. HTTP polling ("any new messages?" every 2s) — simple, but laggy and wasteful. Rejected.
+2. Raw WebSocket — no reconnection/fallback/rooms; you rebuild all of it. Rejected.
+3. **(chosen)** Socket.io — WebSocket + auto-reconnect + server-side "rooms" +
+   polling fallback. Redis adapter is the documented path to multi-instance scale.
+
+### What We Did
+- **Socket auth via the handshake:** a socket has no per-message header, so the
+  client sends its access token once at connect (`auth: { token }`); an
+  `io.use()` middleware verifies the JWT and loads the user onto `socket.user`.
+- **Rooms & presence:** each app room → a Socket.io room `room:<id>`; presence =
+  distinct users among the sockets in it (de-duped, so multiple tabs = one
+  person), recomputed and broadcast on join/leave/disconnect.
+- **Server-authored messages:** `message:send` re-checks membership (never trust
+  the client), persists to a new `Message` model, then broadcasts `message:new`
+  to the whole room *including the sender* → everyone renders it once.
+- **History over REST** (`GET /rooms/:id/messages`, membership-gated, keyset
+  `?before=` pagination) — live delivery + durable backlog, the standard split.
+- **Frontend:** a socket singleton (token via callback so reconnects use a fresh
+  token), a `useRoomChat` hook (history + join + live subscriptions), and a chat
+  UI (bubbles, presence sidebar, typing line, auto-scroll).
+
+### Challenges
+- **Presence on disconnect:** `disconnecting` fires while the socket still lists
+  its rooms, so a naive recompute counts the leaver. Fixed by deferring the
+  recompute one tick (`setImmediate`) until after it's actually gone.
+- **Duplicate messages:** optimistic append + the server echo = each message
+  twice. Fixed by *not* appending optimistically — render only the server's
+  `message:new` echo (also gives the real id/timestamp).
+- **Dev-server port churn (real ops lesson):** rapid file saves triggered
+  overlapping nodemon restarts that fought over port 5000 (EADDRINUSE) and
+  spawned zombie node processes. Fixed by killing the port holders and doing one
+  clean start. Also: node-redis' reconnect strategy *gives up and closes* after
+  N tries — if Redis blips during a restart, the client stays closed until the
+  server restarts. Both are dev-only but worth knowing.
+
+### Verification
+Automated: 6 REST history tests (**suite 62 green**). Live: a 2-client Node
+script against the running server proved bad-token rejection, join + presence
+(2 online), Alice→Bob live delivery + ack, empty-message + non-member guards,
+and persisted history — all passed.
+
+### Interview Q&A
+- *How do you authenticate a WebSocket?* Not per-message — verify the token in
+  the connection handshake once, attach the user to the socket, trust it for the
+  connection's life (reconnect re-runs it with a fresh token).
+- *Why broadcast the sender's own message back instead of rendering locally?*
+  One source of truth: the server assigns id/timestamp and everyone (sender
+  included) renders the same echo → no duplicates, no divergence.
+- *Why keep history in Mongo if Socket.io already delivers messages?* Sockets are
+  ephemeral — a reload or late join has no backlog. Live = socket, history = DB.
+- *How would presence/chat scale past one server?* The Socket.io Redis adapter
+  pub/subs events across instances; Redis is already in the stack.
+
+---
+
+## 18. Feature: Room Polish — member list, rename, leave, delete
+
+*(Full template entry: [feature-map F14](notes/feature-map.md))*
+
+### The Feature
+Round out rooms into something fully manageable: a real member roster (not just
+who's online), owner rename + delete, and member leave — with connected members
+gracefully bounced out when a room is deleted.
+
+### What We Did
+- `GET /rooms/:id` now populates members (`{id, name, avatarUrl, isOwner}`) and
+  returns `isOwner` for the caller so the UI can gate owner-only actions. List
+  endpoints stay lightweight — detail lives only on the single-room view.
+- **Permission rules:** rename/delete are **owner-only** (403 otherwise); a
+  member can **leave** but the **owner can't** (they'd orphan the room → 400,
+  must delete). Leave is idempotent.
+- **Delete cleans up:** removes the room *and* its messages (`deleteMany`), then
+  broadcasts `room:closed` over the socket so members currently in the room get
+  navigated back to the dashboard instead of staring at a dead page.
+- **Broadcasting from REST:** the controller imports the socket `io` + the shared
+  `roomKey` helper and emits `room:closed` / `room:updated` / `room:members-changed`.
+  `io?.` guards the no-socket case (tests never call `initSocket`).
+- Frontend: members sidebar (online dot + owner badge), inline rename, confirm
+  dialogs for leave/delete, socket lifecycle listeners, and dashboard flash messages.
+
+### Challenges
+- **403 vs 404 for non-owner actions:** a member (or outsider) hitting
+  rename/delete gets 403 "owner only" — the room exists, they just lack rights.
+  Consistent with the read gate (§16).
+- **Broadcasting from HTTP land:** the REST controller lives outside the socket
+  layer, so it imports `io` (a live ESM binding, `undefined` until `initSocket`)
+  and the `roomKey` prefix from the socket module — with a `?.` guard so the same
+  code is safe in tests where no socket server exists.
+- **Dev port churn (again):** the rapid edit→nodemon-restart cycle kept leaving a
+  zombie node on :5000 (EADDRINUSE). Standard fix each time: stop the task, kill
+  the port holder, one clean start. A production process manager (pm2) wouldn't
+  have this; it's purely a dev-loop artifact.
+
+### Verification
+Automated: 10 new tests (**suite 72 green**). Live 2-client script: member-list
+detail, owner rename ok + member rename 403, delete broadcasts `room:closed` to a
+connected member + 404 after, member leave 200 + owner leave 400 — all passed.
+
+### Interview Q&A
+- *Why does the owner have to delete instead of leave?* Membership includes the
+  owner; letting them leave would orphan a room nobody can administer. Leaving is
+  for members; owners delete (or, future work, transfer ownership first).
+- *How does a user sitting in a deleted room find out?* The delete handler
+  broadcasts `room:closed` to the Socket.io room; every connected client's
+  listener bounces them to the dashboard. No polling, no stale page.
+- *Why populate members only on the detail endpoint, not the list?* The list can
+  be long; populating every room's members on the dashboard is wasteful. Detail
+  is one room, one populate — pay the cost only where the roster is shown.
+
+---
+
 ## Current Status / Next Steps
 
-**Done (feature/auth branch):** User model · register · login · auth middleware ·
-`/users/me` · refresh rotation · logout · Google OAuth — **fully verified end-to-end**,
-including a real browser round-trip confirmed in MongoDB + Redis.
+**Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
+auth middleware · `/users/me` · refresh rotation · logout · Google OAuth — fully verified
+end-to-end including a real browser round-trip.
+
+**Done — the whole auth surface (backend + frontend):** register/login · refresh
+rotation · logout · Google OAuth · email verification · password reset · **Auth UI**
+(§14: session restore across reloads, silent refresh, protected routes).
+
+**Done — test harness (§13):** Jest + supertest, in-memory Mongo + Redis fake +
+captured email/storage spies. **56 tests, 7 suites, all green**, no Docker needed.
+
+**Done — User Profiles (§15):** name edit + avatar upload to MinIO, profile page.
+
+**Done — Rooms (§16):** create / list / join-by-code + rooms dashboard + room page.
+
+**Done — Real-time Chat (§17, Phase 3):** Socket.io live messaging + presence +
+typing + durable history, verified live with 2 clients.
+
+**Done — Room Polish (§18):** member list, owner rename/delete, member leave,
+`room:closed` broadcast. **72 tests green.**
+
+**Branch state (stacked — merge PRs in this order):**
+`feature/auth-extras` → `feature/auth-frontend` → `feature/user-profiles` →
+`feature/rooms` → `feature/room-chat` → `feature/room-polish`, each based on the
+previous; merge into `develop` in that order to keep every diff clean.
 
 **Next:**
-1. Decide: email verification + password reset now, or PR what we have and follow up
-2. PR `feature/auth` → `develop`
-3. Then: user profiles (avatar upload → S3-compatible storage, via **MinIO** — free,
-   self-hosted, same `@aws-sdk/client-s3` API we already use) → rooms → mediasoup video core
+1. Merge the branch chain into `develop`.
+2. Phase 3 continues: **mediasoup video core** (WebRTC SFU) — signaling rides the
+   socket layer we just built; then whiteboard, then recording (Kafka pipeline).
 
 ## Note: No Paid Cloud Services
 
@@ -499,4 +1003,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-16*
+*Last updated: 2026-07-25 (real-time chat + room polish: member list, rename, leave, delete)*

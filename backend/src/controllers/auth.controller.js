@@ -9,7 +9,19 @@ import {
   storeRefreshToken,
   getRefreshTokenOwner,
   revokeRefreshToken,
+  revokeAllUserSessions,
 } from "../services/refreshToken.service.js";
+import {
+  createVerificationToken,
+  consumeVerificationToken,
+  createPasswordResetToken,
+  consumePasswordResetToken,
+} from "../services/authToken.service.js";
+import {
+  sendVerificationEmail,
+  sendPasswordResetEmail,
+} from "../services/email.service.js";
+import { logger } from "../utils/logger.js";
 
 const REFRESH_COOKIE_NAME = "refreshToken";
 const REFRESH_COOKIE_OPTIONS = {
@@ -44,6 +56,15 @@ async function issueTokens(res, user) {
   return accessToken;
 }
 
+// Creates a verification token and emails the link. Isolated + best-effort:
+// callers wrap it so a mail hiccup never fails the request it's attached to
+// (the user can always trigger /resend-verification).
+async function dispatchVerificationEmail(user) {
+  const token = await createVerificationToken(user._id);
+  const verifyUrl = `${process.env.SERVER_URL}/api/auth/verify-email?token=${token}`;
+  await sendVerificationEmail(user.email, verifyUrl);
+}
+
 // Shape returned to the client — never the password hash, even implicitly.
 function toSafeUser(user) {
   return {
@@ -69,6 +90,13 @@ export async function register(req, res, next) {
 
     const user = await User.create({ name, email, password });
     const accessToken = await issueTokens(res, user);
+
+    // Best-effort: don't fail registration if email sending hiccups.
+    try {
+      await dispatchVerificationEmail(user);
+    } catch (mailError) {
+      logger.error("Failed to send verification email:", mailError);
+    }
 
     res.status(201).json({
       success: true,
@@ -165,6 +193,101 @@ export async function googleCallback(req, res, next) {
   try {
     await issueTokens(res, req.user);
     res.redirect(`${process.env.CLIENT_URL}/auth/callback`);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// GET /verify-email?token=... — a link click, so it's a GET and redirects to
+// the frontend with a status rather than returning JSON.
+export async function verifyEmail(req, res, next) {
+  try {
+    const userId = await consumeVerificationToken(req.query.token);
+    if (!userId) {
+      return res.redirect(`${process.env.CLIENT_URL}/email-verified?status=invalid`);
+    }
+    await User.findByIdAndUpdate(userId, { emailVerified: true });
+    return res.redirect(`${process.env.CLIENT_URL}/email-verified?status=success`);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function resendVerification(req, res, next) {
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email });
+
+    // Only actually send for an existing, still-unverified account — but
+    // always return the same generic response, so this can't be used to probe
+    // which emails exist or which are already verified.
+    if (user && !user.emailVerified) {
+      try {
+        await dispatchVerificationEmail(user);
+      } catch (mailError) {
+        logger.error("Failed to resend verification email:", mailError);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: "If that account exists and is unverified, a new link has been sent.",
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function forgotPassword(req, res, next) {
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email });
+
+    if (user) {
+      try {
+        const token = await createPasswordResetToken(user._id);
+        const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${token}`;
+        await sendPasswordResetEmail(user.email, resetUrl);
+      } catch (mailError) {
+        logger.error("Failed to send password reset email:", mailError);
+      }
+    }
+
+    // Identical response whether or not the email is registered — no oracle.
+    res.json({
+      success: true,
+      message: "If an account exists for that email, a reset link has been sent.",
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function resetPassword(req, res, next) {
+  try {
+    const { token, password } = req.body;
+
+    const invalidResetToken = () => {
+      const error = new Error("Invalid or expired reset token");
+      error.statusCode = 400;
+      return error;
+    };
+
+    const userId = await consumePasswordResetToken(token);
+    if (!userId) throw invalidResetToken();
+
+    const user = await User.findById(userId);
+    if (!user) throw invalidResetToken();
+
+    user.password = password; // pre-save hook hashes it
+    user.emailVerified = true; // clicking the emailed link proves ownership
+    await user.save();
+
+    // Kill every existing session — if the reset was prompted by a compromise,
+    // old refresh tokens must not outlive it.
+    await revokeAllUserSessions(user._id);
+
+    res.json({ success: true, message: "Password has been reset. Please log in." });
   } catch (error) {
     next(error);
   }

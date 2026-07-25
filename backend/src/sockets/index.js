@@ -1,21 +1,19 @@
 /**
- * Socket.io Initialization — STUB
+ * Socket.io Initialization
  *
  * What is Socket.io?
- *   A library that enables real-time, bidirectional communication between
- *   browser and server over WebSocket (with HTTP long-polling as fallback).
+ *   A library for real-time, bidirectional messaging between browser and
+ *   server over a persistent WebSocket connection (with polling fallback).
+ *   Unlike HTTP request/response, the server can PUSH to the client at any
+ *   time — which is what live chat (and later, call signaling) needs.
  *
- * Why use it over plain WebSocket?
- *   - Auto-reconnection
- *   - Room/namespace support built in
- *   - Works behind proxies (Nginx, AWS ALB)
- *   - Fallback for environments that block WebSocket
- *
- * Full socket handlers will be added in Phase 2 (chat) and Phase 3 (video rooms).
+ * Flow: every socket must pass `authenticateSocket` (JWT in the handshake)
+ * before it's allowed to connect; then per-socket chat handlers are wired up.
  */
-
 import { Server } from "socket.io";
 import { logger } from "../utils/logger.js";
+import { authenticateSocket } from "./auth.js";
+import { registerChatHandlers } from "./chat.handlers.js";
 
 let io;
 
@@ -26,13 +24,16 @@ export function initSocket(httpServer) {
       methods: ["GET", "POST"],
       credentials: true,
     },
-    // Tune for production:
     pingTimeout: 60000,
     pingInterval: 25000,
   });
 
+  // Gate every connection on a valid access token (see auth.js).
+  io.use(authenticateSocket);
+
   io.on("connection", (socket) => {
-    logger.info(`Socket connected: ${socket.id}`);
+    logger.info(`Socket connected: ${socket.id} (user ${socket.user.id})`);
+    registerChatHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {
       logger.info(`Socket disconnected: ${socket.id} — reason: ${reason}`);
