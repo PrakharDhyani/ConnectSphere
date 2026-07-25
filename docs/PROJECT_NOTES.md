@@ -52,6 +52,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 19. [Feature: Video Calls — mediasoup WebRTC SFU](#19-feature-video-calls--mediasoup-webrtc-sfu)
 20. [Feature: Landing Page & Guest Access (join via link)](#20-feature-landing-page--guest-access-join-via-link)
 21. [Feature: Collaborative Whiteboard (Excalidraw)](#21-feature-collaborative-whiteboard-excalidraw)
+22. [Feature: Draw & Guess Game (Skribbl-style)](#22-feature-draw--guess-game-skribbl-style)
 
 ---
 
@@ -1145,6 +1146,53 @@ drawing UX is a manual browser test (2 tabs).
 
 ---
 
+## 22. Feature: Draw & Guess Game (Skribbl-style)
+
+*(Full template entry: [feature-map F19](notes/feature-map.md) — first mini-game)*
+
+### The Feature
+A real-time party game in a room: one player draws a secret word, everyone else
+races to guess; speed-based scoring; rounds; final scoreboard. Mobile-friendly.
+
+### What We Did
+- **Server-authoritative state machine** (`game.handlers.js`):
+  idle→choosing→drawing→reveal→…→ended, all timers/word/scoring on the server.
+  Guessers get a **masked** word (hint letters reveal over time); the drawer gets
+  the real word **privately** (a per-user socket room `user:<id>`).
+- **Scoring:** guesser `50+300·(timeLeft/turn)` (50–350, faster=more); drawer
+  `+40`/correct guesser. Turn ends on timeout or when everyone's guessed.
+- **Presence-driven players** (built from who's in the room; guests included);
+  drawer-disconnect skips the turn.
+- **Responsive canvas:** fixed 1000×600 buffer scaled by CSS + **normalized
+  0..1 stroke coords** → crisp and identical on phone/laptop; Pointer Events +
+  `touch-none` for finger/stylus. Palette, eraser, brush size, clear.
+- **RoomPage** now has a **Room / Board / Game** switcher; the call keeps
+  running hidden underneath.
+
+### Challenges / Design Notes
+- **Server must be authoritative** — the word, timers, and scoring can't live on
+  the client (cheating). Guessers never receive the word until the turn ends.
+- **Private word to the drawer:** Socket.io broadcasts hit everyone, so each
+  socket joins a `user:<id>` room and the drawer's word is sent only there.
+- **Responsive drawing across devices:** normalized coordinates + a fixed
+  internal buffer make one stroke look the same everywhere without redraw-on-resize.
+
+### Verification
+Live 2-socket script: start, private word, correct guess, speed scoring
+(drawer +40 / guesser +350), duplicate-guess ignore — all passed. 81 backend
+tests green; lint + build clean.
+
+### Interview Q&A
+- *Why is the game state on the server, not the client?* It's authoritative:
+  the secret word, the countdown, and scoring must be tamper-proof; clients only
+  render what the server tells them (guessers get a masked word).
+- *How does only the drawer get the word?* Every socket joins a personal
+  `user:<id>` room; the word is emitted only to the drawer's room.
+- *How is the canvas responsive?* Strokes are normalized to 0..1 against a fixed
+  1000×600 buffer, then CSS-scaled — so a phone and a laptop see the same drawing.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -1194,13 +1242,13 @@ platform** (video is just the room; USP = group fun). Planned: mini-games
 which violates ToS), Excalidraw whiteboard. Rename to a French name (TBD).
 **Responsive (mobile/tablet/laptop) is now a hard requirement.**
 
-**Done — Whiteboard (§21):** collaborative Excalidraw in rooms (live sync +
-cursors + persistence). Verified live (2 sockets).
+**Done — Whiteboard (§21):** collaborative Excalidraw in rooms.
+**Done — Draw & Guess game (§22):** first mini-game, responsive, live-verified.
 
 **Next:**
-1. **Manual browser tests** — video + screen share + whiteboard (2 tabs) + guest link.
-2. **Responsive pass** on every page (mobile/tablet).
-3. More fun features: a mini-game (skribbl), watch-party (synced YouTube embeds).
+1. **Manual browser tests** — video/screen-share/whiteboard/game (2 tabs) + guest link.
+2. **Responsive pass** polish on every page (mobile/tablet).
+3. More fun: watch-party (synced YouTube), more games (ludo/quiz); rename (French, TBD).
 4. Merge the branch chain into `develop`; later coturn (TURN) for real-network calls.
 
 ## Note: No Paid Cloud Services
@@ -1219,4 +1267,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-25 (collaborative Excalidraw whiteboard; + screen share, guest fix)*
+*Last updated: 2026-07-26 (Draw & Guess mini-game; + whiteboard, screen share)*
