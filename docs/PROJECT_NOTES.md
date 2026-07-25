@@ -1291,10 +1291,16 @@ which violates ToS), Excalidraw whiteboard. Rename to a French name (TBD).
 **Done — Draw & Guess game (§22)** and **Ludo (§23):** two mini-games in a
 games hub, both server-authoritative + responsive, live-verified.
 
+**Done — Activity social layer (feature-map F21):** Skribbl **ready-up lobby**
+(host starts only when 2+ all ready), **activity notifications** (tap-to-join
+toasts when someone starts a call/board/game), and **mic on every tab**
+(audio-only "Join voice" + a persistent VoiceBar). Verified: ready-up gate.
+
 **Next:**
-1. **Manual browser tests** — video/screen-share/whiteboard/games (2 tabs) + guest link.
-2. **Responsive pass** polish on the older pages (auth/dashboard/profile).
-3. More fun: watch-party (synced YouTube), more games (quiz); rename (French, TBD).
+1. **Friends system** (requests, friends list, invite friends to a room/activity) —
+   the one deferred item; a standalone persistent subsystem, its own build.
+2. **Manual browser tests** across all activities (2 tabs) + guest link.
+3. **Responsive pass** polish; watch-party (synced YouTube); rename (French, TBD).
 4. Merge the branch chain into `develop`; later coturn (TURN) for real-network calls.
 
 ## Note: No Paid Cloud Services
