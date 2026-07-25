@@ -757,6 +757,18 @@ in one branch**, and first use of object storage.
   handler would report 500 for a user mistake; fixed with the wrapper.
 - Cache-busting: deterministic keys mean the URL never changes — browsers would
   show the old avatar forever without the version query.
+- **AWS SDK v3 ↔ MinIO hang (found on first live run).** `PutObject` hung
+  forever. Root cause: since ~Jan 2025 the SDK adds a default `crc32` integrity
+  checksum sent with `aws-chunked` streaming framing, which MinIO stalls on.
+  Fix: `requestChecksumCalculation/responseChecksumValidation: "WHEN_REQUIRED"`
+  (pre-2025 behaviour; real S3 accepts it too) + request timeouts so storage
+  can never hang a request. **Debugging lesson:** an isolated SDK probe
+  succeeded while the app "hung" — the real red herring was Windows `curl.exe`
+  failing to read a Git-Bash `/tmp/` path (never sent the request), which
+  *looked* like a server hang. Always confirm the client actually sent the bytes.
+- **Private-by-default buckets.** The upload succeeded but the avatar URL 403'd
+  in the browser — MinIO buckets are private. Added a public-read bucket policy
+  scoped to `avatars/*` only (nothing else exposed). Verified: anonymous GET → 200.
 
 ### Interview Q&A
 - *Why memory storage for multer, not disk?* The file's destination is the
