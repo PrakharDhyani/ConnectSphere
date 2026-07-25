@@ -16,6 +16,7 @@ import { authenticateSocket } from "./auth.js";
 import { registerChatHandlers } from "./chat.handlers.js";
 import { registerMediaHandlers } from "./media.handlers.js";
 import { registerWhiteboardHandlers } from "./whiteboard.handlers.js";
+import { registerGameHandlers } from "./game.handlers.js";
 
 let io;
 
@@ -35,9 +36,13 @@ export function initSocket(httpServer) {
 
   io.on("connection", (socket) => {
     logger.info(`Socket connected: ${socket.id} (user ${socket.user.id})`);
+    // Personal room — lets the server address all of one user's sockets (e.g.
+    // send the game drawer their word privately).
+    socket.join(`user:${socket.user.id}`);
     registerChatHandlers(io, socket);
     registerMediaHandlers(io, socket);
     registerWhiteboardHandlers(io, socket);
+    registerGameHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {
       logger.info(`Socket disconnected: ${socket.id} — reason: ${reason}`);

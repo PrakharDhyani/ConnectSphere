@@ -7,6 +7,7 @@ import { useAuthStore } from "@/stores/auth.store.js";
 import { useRoomChat } from "@/hooks/useRoomChat.js";
 import { useMediaRoom } from "@/hooks/useMediaRoom.js";
 import VideoTile from "@/components/VideoTile.jsx";
+import GamePanel from "@/components/GamePanel.jsx";
 import Button from "@/components/ui/Button.jsx";
 
 // Excalidraw is heavy (~1.8 MB) — load it only when the whiteboard is opened.
@@ -34,7 +35,7 @@ export default function RoomPage() {
   const me = useAuthStore((s) => s.user);
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
-  const [boardOpen, setBoardOpen] = useState(false);
+  const [view, setView] = useState("room"); // "room" | "board" | "game"
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [actionError, setActionError] = useState(null);
@@ -151,16 +152,17 @@ export default function RoomPage() {
     <div className="min-h-screen flex flex-col">
       <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-800 gap-2">
         <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-xl font-bold text-brand-400 shrink-0">🌐</Link>
-        <div className="flex items-center gap-2">
-          <Button variant={boardOpen ? "secondary" : "primary"} onClick={() => setBoardOpen(false)}>💬 Room</Button>
-          <Button variant={boardOpen ? "primary" : "secondary"} onClick={() => setBoardOpen(true)}>🖊️ Whiteboard</Button>
+        <div className="flex items-center gap-1 sm:gap-2">
+          <Button variant={view === "room" ? "primary" : "secondary"} onClick={() => setView("room")}>💬 Room</Button>
+          <Button variant={view === "board" ? "primary" : "secondary"} onClick={() => setView("board")}>🖊️ Board</Button>
+          <Button variant={view === "game" ? "primary" : "secondary"} onClick={() => setView("game")}>🎮 Game</Button>
         </div>
-        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400 shrink-0">
+        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400 shrink-0 hidden sm:block">
           {me?.isGuest ? "← Home" : "← Dash"}
         </Link>
       </header>
 
-      {boardOpen && (
+      {view === "board" && (
         <div className="flex-1 w-full max-w-6xl mx-auto px-2 sm:px-4 py-4">
           <Suspense
             fallback={
@@ -174,7 +176,13 @@ export default function RoomPage() {
         </div>
       )}
 
-      <div className={`flex-1 max-w-5xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_240px] gap-4 ${boardOpen ? "hidden" : ""}`}>
+      {view === "game" && (
+        <div className="flex-1 w-full max-w-6xl mx-auto px-2 sm:px-4 py-4">
+          <GamePanel roomId={roomId} />
+        </div>
+      )}
+
+      <div className={`flex-1 max-w-5xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_240px] gap-4 ${view !== "room" ? "hidden" : ""}`}>
         {/* Chat column */}
         <section className="flex flex-col bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden min-h-[70vh]">
           <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 gap-3">
