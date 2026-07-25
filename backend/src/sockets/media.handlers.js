@@ -85,6 +85,7 @@ export function registerMediaHandlers(io, socket) {
       const peer = getPeer(rm, socket.id);
       const transport = await createWebRtcTransport(rm.router);
       peer.transports.set(transport.id, transport);
+      peer.userId = socket.user.id; // so getProducers can label tiles
       socket.data.mediaRoomId = roomId; // remember for disconnect cleanup
 
       cb({
@@ -146,7 +147,7 @@ export function registerMediaHandlers(io, socket) {
     for (const [socketId, peer] of rm.peers) {
       if (socketId === socket.id) continue;
       for (const producer of peer.producers.values()) {
-        producers.push({ producerId: producer.id, socketId, kind: producer.kind });
+        producers.push({ producerId: producer.id, socketId, userId: peer.userId, kind: producer.kind });
       }
     }
     cb({ producers });

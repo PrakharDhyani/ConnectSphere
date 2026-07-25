@@ -5,6 +5,8 @@ import { api } from "@/lib/api.js";
 import { getSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useRoomChat } from "@/hooks/useRoomChat.js";
+import { useMediaRoom } from "@/hooks/useMediaRoom.js";
+import VideoTile from "@/components/VideoTile.jsx";
 import Button from "@/components/ui/Button.jsx";
 
 // Full literal class strings per size — Tailwind only generates classes it can
@@ -42,6 +44,8 @@ export default function RoomPage() {
 
   const { messages, presence, typingName, error: chatError, sendMessage, notifyTyping } =
     useRoomChat(room ? roomId : null);
+
+  const call = useMediaRoom(room ? roomId : null);
 
   // React to room-lifecycle events pushed over the socket (see room.controller).
   useEffect(() => {
@@ -134,6 +138,7 @@ export default function RoomPage() {
   }
 
   const onlineIds = new Set(presence.map((p) => p.id));
+  const nameFor = (userId) => room.members.find((m) => m.id === userId)?.name || "Guest";
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -178,8 +183,31 @@ export default function RoomPage() {
                 <p className="text-xs text-gray-500">{presence.length} online · {room.memberCount} member{room.memberCount === 1 ? "" : "s"}</p>
               </div>
             )}
-            <Button variant="secondary" onClick={copyCode}>{copied ? "Copied ✓" : `Invite: ${room.code}`}</Button>
+            <div className="flex items-center gap-2 shrink-0">
+              {call.inCall ? (
+                <Button variant="danger" onClick={call.leaveCall}>Leave call</Button>
+              ) : (
+                <Button onClick={call.joinCall} loading={call.joining}>Join call</Button>
+              )}
+              <Button variant="secondary" onClick={copyCode}>{copied ? "Copied ✓" : `Invite: ${room.code}`}</Button>
+            </div>
           </div>
+
+          {call.inCall && (
+            <div className="border-b border-gray-800 p-3 bg-gray-950/40">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {call.localStream && <VideoTile stream={call.localStream} label="You" muted mirror />}
+                {call.peers.map((p) => (
+                  <VideoTile key={p.socketId} stream={p.stream} label={nameFor(p.userId)} />
+                ))}
+              </div>
+              <div className="flex items-center justify-center gap-2 mt-3">
+                <Button variant="secondary" onClick={call.toggleMic}>{call.micOn ? "🎤 Mute" : "🔇 Unmute"}</Button>
+                <Button variant="secondary" onClick={call.toggleCam}>{call.camOn ? "📷 Cam off" : "🎥 Cam on"}</Button>
+              </div>
+            </div>
+          )}
+          {call.error && <p className="px-5 py-2 text-sm text-red-400">{call.error}</p>}
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
             {messages.length === 0 && (
