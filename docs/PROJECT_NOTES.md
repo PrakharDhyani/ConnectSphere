@@ -53,6 +53,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 20. [Feature: Landing Page & Guest Access (join via link)](#20-feature-landing-page--guest-access-join-via-link)
 21. [Feature: Collaborative Whiteboard (Excalidraw)](#21-feature-collaborative-whiteboard-excalidraw)
 22. [Feature: Draw & Guess Game (Skribbl-style)](#22-feature-draw--guess-game-skribbl-style)
+23. [Feature: Ludo — Board Game (2–4 players)](#23-feature-ludo--board-game-24-players)
 
 ---
 
@@ -1193,6 +1194,50 @@ tests green; lint + build clean.
 
 ---
 
+## 23. Feature: Ludo — Board Game (2–4 players)
+
+*(Full template entry: [feature-map F20](notes/feature-map.md) — second mini-game)*
+
+### The Feature
+Classic Ludo in a room: seat up 2–4 players, roll to leave base, move/capture,
+race all four tokens home. Server-authoritative.
+
+### What We Did
+- **Step-based board model:** a token is a single number 0..57 (yard → 52-cell
+  shared track → home column → center). The server runs every rule from just
+  that plus start-offsets, a safe-cell set, and a `trackIndex()` helper — captures
+  are "two tokens with the same track index on a non-safe cell."
+- **Rules:** 6 to leave base, exact-roll to finish, capture-to-base on shared
+  non-safe cells, safe stars, extra turn on 6/capture/home, 3-sixes forfeit,
+  all-4-home win. Dice + turn order + board all live on the server.
+- **Client geometry:** the 15×15 board coordinates (track path, home columns,
+  yards) live only on the client, which maps each `step` to a `[row,col]`.
+- **Two games now** share the 🎮 Game tab via a chooser (Draw&Guess | Ludo).
+
+### Challenges / Design Notes
+- **The whole game reduces to one integer per token.** Modeling position as a
+  0..57 `step` (not board x/y) makes moves, captures, home, and win trivial and
+  keeps the server tiny; rendering geometry stays entirely on the client.
+- **Server-authoritative dice:** the roll and legal-move computation are on the
+  server so a client can't fake a 6 or an illegal move.
+- **Test flakiness (not a code bug):** running 10 suites that each boot an
+  in-memory Mongo in parallel *while the dev servers were running* timed out;
+  `--maxWorkers=2` → all 81 green. Worth remembering for CI tuning.
+
+### Verification
+Live 2-socket driver: seats, start, tokens leaving base across random turns,
+turn rotation — all passed. 81 backend tests green; lint + build clean.
+
+### Interview Q&A
+- *How do you represent a Ludo board so the rules are simple?* Each token is a
+  single `step` 0..57 along its own path; the shared track is a modular offset
+  per color, so captures/home/win are one-line checks. Pixel geometry is a
+  client-only concern.
+- *Why is the game server-authoritative?* The dice and legal moves must be
+  tamper-proof; clients only render and send roll/move intents.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -1243,12 +1288,13 @@ which violates ToS), Excalidraw whiteboard. Rename to a French name (TBD).
 **Responsive (mobile/tablet/laptop) is now a hard requirement.**
 
 **Done — Whiteboard (§21):** collaborative Excalidraw in rooms.
-**Done — Draw & Guess game (§22):** first mini-game, responsive, live-verified.
+**Done — Draw & Guess game (§22)** and **Ludo (§23):** two mini-games in a
+games hub, both server-authoritative + responsive, live-verified.
 
 **Next:**
-1. **Manual browser tests** — video/screen-share/whiteboard/game (2 tabs) + guest link.
-2. **Responsive pass** polish on every page (mobile/tablet).
-3. More fun: watch-party (synced YouTube), more games (ludo/quiz); rename (French, TBD).
+1. **Manual browser tests** — video/screen-share/whiteboard/games (2 tabs) + guest link.
+2. **Responsive pass** polish on the older pages (auth/dashboard/profile).
+3. More fun: watch-party (synced YouTube), more games (quiz); rename (French, TBD).
 4. Merge the branch chain into `develop`; later coturn (TURN) for real-network calls.
 
 ## Note: No Paid Cloud Services
@@ -1267,4 +1313,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-26 (Draw & Guess mini-game; + whiteboard, screen share)*
+*Last updated: 2026-07-26 (Ludo board game; + Draw & Guess, whiteboard, screen share)*
