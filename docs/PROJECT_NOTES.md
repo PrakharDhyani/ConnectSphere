@@ -51,6 +51,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 18. [Feature: Room Polish — member list, rename, leave, delete](#18-feature-room-polish--member-list-rename-leave-delete)
 19. [Feature: Video Calls — mediasoup WebRTC SFU](#19-feature-video-calls--mediasoup-webrtc-sfu)
 20. [Feature: Landing Page & Guest Access (join via link)](#20-feature-landing-page--guest-access-join-via-link)
+21. [Feature: Collaborative Whiteboard (Excalidraw)](#21-feature-collaborative-whiteboard-excalidraw)
 
 ---
 
@@ -1085,6 +1086,65 @@ code. Lint + build clean.
 
 ---
 
+## 21. Feature: Collaborative Whiteboard (Excalidraw)
+
+*(Full template entry: [feature-map F18](notes/feature-map.md))*
+
+### The Feature
+An Excalidraw-grade whiteboard inside every room that the whole group edits
+together in real time — infinite canvas, all tools, live cursors, persistence.
+
+### Ways to Implement
+1. **Build a canvas engine from scratch** (shapes, arrows, text, selection,
+   undo, export, snapping…) — literally rebuilding Excalidraw. Months of work,
+   strictly worse. Rejected.
+2. **A lighter canvas lib** (fabric.js/tldraw-core) + custom tools — still huge.
+3. **(chosen) Integrate the official Excalidraw React component** — it already
+   ships ~the entire requested feature list; we add only the *group* layer
+   (real-time sync + presence + persistence) over our Socket.io.
+
+### What We Did
+- **Reused Excalidraw** for the whole drawing surface (canvas, tools, arrows,
+  text, images, frames, styling, alignment, layers, undo/redo, export, library,
+  mobile/stylus, shortcuts). Lazy-loaded (~1.8 MB, code-split) so it only loads
+  when the board is opened.
+- **Group layer (ours):** `whiteboard.handlers.js` — membership-gated join that
+  syncs the current scene, live `whiteboard:update` broadcasts, presence
+  cursors, and **debounced Mongo persistence** (a `Whiteboard` doc per room) so
+  boards survive restarts and late joiners get current state.
+- **Reconciliation:** remote element sets merge by element **`version`**
+  (last-write-wins per element) so concurrent edits converge without dropping
+  local work; deletions ride Excalidraw's `isDeleted` + version bump.
+- RoomPage gets a **Room / Whiteboard toggle**; the call keeps running hidden so
+  audio continues while you draw.
+
+### Challenges / Design Notes
+- **Echo loops:** applying a remote scene fires Excalidraw's `onChange`, which
+  would rebroadcast. Guarded with a `suppress` flag around `updateScene` + a
+  throttle, plus version-based merge so it converges regardless.
+- **Bundle size:** Excalidraw pulls katex/cytoscape/mermaid for diagram
+  features → lazy-load + `Suspense` keeps it off the initial app load.
+- **"OT/CRDT-friendly" wish-list item:** our socket-sync + version reconcile IS
+  the ready architecture; swapping in a true CRDT (Yjs) later is a contained change.
+
+### Verification
+Live 2-socket script: join, update broadcast, non-member blocked, late-joiner
+scene sync — all passed. 81 backend tests green; lint + build clean. Full
+drawing UX is a manual browser test (2 tabs).
+
+### Interview Q&A
+- *Why integrate Excalidraw instead of building it?* The requested feature list
+  IS Excalidraw's feature set; rebuilding it would take months and be worse. The
+  value we add is the *collaboration* layer, which is platform-specific.
+- *How do concurrent edits not clobber each other?* Elements carry a `version`;
+  remote sets merge last-write-wins per element, so both sides converge and
+  neither drops the other's elements.
+- *How does a late joiner get the board?* The server keeps the live scene in
+  memory (debounced-persisted to Mongo) and hands it to any joiner on
+  `whiteboard:join`.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -1134,10 +1194,13 @@ platform** (video is just the room; USP = group fun). Planned: mini-games
 which violates ToS), Excalidraw whiteboard. Rename to a French name (TBD).
 **Responsive (mobile/tablet/laptop) is now a hard requirement.**
 
+**Done — Whiteboard (§21):** collaborative Excalidraw in rooms (live sync +
+cursors + persistence). Verified live (2 sockets).
+
 **Next:**
-1. **Manual browser tests** — video + screen share (2 tabs, webcam) + guest link.
+1. **Manual browser tests** — video + screen share + whiteboard (2 tabs) + guest link.
 2. **Responsive pass** on every page (mobile/tablet).
-3. Then the fun features: whiteboard (Excalidraw), a mini-game (skribbl), watch-party.
+3. More fun features: a mini-game (skribbl), watch-party (synced YouTube embeds).
 4. Merge the branch chain into `develop`; later coturn (TURN) for real-network calls.
 
 ## Note: No Paid Cloud Services
@@ -1156,4 +1219,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-25 (landing page + guest access via invite link; copy-link not code)*
+*Last updated: 2026-07-25 (collaborative Excalidraw whiteboard; + screen share, guest fix)*
