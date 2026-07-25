@@ -9,7 +9,7 @@
  *
  * The server owns the dice, the board, and turn order; clients only render.
  */
-import { COLORS, START, SAFE, trackIndex } from "../games/ludoBoard.js";
+import { COLORS, SAFE, trackIndex } from "../games/ludoBoard.js";
 import { canAccessRoom } from "../utils/roomAccess.js";
 import { roomKey } from "./chat.handlers.js";
 

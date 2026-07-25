@@ -92,6 +92,18 @@ export function registerChatHandlers(io, socket) {
     }
   });
 
+  // Activity announcements — "X started a Ludo game", "X opened the whiteboard",
+  // "X started the call". Relayed to everyone in the room except the sender so
+  // their UI can pop a toast. Purely a notification; carries no trust.
+  socket.on("room:announce", ({ roomId, activity } = {}) => {
+    if (!roomId || !socket.rooms.has(roomKey(roomId)) || !activity) return;
+    socket.to(roomKey(roomId)).emit("room:notify", {
+      activity, // "call" | "board" | "skribbl" | "ludo"
+      name: socket.user.name,
+      userId: socket.user.id,
+    });
+  });
+
   // Transient — never stored. `socket.to` = everyone in the room EXCEPT sender.
   socket.on("typing", (roomId) => {
     if (!roomId) return;

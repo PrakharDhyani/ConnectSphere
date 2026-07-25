@@ -18,7 +18,16 @@ export function useLudo(roomId) {
 
   const join = useCallback(() => new Promise((r) => getSocket().emit("ludo:join", { roomId }, r)), [roomId]);
   const leave = useCallback(() => getSocket().emit("ludo:leave", { roomId }), [roomId]);
-  const start = useCallback(() => new Promise((r) => getSocket().emit("ludo:start", { roomId }, r)), [roomId]);
+  const start = useCallback(
+    () =>
+      new Promise((r) =>
+        getSocket().emit("ludo:start", { roomId }, (res) => {
+          if (res?.ok) getSocket().emit("room:announce", { roomId, activity: "ludo" });
+          r(res);
+        })
+      ),
+    [roomId]
+  );
   const roll = useCallback(() => getSocket().emit("ludo:roll", { roomId }), [roomId]);
   const move = useCallback((token) => getSocket().emit("ludo:move", { roomId, token }), [roomId]);
   const reset = useCallback(() => getSocket().emit("ludo:reset", { roomId }), [roomId]);

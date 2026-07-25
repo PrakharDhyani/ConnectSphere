@@ -8,7 +8,16 @@ import { useRoomChat } from "@/hooks/useRoomChat.js";
 import { useMediaRoom } from "@/hooks/useMediaRoom.js";
 import VideoTile from "@/components/VideoTile.jsx";
 import GamesHub from "@/components/GamesHub.jsx";
+import VoiceBar from "@/components/VoiceBar.jsx";
 import Button from "@/components/ui/Button.jsx";
+
+const ACT_LABEL = {
+  call: "started the call 📞",
+  board: "opened the whiteboard 🖊️",
+  skribbl: "started Draw & Guess 🎨",
+  ludo: "started Ludo 🎲",
+};
+const ACT_VIEW = { call: "room", board: "board", skribbl: "game", ludo: "game" };
 
 // Excalidraw is heavy (~1.8 MB) — load it only when the whiteboard is opened.
 const WhiteboardPanel = lazy(() => import("@/components/WhiteboardPanel.jsx"));
@@ -36,6 +45,7 @@ export default function RoomPage() {
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
   const [view, setView] = useState("room"); // "room" | "board" | "game"
+  const [toasts, setToasts] = useState([]);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [actionError, setActionError] = useState(null);
@@ -51,6 +61,18 @@ export default function RoomPage() {
     useRoomChat(room ? roomId : null);
 
   const call = useMediaRoom(room ? roomId : null);
+
+  // Activity notifications: someone started a call/board/game in this room.
+  useEffect(() => {
+    const socket = getSocket();
+    const onNotify = ({ activity, name }) => {
+      const id = `${Date.now()}-${Math.random()}`;
+      setToasts((t) => [...t.slice(-3), { id, activity, name }]);
+      setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+    };
+    socket.on("room:notify", onNotify);
+    return () => socket.off("room:notify", onNotify);
+  }, []);
 
   // React to room-lifecycle events pushed over the socket (see room.controller).
   useEffect(() => {
@@ -150,6 +172,26 @@ export default function RoomPage() {
 
   return (
     <div className="min-h-screen flex flex-col">
+      {/* Persistent mic/call bar — available on every tab */}
+      <VoiceBar call={call} />
+
+      {/* Activity notifications */}
+      <div className="fixed top-4 right-4 z-40 space-y-2 w-64">
+        {toasts.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => {
+              setView(ACT_VIEW[t.activity] || "room");
+              setToasts((x) => x.filter((y) => y.id !== t.id));
+            }}
+            className="block w-full text-left bg-gray-900 border border-brand-800 rounded-xl px-4 py-2 text-sm shadow-lg hover:border-brand-500 transition-colors"
+          >
+            <span><b className="text-brand-300">{t.name}</b> {ACT_LABEL[t.activity] || "started an activity"}</span>
+            <span className="block text-xs text-gray-500">Tap to join →</span>
+          </button>
+        ))}
+      </div>
+
       <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-800 gap-2">
         <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-xl font-bold text-brand-400 shrink-0">🌐</Link>
         <div className="flex items-center gap-1 sm:gap-2">

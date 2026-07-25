@@ -45,9 +45,11 @@ export function useSkribbl(roomId) {
     socket.on("game:guessMessage", onGuessMessage);
     socket.on("game:turnEnd", onTurnEnd);
 
+    socket.emit("game:join", { roomId }); // opening the game = you're in the lobby
     socket.emit("game:sync", { roomId }, (s) => s && setState(s));
 
     return () => {
+      socket.emit("game:leave", { roomId });
       socket.off("game:state", onState);
       socket.off("game:choices", onChoices);
       socket.off("game:drawerWord", onDrawerWord);
@@ -58,14 +60,21 @@ export function useSkribbl(roomId) {
   }, [roomId, me?.id]);
 
   const start = useCallback(
-    (rounds = 3) => new Promise((res) => getSocket().emit("game:start", { roomId, rounds }, res)),
+    (rounds = 3) =>
+      new Promise((res) => {
+        getSocket().emit("game:start", { roomId, rounds }, (r) => {
+          if (r?.ok) getSocket().emit("room:announce", { roomId, activity: "skribbl" });
+          res(r);
+        });
+      }),
     [roomId]
   );
+  const setReady = useCallback((ready) => getSocket().emit("game:ready", { roomId, ready }), [roomId]);
   const chooseWord = useCallback((word) => getSocket().emit("game:chooseWord", { roomId, word }), [roomId]);
   const guess = useCallback((text) => getSocket().emit("game:guess", { roomId, text }), [roomId]);
 
   const isDrawer = Boolean(state && state.drawerId === me?.id);
   const iGuessed = Boolean(state?.guessed?.includes(me?.id));
 
-  return { state, choices, myWord, feed, isDrawer, iGuessed, me, start, chooseWord, guess };
+  return { state, choices, myWord, feed, isDrawer, iGuessed, me, start, setReady, chooseWord, guess };
 }

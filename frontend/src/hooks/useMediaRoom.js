@@ -152,7 +152,7 @@ export function useMediaRoom(roomId) {
     setInCall(false);
   }, []);
 
-  const joinCall = useCallback(async () => {
+  const joinCall = useCallback(async ({ video = true } = {}) => {
     if (inCall || joining) return;
     setJoining(true);
     setError(null);
@@ -163,7 +163,9 @@ export function useMediaRoom(roomId) {
       device.current = new mediasoupClient.Device();
       await device.current.load({ routerRtpCapabilities: caps.rtpCapabilities });
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      // Audio-only ("voice") join skips the camera — handy for talking during a
+      // game or whiteboard without turning your camera on.
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video });
       localStreamRef.current = stream;
       setLocalStream(stream);
 
@@ -220,6 +222,7 @@ export function useMediaRoom(roomId) {
       for (const p of producers || []) await consume(socket, p);
 
       setInCall(true);
+      socket.emit("room:announce", { roomId, activity: "call" }); // notify the room
     } catch (e) {
       setError(e.message || "Could not join the call");
       cleanup();
@@ -284,6 +287,10 @@ export function useMediaRoom(roomId) {
     [roomId, cleanup]
   );
 
+  const joinVoice = useCallback(() => joinCall({ video: false }), [joinCall]);
+  const hasVideo = Boolean(localStream && localStream.getVideoTracks().length > 0);
+  const peerCount = remotes.filter((r) => r.source === "camera").length;
+
   return {
     inCall,
     joining,
@@ -293,8 +300,11 @@ export function useMediaRoom(roomId) {
     remotes,
     micOn,
     camOn,
+    hasVideo,
+    peerCount,
     sharingScreen,
     joinCall,
+    joinVoice,
     leaveCall,
     startScreenShare,
     stopScreenShare,

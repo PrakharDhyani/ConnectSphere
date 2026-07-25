@@ -65,10 +65,12 @@ export default function WhiteboardPanel({ roomId }) {
     socket.on("whiteboard:pointer", onPointer);
     socket.on("whiteboard:pointerLeft", onPointerLeft);
 
-    const join = () =>
+    const join = () => {
       socket.emit("whiteboard:join", roomId, (res) => {
         if (res?.elements?.length) applyRemote(res.elements);
       });
+      socket.emit("room:announce", { roomId, activity: "board" }); // notify the room
+    };
     if (socket.connected) join();
     else socket.once("connect", join);
 

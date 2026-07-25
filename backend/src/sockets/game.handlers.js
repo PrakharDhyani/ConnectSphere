@@ -1,20 +1,15 @@
 /**
  * Skribbl-style draw-and-guess game, one per room.
  *
- * Flow: start → each present player takes a turn as the DRAWER: they pick 1 of
- * 3 words, then draw it while everyone else guesses in a race. Correct guessers
- * score by speed; the drawer scores per correct guesser. After everyone has
- * drawn `maxRounds` times, the final scoreboard shows.
+ * LOBBY first: players join the game and mark themselves "ready"; the host can
+ * only start once there are 2+ players and everyone is ready. Then each ready
+ * player takes a turn as DRAWER (picks 1 of 3 words, draws it) while the others
+ * guess in a timed race. Speed scores the guesser; the drawer scores per correct
+ * guesser. After `maxRounds` turns each, a final scoreboard shows.
  *
- * The server is authoritative: it owns the timers, the word, the scoring, and
- * only tells guessers a MASKED word (letters revealed as hints over time). The
- * drawer receives the real word privately (via their per-user room).
- *
- * Client → server: game:start, game:chooseWord, game:draw, game:clear,
- *   game:guess, game:sync
- * Server → client: game:state (public snapshot), game:choices (drawer only),
- *   game:drawerWord (drawer only), game:clear, game:draw, game:correct,
- *   game:guessMessage, game:turnEnd, game:ended
+ * The server is authoritative: it owns the timers, the word, and the scoring,
+ * and only tells guessers a MASKED word (hint letters reveal over time). The
+ * drawer gets the real word privately (their per-user room).
  */
 import { pickWords, maskWord, letterIndices } from "../games/words.js";
 import { canAccessRoom } from "../utils/roomAccess.js";
@@ -24,7 +19,27 @@ const TURN_MS = 75_000;
 const CHOOSE_MS = 15_000;
 const REVEAL_MS = 5_000;
 
-const games = new Map(); // roomId -> game
+const games = new Map();
+
+function newGame(hostId) {
+  return {
+    status: "lobby",
+    hostId,
+    lobby: new Map(), // userId -> { id, name, ready }
+    players: new Map(), // userId -> { id, name, avatarUrl, score } (set at start)
+    order: [],
+    drawnThisRound: new Set(),
+    round: 1,
+    maxRounds: 3,
+    drawerId: null,
+    word: null,
+    wordChoices: [],
+    revealedIdx: new Set(),
+    guessed: new Set(),
+    turnEndsAt: null,
+    timers: { choose: null, turn: null, reveal: null, hints: [] },
+  };
+}
 
 function clearTimers(g) {
   clearTimeout(g.timers.choose);
@@ -34,18 +49,16 @@ function clearTimers(g) {
   g.timers.hints = [];
 }
 
-async function presentPlayers(io, roomId) {
+async function presentIds(io, roomId) {
   const sockets = await io.in(roomKey(roomId)).fetchSockets();
-  const map = new Map();
-  for (const s of sockets) {
-    if (!map.has(s.user.id)) map.set(s.user.id, { id: s.user.id, name: s.user.name, avatarUrl: s.user.avatarUrl });
-  }
-  return map;
+  return new Set(sockets.map((s) => s.user.id));
 }
 
 function publicState(g) {
   return {
     status: g.status,
+    hostId: g.hostId,
+    lobby: [...g.lobby.values()],
     round: g.round,
     maxRounds: g.maxRounds,
     drawerId: g.drawerId,
@@ -56,12 +69,11 @@ function publicState(g) {
     masked: g.word ? maskWord(g.word, g.revealedIdx) : null,
     turnEndsAt: g.status === "drawing" ? g.turnEndsAt : null,
     guessed: [...g.guessed],
-    // The real word is public only once the turn is over.
     word: g.status === "reveal" || g.status === "ended" ? g.word : null,
   };
 }
 
-function broadcastState(io, roomId) {
+function broadcast(io, roomId) {
   const g = games.get(roomId);
   if (g) io.to(roomKey(roomId)).emit("game:state", publicState(g));
 }
@@ -74,9 +86,8 @@ function startChoosing(io, roomId, drawerId) {
   g.wordChoices = pickWords(3);
   g.revealedIdx = new Set();
   g.guessed = new Set();
-  g.correctCount = 0;
   clearTimers(g);
-  broadcastState(io, roomId);
+  broadcast(io, roomId);
   io.to(`user:${drawerId}`).emit("game:choices", { choices: g.wordChoices });
   g.timers.choose = setTimeout(() => beginDrawing(io, roomId, g.wordChoices[0]), CHOOSE_MS);
 }
@@ -85,9 +96,9 @@ function revealHint(io, roomId, idxs) {
   const g = games.get(roomId);
   if (!g || g.status !== "drawing") return;
   const hidden = idxs.filter((i) => !g.revealedIdx.has(i));
-  if (hidden.length <= 1) return; // never reveal the last letter
+  if (hidden.length <= 1) return;
   g.revealedIdx.add(hidden[Math.floor(Math.random() * hidden.length)]);
-  broadcastState(io, roomId);
+  broadcast(io, roomId);
 }
 
 function beginDrawing(io, roomId, word) {
@@ -98,7 +109,7 @@ function beginDrawing(io, roomId, word) {
   g.status = "drawing";
   g.turnEndsAt = Date.now() + TURN_MS;
   io.to(roomKey(roomId)).emit("game:clear");
-  broadcastState(io, roomId);
+  broadcast(io, roomId);
   io.to(`user:${g.drawerId}`).emit("game:drawerWord", { word });
   const idxs = letterIndices(word);
   g.timers.turn = setTimeout(() => endTurn(io, roomId), TURN_MS);
@@ -113,7 +124,7 @@ function endTurn(io, roomId) {
   if (!g || g.status === "reveal") return;
   clearTimers(g);
   g.status = "reveal";
-  broadcastState(io, roomId);
+  broadcast(io, roomId);
   io.to(roomKey(roomId)).emit("game:turnEnd", { word: g.word });
   g.timers.reveal = setTimeout(() => advance(io, roomId), REVEAL_MS);
 }
@@ -123,18 +134,22 @@ function endGame(io, roomId) {
   if (!g) return;
   clearTimers(g);
   g.status = "ended";
-  broadcastState(io, roomId);
+  g.drawerId = null;
+  // reset ready flags so the group can ready-up for another round
+  for (const p of g.lobby.values()) p.ready = false;
+  broadcast(io, roomId);
   io.to(roomKey(roomId)).emit("game:ended", { players: publicState(g).players });
 }
 
 async function advance(io, roomId) {
   const g = games.get(roomId);
   if (!g) return;
-  const present = await presentPlayers(io, roomId);
-  for (const [id, p] of present) if (!g.players.has(id)) g.players.set(id, { ...p, score: 0 });
-
-  const candidates = [...present.keys()].filter((id) => !g.drawnThisRound.has(id));
+  const present = await presentIds(io, roomId);
+  const candidates = g.order.filter((id) => !g.drawnThisRound.has(id) && present.has(id));
   if (candidates.length === 0) {
+    // did anyone present remain to play at all?
+    const anyPresent = g.order.some((id) => present.has(id));
+    if (!anyPresent) return endGame(io, roomId);
     g.round += 1;
     g.drawnThisRound.clear();
     if (g.round > g.maxRounds) return endGame(io, roomId);
@@ -148,106 +163,123 @@ async function advance(io, roomId) {
 async function checkAllGuessed(io, roomId) {
   const g = games.get(roomId);
   if (!g || g.status !== "drawing") return;
-  const present = await presentPlayers(io, roomId);
-  const guessers = [...present.keys()].filter((id) => id !== g.drawerId);
+  const present = await presentIds(io, roomId);
+  const guessers = g.order.filter((id) => id !== g.drawerId && present.has(id));
   if (guessers.length > 0 && guessers.every((id) => g.guessed.has(id))) endTurn(io, roomId);
 }
 
 export function registerGameHandlers(io, socket) {
+  const uid = socket.user.id;
+
   socket.on("game:sync", ({ roomId } = {}, cb) => {
     const g = games.get(roomId);
-    cb?.(g ? publicState(g) : { status: "idle", players: [] });
+    cb?.(g ? publicState(g) : { status: "lobby", lobby: [], players: [], hostId: null });
+  });
+
+  socket.on("game:join", async ({ roomId } = {}, cb) => {
+    if (!(await canAccessRoom(socket.user, roomId)) || !socket.rooms.has(roomKey(roomId))) return cb?.({ error: "Not allowed" });
+    let g = games.get(roomId);
+    if (!g) { g = newGame(uid); games.set(roomId, g); }
+    if (!g.lobby.has(uid)) g.lobby.set(uid, { id: uid, name: socket.user.name, ready: false });
+    if (!g.hostId || ![...g.lobby.keys()].includes(g.hostId)) g.hostId = [...g.lobby.keys()][0];
+    broadcast(io, roomId);
+    cb?.({ ok: true });
+  });
+
+  socket.on("game:leave", ({ roomId } = {}) => {
+    const g = games.get(roomId);
+    if (!g) return;
+    g.lobby.delete(uid);
+    if (g.hostId === uid) g.hostId = [...g.lobby.keys()][0] || null;
+    if (g.lobby.size === 0 && (g.status === "lobby" || g.status === "ended")) {
+      clearTimers(g);
+      games.delete(roomId);
+      return;
+    }
+    broadcast(io, roomId);
+  });
+
+  socket.on("game:ready", ({ roomId, ready } = {}) => {
+    const g = games.get(roomId);
+    const p = g?.lobby.get(uid);
+    if (!p) return;
+    p.ready = Boolean(ready);
+    broadcast(io, roomId);
   });
 
   socket.on("game:start", async ({ roomId, rounds } = {}, cb) => {
-    try {
-      if (!(await canAccessRoom(socket.user, roomId))) return cb?.({ error: "Not allowed" });
-      if (!socket.rooms.has(roomKey(roomId))) return cb?.({ error: "Join the room first" });
-      const present = await presentPlayers(io, roomId);
-      if (present.size < 2) return cb?.({ error: "Need at least 2 players in the room" });
+    const g = games.get(roomId);
+    if (!g) return cb?.({ error: "No game" });
+    if (g.hostId !== uid) return cb?.({ error: "Only the host can start" });
+    if (g.status !== "lobby" && g.status !== "ended") return cb?.({ error: "Game already running" });
+    const members = [...g.lobby.values()];
+    if (members.length < 2) return cb?.({ error: "Need at least 2 players" });
+    if (!members.every((p) => p.ready)) return cb?.({ error: "Everyone must be ready" });
 
-      const existing = games.get(roomId);
-      if (existing) clearTimers(existing);
-
-      const g = {
-        status: "idle",
-        players: new Map(),
-        drawnThisRound: new Set(),
-        round: 1,
-        maxRounds: Math.min(Math.max(Number(rounds) || 3, 1), 10),
-        drawerId: null,
-        word: null,
-        wordChoices: [],
-        revealedIdx: new Set(),
-        guessed: new Set(),
-        correctCount: 0,
-        turnEndsAt: null,
-        timers: { choose: null, turn: null, reveal: null, hints: [] },
-      };
-      for (const [id, p] of present) g.players.set(id, { ...p, score: 0 });
-      games.set(roomId, g);
-      advance(io, roomId);
-      cb?.({ ok: true });
-    } catch {
-      cb?.({ error: "Could not start game" });
-    }
+    g.maxRounds = Math.min(Math.max(Number(rounds) || 3, 1), 10);
+    g.players = new Map(members.map((p) => [p.id, { id: p.id, name: p.name, avatarUrl: null, score: 0 }]));
+    g.order = [...g.players.keys()];
+    g.drawnThisRound = new Set();
+    g.round = 1;
+    g.guessed = new Set();
+    advance(io, roomId);
+    cb?.({ ok: true });
   });
 
   socket.on("game:chooseWord", ({ roomId, word } = {}) => {
     const g = games.get(roomId);
-    if (!g || g.status !== "choosing" || socket.user.id !== g.drawerId) return;
+    if (!g || g.status !== "choosing" || uid !== g.drawerId) return;
     if (!g.wordChoices.includes(word)) return;
     beginDrawing(io, roomId, word);
   });
 
   socket.on("game:draw", ({ roomId, stroke } = {}) => {
     const g = games.get(roomId);
-    if (!g || g.status !== "drawing" || socket.user.id !== g.drawerId) return;
+    if (!g || g.status !== "drawing" || uid !== g.drawerId) return;
     socket.to(roomKey(roomId)).emit("game:draw", { stroke });
   });
 
   socket.on("game:clear", ({ roomId } = {}) => {
     const g = games.get(roomId);
-    if (!g || socket.user.id !== g.drawerId) return;
+    if (!g || uid !== g.drawerId) return;
     io.to(roomKey(roomId)).emit("game:clear");
   });
 
   socket.on("game:guess", ({ roomId, text } = {}) => {
     const g = games.get(roomId);
-    if (!g || g.status !== "drawing") return;
-    if (socket.user.id === g.drawerId || g.guessed.has(socket.user.id)) return;
+    if (!g || g.status !== "drawing" || !g.players.has(uid)) return;
+    if (uid === g.drawerId || g.guessed.has(uid)) return;
     const guess = (text || "").trim().toLowerCase();
     if (!guess) return;
 
     if (guess === g.word.toLowerCase()) {
-      g.guessed.add(socket.user.id);
+      g.guessed.add(uid);
       const timeLeft = Math.max(0, g.turnEndsAt - Date.now());
       const pts = Math.round(50 + 300 * (timeLeft / TURN_MS));
-      const player = g.players.get(socket.user.id);
+      const player = g.players.get(uid);
       if (player) player.score += pts;
       const drawer = g.players.get(g.drawerId);
       if (drawer) drawer.score += 40;
-      io.to(roomKey(roomId)).emit("game:correct", { name: socket.user.name, userId: socket.user.id });
-      broadcastState(io, roomId);
+      io.to(roomKey(roomId)).emit("game:correct", { name: socket.user.name, userId: uid });
+      broadcast(io, roomId);
       checkAllGuessed(io, roomId);
     } else {
-      // Wrong guesses show to the room like chat (part of the fun).
       io.to(roomKey(roomId)).emit("game:guessMessage", { name: socket.user.name, text });
     }
   });
 
-  // If the current drawer drops, skip their turn.
   socket.on("disconnecting", () => {
     const rooms = [...socket.rooms].filter((k) => k.startsWith("room:")).map((k) => k.slice(5));
     setImmediate(async () => {
       for (const roomId of rooms) {
         const g = games.get(roomId);
         if (!g) continue;
-        const present = await presentPlayers(io, roomId);
-        if ((g.status === "choosing" || g.status === "drawing") && !present.has(g.drawerId)) {
+        g.lobby.delete(uid);
+        if (g.hostId === uid) g.hostId = [...g.lobby.keys()][0] || null;
+        if ((g.status === "choosing" || g.status === "drawing") && g.drawerId === uid) {
           endTurn(io, roomId);
         } else {
-          broadcastState(io, roomId);
+          broadcast(io, roomId);
         }
       }
     });
