@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api.js";
@@ -8,6 +8,9 @@ import { useRoomChat } from "@/hooks/useRoomChat.js";
 import { useMediaRoom } from "@/hooks/useMediaRoom.js";
 import VideoTile from "@/components/VideoTile.jsx";
 import Button from "@/components/ui/Button.jsx";
+
+// Excalidraw is heavy (~1.8 MB) — load it only when the whiteboard is opened.
+const WhiteboardPanel = lazy(() => import("@/components/WhiteboardPanel.jsx"));
 
 // Full literal class strings per size — Tailwind only generates classes it can
 // see as complete tokens, so `w-${n}` would silently produce no CSS.
@@ -31,6 +34,7 @@ export default function RoomPage() {
   const me = useAuthStore((s) => s.user);
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
+  const [boardOpen, setBoardOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [actionError, setActionError] = useState(null);
@@ -145,14 +149,32 @@ export default function RoomPage() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-xl font-bold text-brand-400">🌐 ConnectSphere</Link>
-        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400">
-          {me?.isGuest ? "← Home" : "← Dashboard"}
+      <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-800 gap-2">
+        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-xl font-bold text-brand-400 shrink-0">🌐</Link>
+        <div className="flex items-center gap-2">
+          <Button variant={boardOpen ? "secondary" : "primary"} onClick={() => setBoardOpen(false)}>💬 Room</Button>
+          <Button variant={boardOpen ? "primary" : "secondary"} onClick={() => setBoardOpen(true)}>🖊️ Whiteboard</Button>
+        </div>
+        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400 shrink-0">
+          {me?.isGuest ? "← Home" : "← Dash"}
         </Link>
       </header>
 
-      <div className="flex-1 max-w-5xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_240px] gap-4">
+      {boardOpen && (
+        <div className="flex-1 w-full max-w-6xl mx-auto px-2 sm:px-4 py-4">
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center h-[75vh]">
+                <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+            }
+          >
+            <WhiteboardPanel roomId={roomId} />
+          </Suspense>
+        </div>
+      )}
+
+      <div className={`flex-1 max-w-5xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_240px] gap-4 ${boardOpen ? "hidden" : ""}`}>
         {/* Chat column */}
         <section className="flex flex-col bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden min-h-[70vh]">
           <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 gap-3">
