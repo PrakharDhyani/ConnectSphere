@@ -50,6 +50,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 17. [Feature: Real-time Chat in Rooms (Socket.io)](#17-feature-real-time-chat-in-rooms-socketio)
 18. [Feature: Room Polish — member list, rename, leave, delete](#18-feature-room-polish--member-list-rename-leave-delete)
 19. [Feature: Video Calls — mediasoup WebRTC SFU](#19-feature-video-calls--mediasoup-webrtc-sfu)
+20. [Feature: Landing Page & Guest Access (join via link)](#20-feature-landing-page--guest-access-join-via-link)
 
 ---
 
@@ -1021,6 +1022,69 @@ browser + camera → manual 2-tab test** (open two browsers, same room, Join cal
 
 ---
 
+## 20. Feature: Landing Page & Guest Access (join via link)
+
+*(Full template entry: [feature-map F16](notes/feature-map.md))*
+
+### The Feature
+Three connected changes: a real marketing **Home page** (not the login screen);
+**copy a link, not a code**; and **guest access** — join a meeting from a link
+with just a name, participate fully in the call, but no dashboard/profile/room
+creation — with guests being ephemeral (leave no trace).
+
+### Ways to Implement Guests
+1. Add guests to `room.members` and delete later — pollutes the member list and
+   leaves dangling refs when the ephemeral user is cleaned up. Rejected.
+2. A fully separate guest auth system — duplicate token/socket logic. Rejected.
+3. **(chosen)** A normal (but ephemeral) `User` with an `isGuest` flag + a
+   **room-scoped token**: a `room` claim grants access to exactly one room
+   without membership, and a Mongo **TTL index** auto-deletes the guest. Reuses
+   all existing auth/socket plumbing.
+
+### What We Did
+- **Landing page** — hero, live-feature grid, how-it-works, "coming soon"
+  roadmap (filters/whiteboard/games/recording), CTAs; auth-aware.
+- **Copy link** — the room page copies `${origin}/join/${code}`; `/join/:code`
+  auto-joins registered users and offers "join as guest" to everyone else.
+- **Room-scoped guest token** — `generateGuestToken` embeds `{isGuest, room}`.
+- **One shared access rule** — `utils/roomAccess.js` `canAccessRoom()` (member OR
+  scoped guest), used by both socket handlers and both room/message controllers,
+  replacing the duplicated `isMember`.
+- **Guardrails** — `requireFullUser` → 403 for guests on create/list/join/rename/
+  delete rooms + profile edits; `ProtectedRoute fullUserOnly` mirrors it in the UI.
+- **Ephemeral cleanup** — `expiresAt` + a TTL index; guests never enter
+  `room.members`, so nothing dangles when they're removed.
+
+### Challenges / Design Notes
+- **Email was required + unique.** Guests have none → made email optional +
+  **sparse** (same trick as `googleId`), so many guests coexist; the register
+  validator still enforces email for real signups.
+- **Membership vs scoped access.** Guests aren't members, so the whole access
+  check had to move to a shared helper that also honors the token's `room` claim
+  — otherwise chat/video would reject them.
+- **Guest scoping is a security boundary** — a guest token for room A must not
+  touch room B. Enforced by comparing the token's `room` claim to the target
+  room, and covered by a test.
+
+### Verification
+81 backend tests (9 new guest tests), incl. scoped-access and every blocked
+action. Live script confirmed join → scoped read → 403 on create/list → bad
+code. Lint + build clean.
+
+### Interview Q&A
+- *How do guests get into a room without being members?* Their JWT carries a
+  `room` claim; the shared `canAccessRoom` check allows a scoped guest into
+  exactly that room — no `room.members` entry, so nothing to clean up.
+- *How are ephemeral guests cleaned up?* A Mongo TTL index on `expiresAt` deletes
+  the guest user automatically; nothing references them elsewhere.
+- *How do you stop a guest from wandering into other rooms or hosting?* The
+  token is single-room scoped (tested), and `requireFullUser` returns 403 on all
+  registered-only actions.
+- *Why let email be null for guests but keep it unique?* A **sparse** unique
+  index enforces uniqueness only on documents that have the field.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -1051,16 +1115,20 @@ server-side. **Manual 2-tab A/V test is the one open verification.**
 **Also done:** dependency hygiene — `npm audit fix` (backend prod vulns → 0) and
 react-router upgraded v6 → v7.
 
+**Done — Landing + Guest access (§20):** marketing home page, copy-link (not
+code), and ephemeral guest join-via-link with room-scoped access. **81 tests green.**
+
 **Branch state (stacked — merge PRs in this order):**
 `feature/auth-extras` → `feature/auth-frontend` → `feature/user-profiles` →
-`feature/rooms` → `feature/room-chat` → `feature/room-polish` → `feature/video`,
-each based on the previous; merge into `develop` in that order.
+`feature/rooms` → `feature/room-chat` → `feature/room-polish` → `feature/video`
+→ `feature/landing-guest`, each based on the previous; merge into `develop` in
+that order.
 
 **Next:**
-1. **Manual 2-tab browser test** of the video call (needs a webcam).
+1. **Manual browser tests** — video (2 tabs, webcam) + the guest join-link flow.
 2. Merge the branch chain into `develop`.
-3. Then: whiteboard (Socket.io), recording (Kafka pipeline → ffmpeg → MinIO),
-   and a TURN server (coturn) for NAT traversal before any real deployment.
+3. Then: whiteboard (Socket.io), recording (Kafka → ffmpeg → MinIO), TURN
+   (coturn) for NAT traversal, and — for guests — mini-games once built.
 
 ## Note: No Paid Cloud Services
 
@@ -1078,4 +1146,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-25 (video calls — mediasoup WebRTC SFU; + dep hygiene & react-router v7)*
+*Last updated: 2026-07-25 (landing page + guest access via invite link; copy-link not code)*
