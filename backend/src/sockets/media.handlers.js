@@ -20,17 +20,12 @@
  * or disconnect. Closing a transport closes its producers/consumers for us.
  */
 import { getWorker, mediaCodecs } from "../config/mediasoup.js";
-import { Room } from "../models/Room.js";
+import { canAccessRoom } from "../utils/roomAccess.js";
 import { roomKey } from "./chat.handlers.js";
 import { logger } from "../utils/logger.js";
 
 // roomId -> { router, peers: Map<socketId, { transports, producers, consumers }> }
 const roomsMedia = new Map();
-
-async function isMember(roomId, userId) {
-  const room = await Room.findById(roomId).select("members").lean();
-  return Boolean(room && room.members.some((m) => m.toString() === userId));
-}
 
 async function getRoomMedia(roomId) {
   let rm = roomsMedia.get(roomId);
@@ -69,7 +64,7 @@ export function registerMediaHandlers(io, socket) {
 
   socket.on("media:getRtpCapabilities", async (roomId, cb) => {
     try {
-      if (!(await isMember(roomId, socket.user.id))) return notMember(cb);
+      if (!(await canAccessRoom(socket.user, roomId))) return notMember(cb);
       const rm = await getRoomMedia(roomId);
       cb({ rtpCapabilities: rm.router.rtpCapabilities });
     } catch (err) {
@@ -80,7 +75,7 @@ export function registerMediaHandlers(io, socket) {
 
   socket.on("media:createTransport", async ({ roomId, direction }, cb) => {
     try {
-      if (!(await isMember(roomId, socket.user.id))) return notMember(cb);
+      if (!(await canAccessRoom(socket.user, roomId))) return notMember(cb);
       const rm = await getRoomMedia(roomId);
       const peer = getPeer(rm, socket.id);
       const transport = await createWebRtcTransport(rm.router);

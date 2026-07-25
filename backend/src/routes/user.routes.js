@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { authenticate } from "../middleware/authenticate.js";
+import { requireFullUser } from "../middleware/requireFullUser.js";
 import { validate } from "../middleware/validate.js";
 import { updateMeSchema } from "../validators/user.validator.js";
 import { getMe, updateMe, uploadAvatar } from "../controllers/user.controller.js";
@@ -34,8 +35,8 @@ function uploadAvatarFile(req, res, next) {
   });
 }
 
-router.get("/me", authenticate, getMe);
-router.patch("/me", authenticate, validate(updateMeSchema), updateMe);
-router.post("/me/avatar", authenticate, uploadAvatarFile, uploadAvatar);
+router.get("/me", authenticate, getMe); // guests can read their own identity
+router.patch("/me", authenticate, requireFullUser, validate(updateMeSchema), updateMe);
+router.post("/me/avatar", authenticate, requireFullUser, uploadAvatarFile, uploadAvatar);
 
 export default router;

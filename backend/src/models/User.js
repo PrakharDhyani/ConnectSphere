@@ -11,10 +11,13 @@ const userSchema = new Schema(
       trim: true,
       maxlength: 100,
     },
+    // Not required at the schema level: guest users have no email. Regular
+    // signup still enforces it in the register validator. sparse + unique lets
+    // many guests omit email without colliding (same trick as googleId).
     email: {
       type: String,
-      required: [true, "Email is required"],
       unique: true,
+      sparse: true,
       lowercase: true,
       trim: true,
       match: [/^\S+@\S+\.\S+$/, "Invalid email format"],
@@ -47,9 +50,26 @@ const userSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    // Ephemeral guest (joined a meeting via link, no account). Guests can't
+    // create rooms, edit a profile, or see the dashboard.
+    isGuest: {
+      type: Boolean,
+      default: false,
+    },
+    // When set (guests only), a TTL index deletes the doc at this time — so
+    // guest identities clean themselves up with no cron. null for real users
+    // (Mongo's TTL index ignores docs where the field is null/absent).
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true } // adds createdAt / updatedAt automatically
 );
+
+// TTL cleanup for ephemeral guests (expireAfterSeconds: 0 = delete once
+// expiresAt is in the past).
+userSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // Runs automatically before every .save() — hashes the password if it was
 // just set or changed, so no caller can ever accidentally save a plaintext

@@ -1,7 +1,9 @@
 import { User } from "../models/User.js";
+import { Room } from "../models/Room.js";
 import {
   generateAccessToken,
   generateRefreshToken,
+  generateGuestToken,
   verifyRefreshToken,
   REFRESH_TOKEN_TTL_SECONDS,
 } from "../utils/token.js";
@@ -74,6 +76,7 @@ function toSafeUser(user) {
     avatarUrl: user.avatarUrl,
     role: user.role,
     emailVerified: user.emailVerified,
+    isGuest: Boolean(user.isGuest),
   };
 }
 
@@ -310,6 +313,43 @@ export async function logout(req, res, next) {
 
     clearRefreshCookie(res);
     res.json({ success: true, message: "Logged out" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// POST /guest — join a meeting via its invite code with just a display name,
+// no account. Creates an EPHEMERAL guest user (auto-expires via TTL) and issues
+// a room-scoped guest token. No refresh cookie: a reload ends the guest session
+// (they'd rejoin from the link), which is the point of "ephemeral".
+export async function guestLogin(req, res, next) {
+  try {
+    const { name, code } = req.body;
+
+    const room = await Room.findOne({ code });
+    if (!room) {
+      const error = new Error("No meeting found for that link");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const guest = await User.create({
+      name,
+      isGuest: true,
+      // Clean the guest up automatically ~when its token expires (see TTL index).
+      expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000),
+    });
+
+    const accessToken = generateGuestToken(guest, room._id);
+
+    res.status(201).json({
+      success: true,
+      data: {
+        user: toSafeUser(guest),
+        accessToken,
+        room: { id: room._id, name: room.name, code: room.code },
+      },
+    });
   } catch (error) {
     next(error);
   }

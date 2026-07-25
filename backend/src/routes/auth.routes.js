@@ -10,6 +10,7 @@ import {
   resendVerification,
   forgotPassword,
   resetPassword,
+  guestLogin,
 } from "../controllers/auth.controller.js";
 import { passport } from "../config/passport.js";
 import { validate } from "../middleware/validate.js";
@@ -18,6 +19,7 @@ import {
   loginSchema,
   emailSchema,
   resetPasswordSchema,
+  guestSchema,
 } from "../validators/auth.validator.js";
 
 const router = Router();
@@ -39,6 +41,9 @@ router.post("/register", authLimiter, validate(registerSchema), register);
 router.post("/login", authLimiter, validate(loginSchema), login);
 router.post("/refresh", authLimiter, refresh);
 router.post("/logout", logout);
+
+// Join a meeting as a guest (display name + invite code) — no account.
+router.post("/guest", authLimiter, validate(guestSchema), guestLogin);
 
 // ── Email verification & password reset ──
 router.get("/verify-email", verifyEmail);

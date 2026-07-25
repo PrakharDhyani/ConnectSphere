@@ -29,6 +29,19 @@ export function generateRefreshToken(user) {
   return { token, jti };
 }
 
+// Guests get an access token only (no refresh) — scoped to the ONE room they
+// were admitted to via an invite link. The `room` claim is what lets the
+// membership checks allow them into that room without adding them to the room's
+// persistent member list. Signed with the access secret so `authenticate`
+// verifies it like any other access token.
+export function generateGuestToken(user, roomId) {
+  return jwt.sign(
+    { sub: user._id.toString(), role: "guest", isGuest: true, room: roomId.toString() },
+    process.env.JWT_ACCESS_SECRET,
+    { expiresIn: process.env.GUEST_TOKEN_EXPIRES_IN || "6h" }
+  );
+}
+
 export function verifyAccessToken(token) {
   return jwt.verify(token, process.env.JWT_ACCESS_SECRET);
 }

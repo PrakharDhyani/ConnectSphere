@@ -99,8 +99,11 @@ export default function RoomPage() {
     onError: (err) => setActionError(err.response?.data?.error?.message || "Could not delete"),
   });
 
-  async function copyCode() {
-    await navigator.clipboard.writeText(room.code).catch(() => {});
+  // Copy a full shareable link (not just the code) — anyone who opens it lands
+  // on /join/:code and can hop straight in, as a guest or with an account.
+  async function copyLink() {
+    const link = `${window.location.origin}/join/${room.code}`;
+    await navigator.clipboard.writeText(link).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -143,8 +146,10 @@ export default function RoomPage() {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-        <Link to="/dashboard" className="text-xl font-bold text-brand-400">🌐 ConnectSphere</Link>
-        <Link to="/dashboard" className="text-sm text-gray-400 hover:text-brand-400">← Dashboard</Link>
+        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-xl font-bold text-brand-400">🌐 ConnectSphere</Link>
+        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400">
+          {me?.isGuest ? "← Home" : "← Dashboard"}
+        </Link>
       </header>
 
       <div className="flex-1 max-w-5xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_240px] gap-4">
@@ -189,7 +194,7 @@ export default function RoomPage() {
               ) : (
                 <Button onClick={call.joinCall} loading={call.joining}>Join call</Button>
               )}
-              <Button variant="secondary" onClick={copyCode}>{copied ? "Copied ✓" : `Invite: ${room.code}`}</Button>
+              <Button variant="secondary" onClick={copyLink}>{copied ? "Copied ✓" : "🔗 Copy invite link"}</Button>
             </div>
           </div>
 
@@ -220,7 +225,7 @@ export default function RoomPage() {
                   <Avatar user={m.sender} />
                   <div className={`max-w-[75%] ${mine ? "text-right" : ""}`}>
                     <p className="text-xs text-gray-500 mb-0.5">
-                      {mine ? "You" : m.sender?.name}{" "}
+                      {mine ? "You" : m.sender?.name || "Guest"}{" "}
                       <span className="opacity-60">
                         {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       </span>

@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { Room } from "../models/Room.js";
 import { Message } from "../models/Message.js";
+import { isScopedGuest } from "../utils/roomAccess.js";
 
 const notFound = () => {
   const error = new Error("Room not found");
@@ -23,7 +24,9 @@ export async function getRoomMessages(req, res, next) {
 
     const room = await Room.findById(id).select("members").lean();
     if (!room) throw notFound();
-    if (!room.members.some((m) => m.toString() === req.user.id)) {
+    const allowed =
+      isScopedGuest(req.user, id) || room.members.some((m) => m.toString() === req.user.id);
+    if (!allowed) {
       const error = new Error("You are not a member of this room");
       error.statusCode = 403;
       throw error;
