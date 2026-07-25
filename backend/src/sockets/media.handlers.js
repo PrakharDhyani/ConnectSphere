@@ -108,14 +108,18 @@ export function registerMediaHandlers(io, socket) {
     }
   });
 
-  socket.on("media:produce", async ({ roomId, transportId, kind, rtpParameters }, cb) => {
+  socket.on("media:produce", async ({ roomId, transportId, kind, rtpParameters, source }, cb) => {
     try {
       const rm = roomsMedia.get(roomId);
       const peer = rm?.peers.get(socket.id);
       const transport = peer?.transports.get(transportId);
       if (!transport) return cb?.({ error: "Transport not found" });
 
-      const producer = await transport.produce({ kind, rtpParameters });
+      // `source` (camera | screen) lets clients render a screen share as a big
+      // tile instead of another face. Stored on the producer so getProducers
+      // can report it to late joiners.
+      const src = source === "screen" ? "screen" : "camera";
+      const producer = await transport.produce({ kind, rtpParameters, appData: { source: src } });
       peer.producers.set(producer.id, producer);
       producer.on("transportclose", () => peer.producers.delete(producer.id));
 
@@ -125,6 +129,7 @@ export function registerMediaHandlers(io, socket) {
         socketId: socket.id,
         userId: socket.user.id,
         kind,
+        source: src,
       });
 
       cb({ id: producer.id });
@@ -132,6 +137,14 @@ export function registerMediaHandlers(io, socket) {
       logger.error("media:produce failed:", err);
       cb?.({ error: "Could not produce" });
     }
+  });
+
+  // Explicitly close one of this peer's producers (e.g. they stopped screen
+  // sharing) — producerclose then notifies everyone consuming it.
+  socket.on("media:closeProducer", ({ roomId, producerId }, cb) => {
+    const producer = roomsMedia.get(roomId)?.peers.get(socket.id)?.producers.get(producerId);
+    if (producer) producer.close();
+    cb?.({ ok: true });
   });
 
   // A peer joining an in-progress call needs everyone already producing.
@@ -142,7 +155,13 @@ export function registerMediaHandlers(io, socket) {
     for (const [socketId, peer] of rm.peers) {
       if (socketId === socket.id) continue;
       for (const producer of peer.producers.values()) {
-        producers.push({ producerId: producer.id, socketId, userId: peer.userId, kind: producer.kind });
+        producers.push({
+          producerId: producer.id,
+          socketId,
+          userId: peer.userId,
+          kind: producer.kind,
+          source: producer.appData?.source || "camera",
+        });
       }
     }
     cb({ producers });

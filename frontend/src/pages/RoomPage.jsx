@@ -200,15 +200,38 @@ export default function RoomPage() {
 
           {call.inCall && (
             <div className="border-b border-gray-800 p-3 bg-gray-950/40">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {/* Screen shares — big, on top */}
+              {(call.screenStream || call.remotes.some((r) => r.source === "screen")) && (
+                <div className="space-y-2 mb-2">
+                  {call.screenStream && (
+                    <VideoTile stream={call.screenStream} label="Your screen" muted big />
+                  )}
+                  {call.remotes
+                    .filter((r) => r.source === "screen")
+                    .map((r) => (
+                      <VideoTile key={r.key} stream={r.stream} label={`${nameFor(r.userId)}'s screen`} big />
+                    ))}
+                </div>
+              )}
+
+              {/* Camera tiles */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {call.localStream && <VideoTile stream={call.localStream} label="You" muted mirror />}
-                {call.peers.map((p) => (
-                  <VideoTile key={p.socketId} stream={p.stream} label={nameFor(p.userId)} />
-                ))}
+                {call.remotes
+                  .filter((r) => r.source === "camera")
+                  .map((r) => (
+                    <VideoTile key={r.key} stream={r.stream} label={nameFor(r.userId)} />
+                  ))}
               </div>
-              <div className="flex items-center justify-center gap-2 mt-3">
+
+              <div className="flex items-center justify-center flex-wrap gap-2 mt-3">
                 <Button variant="secondary" onClick={call.toggleMic}>{call.micOn ? "🎤 Mute" : "🔇 Unmute"}</Button>
                 <Button variant="secondary" onClick={call.toggleCam}>{call.camOn ? "📷 Cam off" : "🎥 Cam on"}</Button>
+                {call.sharingScreen ? (
+                  <Button variant="danger" onClick={call.stopScreenShare}>🛑 Stop share</Button>
+                ) : (
+                  <Button variant="secondary" onClick={call.startScreenShare}>🖥️ Share screen</Button>
+                )}
               </div>
             </div>
           )}
