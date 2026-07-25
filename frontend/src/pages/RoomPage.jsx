@@ -205,7 +205,7 @@ export default function RoomPage() {
       </header>
 
       {view === "board" && (
-        <div className="flex-1 w-full max-w-6xl mx-auto px-2 sm:px-4 py-4">
+        <div className="flex-1 w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
           <Suspense
             fallback={
               <div className="flex items-center justify-center h-[75vh]">
@@ -219,12 +219,12 @@ export default function RoomPage() {
       )}
 
       {view === "game" && (
-        <div className="flex-1 w-full max-w-6xl mx-auto px-2 sm:px-4 py-4">
+        <div className="flex-1 w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
           <GamesHub roomId={roomId} />
         </div>
       )}
 
-      <div className={`flex-1 max-w-5xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_240px] gap-4 ${view !== "room" ? "hidden" : ""}`}>
+      <div className={`flex-1 max-w-6xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_260px] gap-4 ${view !== "room" ? "hidden" : ""}`}>
         {/* Chat column */}
         <section className="flex flex-col bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden min-h-[70vh]">
           <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 gap-3">
