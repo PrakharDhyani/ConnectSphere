@@ -11,10 +11,12 @@ const userSchema = new Schema(
       trim: true,
       maxlength: 100,
     },
+    // Not required at the schema level: guest users have no email. Regular
+    // signup still enforces it in the register validator. Uniqueness is a
+    // PARTIAL index (declared below) rather than inline unique, so emailless
+    // guests are excluded from it entirely.
     email: {
       type: String,
-      required: [true, "Email is required"],
-      unique: true,
       lowercase: true,
       trim: true,
       match: [/^\S+@\S+\.\S+$/, "Invalid email format"],
@@ -47,9 +49,35 @@ const userSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    // Ephemeral guest (joined a meeting via link, no account). Guests can't
+    // create rooms, edit a profile, or see the dashboard.
+    isGuest: {
+      type: Boolean,
+      default: false,
+    },
+    // When set (guests only), a TTL index deletes the doc at this time — so
+    // guest identities clean themselves up with no cron. null for real users
+    // (Mongo's TTL index ignores docs where the field is null/absent).
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true } // adds createdAt / updatedAt automatically
 );
+
+// Unique email ONLY for real accounts. A partial index enforces uniqueness
+// solely on documents whose email is a string, so multiple emailless guests
+// never collide. (A plain sparse+unique index still collides on an explicit
+// null; a partial index is the robust fix.)
+userSchema.index(
+  { email: 1 },
+  { unique: true, partialFilterExpression: { email: { $type: "string" } } }
+);
+
+// TTL cleanup for ephemeral guests (expireAfterSeconds: 0 = delete once
+// expiresAt is in the past).
+userSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // Runs automatically before every .save() — hashes the password if it was
 // just set or changed, so no caller can ever accidentally save a plaintext

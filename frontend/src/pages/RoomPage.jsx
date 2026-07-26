@@ -1,11 +1,26 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api.js";
 import { getSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useRoomChat } from "@/hooks/useRoomChat.js";
+import { useMediaRoom } from "@/hooks/useMediaRoom.js";
+import VideoTile from "@/components/VideoTile.jsx";
+import GamesHub from "@/components/GamesHub.jsx";
+import VoiceBar from "@/components/VoiceBar.jsx";
 import Button from "@/components/ui/Button.jsx";
+
+const ACT_LABEL = {
+  call: "started the call 📞",
+  board: "opened the whiteboard 🖊️",
+  skribbl: "started Draw & Guess 🎨",
+  ludo: "started Ludo 🎲",
+};
+const ACT_VIEW = { call: "room", board: "board", skribbl: "game", ludo: "game" };
+
+// Excalidraw is heavy (~1.8 MB) — load it only when the whiteboard is opened.
+const WhiteboardPanel = lazy(() => import("@/components/WhiteboardPanel.jsx"));
 
 // Full literal class strings per size — Tailwind only generates classes it can
 // see as complete tokens, so `w-${n}` would silently produce no CSS.
@@ -29,6 +44,8 @@ export default function RoomPage() {
   const me = useAuthStore((s) => s.user);
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
+  const [view, setView] = useState("room"); // "room" | "board" | "game"
+  const [toasts, setToasts] = useState([]);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [actionError, setActionError] = useState(null);
@@ -42,6 +59,20 @@ export default function RoomPage() {
 
   const { messages, presence, typingName, error: chatError, sendMessage, notifyTyping } =
     useRoomChat(room ? roomId : null);
+
+  const call = useMediaRoom(room ? roomId : null);
+
+  // Activity notifications: someone started a call/board/game in this room.
+  useEffect(() => {
+    const socket = getSocket();
+    const onNotify = ({ activity, name }) => {
+      const id = `${Date.now()}-${Math.random()}`;
+      setToasts((t) => [...t.slice(-3), { id, activity, name }]);
+      setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+    };
+    socket.on("room:notify", onNotify);
+    return () => socket.off("room:notify", onNotify);
+  }, []);
 
   // React to room-lifecycle events pushed over the socket (see room.controller).
   useEffect(() => {
@@ -95,8 +126,11 @@ export default function RoomPage() {
     onError: (err) => setActionError(err.response?.data?.error?.message || "Could not delete"),
   });
 
-  async function copyCode() {
-    await navigator.clipboard.writeText(room.code).catch(() => {});
+  // Copy a full shareable link (not just the code) — anyone who opens it lands
+  // on /join/:code and can hop straight in, as a guest or with an account.
+  async function copyLink() {
+    const link = `${window.location.origin}/join/${room.code}`;
+    await navigator.clipboard.writeText(link).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -134,15 +168,63 @@ export default function RoomPage() {
   }
 
   const onlineIds = new Set(presence.map((p) => p.id));
+  const nameFor = (userId) => room.members.find((m) => m.id === userId)?.name || "Guest";
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-        <Link to="/dashboard" className="text-xl font-bold text-brand-400">🌐 ConnectSphere</Link>
-        <Link to="/dashboard" className="text-sm text-gray-400 hover:text-brand-400">← Dashboard</Link>
+      {/* Persistent mic/call bar — available on every tab */}
+      <VoiceBar call={call} />
+
+      {/* Activity notifications */}
+      <div className="fixed top-4 right-4 z-40 space-y-2 w-64">
+        {toasts.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => {
+              setView(ACT_VIEW[t.activity] || "room");
+              setToasts((x) => x.filter((y) => y.id !== t.id));
+            }}
+            className="block w-full text-left bg-gray-900 border border-brand-800 rounded-xl px-4 py-2 text-sm shadow-lg hover:border-brand-500 transition-colors"
+          >
+            <span><b className="text-brand-300">{t.name}</b> {ACT_LABEL[t.activity] || "started an activity"}</span>
+            <span className="block text-xs text-gray-500">Tap to join →</span>
+          </button>
+        ))}
+      </div>
+
+      <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-800 gap-2">
+        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-xl font-bold text-brand-400 shrink-0">🌐</Link>
+        <div className="flex items-center gap-1 sm:gap-2">
+          <Button variant={view === "room" ? "primary" : "secondary"} onClick={() => setView("room")}>💬 Room</Button>
+          <Button variant={view === "board" ? "primary" : "secondary"} onClick={() => setView("board")}>🖊️ Board</Button>
+          <Button variant={view === "game" ? "primary" : "secondary"} onClick={() => setView("game")}>🎮 Game</Button>
+        </div>
+        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400 shrink-0 hidden sm:block">
+          {me?.isGuest ? "← Home" : "← Dash"}
+        </Link>
       </header>
 
-      <div className="flex-1 max-w-5xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_240px] gap-4">
+      {view === "board" && (
+        <div className="flex-1 w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center h-[75vh]">
+                <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+            }
+          >
+            <WhiteboardPanel roomId={roomId} />
+          </Suspense>
+        </div>
+      )}
+
+      {view === "game" && (
+        <div className="flex-1 w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
+          <GamesHub roomId={roomId} />
+        </div>
+      )}
+
+      <div className={`flex-1 max-w-6xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_260px] gap-4 ${view !== "room" ? "hidden" : ""}`}>
         {/* Chat column */}
         <section className="flex flex-col bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden min-h-[70vh]">
           <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 gap-3">
@@ -178,8 +260,54 @@ export default function RoomPage() {
                 <p className="text-xs text-gray-500">{presence.length} online · {room.memberCount} member{room.memberCount === 1 ? "" : "s"}</p>
               </div>
             )}
-            <Button variant="secondary" onClick={copyCode}>{copied ? "Copied ✓" : `Invite: ${room.code}`}</Button>
+            <div className="flex items-center gap-2 shrink-0">
+              {call.inCall ? (
+                <Button variant="danger" onClick={call.leaveCall}>Leave call</Button>
+              ) : (
+                <Button onClick={call.joinCall} loading={call.joining}>Join call</Button>
+              )}
+              <Button variant="secondary" onClick={copyLink}>{copied ? "Copied ✓" : "🔗 Copy invite link"}</Button>
+            </div>
           </div>
+
+          {call.inCall && (
+            <div className="border-b border-gray-800 p-3 bg-gray-950/40">
+              {/* Screen shares — big, on top */}
+              {(call.screenStream || call.remotes.some((r) => r.source === "screen")) && (
+                <div className="space-y-2 mb-2">
+                  {call.screenStream && (
+                    <VideoTile stream={call.screenStream} label="Your screen" muted big />
+                  )}
+                  {call.remotes
+                    .filter((r) => r.source === "screen")
+                    .map((r) => (
+                      <VideoTile key={r.key} stream={r.stream} label={`${nameFor(r.userId)}'s screen`} big />
+                    ))}
+                </div>
+              )}
+
+              {/* Camera tiles */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {call.localStream && <VideoTile stream={call.localStream} label="You" muted mirror />}
+                {call.remotes
+                  .filter((r) => r.source === "camera")
+                  .map((r) => (
+                    <VideoTile key={r.key} stream={r.stream} label={nameFor(r.userId)} />
+                  ))}
+              </div>
+
+              <div className="flex items-center justify-center flex-wrap gap-2 mt-3">
+                <Button variant="secondary" onClick={call.toggleMic}>{call.micOn ? "🎤 Mute" : "🔇 Unmute"}</Button>
+                <Button variant="secondary" onClick={call.toggleCam}>{call.camOn ? "📷 Cam off" : "🎥 Cam on"}</Button>
+                {call.sharingScreen ? (
+                  <Button variant="danger" onClick={call.stopScreenShare}>🛑 Stop share</Button>
+                ) : (
+                  <Button variant="secondary" onClick={call.startScreenShare}>🖥️ Share screen</Button>
+                )}
+              </div>
+            </div>
+          )}
+          {call.error && <p className="px-5 py-2 text-sm text-red-400">{call.error}</p>}
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
             {messages.length === 0 && (
@@ -192,7 +320,7 @@ export default function RoomPage() {
                   <Avatar user={m.sender} />
                   <div className={`max-w-[75%] ${mine ? "text-right" : ""}`}>
                     <p className="text-xs text-gray-500 mb-0.5">
-                      {mine ? "You" : m.sender?.name}{" "}
+                      {mine ? "You" : m.sender?.name || "Guest"}{" "}
                       <span className="opacity-60">
                         {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       </span>

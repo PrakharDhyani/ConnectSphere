@@ -15,18 +15,13 @@
  * Events (server → client):
  *   message:new       (message)   presence:update ({roomId, users})   typing ({roomId, user})
  */
-import { Room } from "../models/Room.js";
 import { Message } from "../models/Message.js";
+import { canAccessRoom } from "../utils/roomAccess.js";
 import { logger } from "../utils/logger.js";
 
 // The Socket.io room name for an app room. Exported so REST controllers can
 // broadcast to the same group (e.g. "room:closed" when a room is deleted).
 export const roomKey = (roomId) => `room:${roomId}`;
-
-async function isMember(roomId, userId) {
-  const room = await Room.findById(roomId).select("members").lean();
-  return Boolean(room && room.members.some((m) => m.toString() === userId));
-}
 
 // Everyone currently connected to a room, de-duplicated by user (one person
 // can have several tabs = several sockets, but shows up once).
@@ -49,7 +44,7 @@ async function broadcastPresence(io, roomId) {
 export function registerChatHandlers(io, socket) {
   socket.on("room:join", async (roomId, ack) => {
     try {
-      if (!(await isMember(roomId, socket.user.id))) {
+      if (!(await canAccessRoom(socket.user, roomId))) {
         return ack?.({ ok: false, error: "You are not a member of this room" });
       }
       socket.join(roomKey(roomId));
@@ -76,7 +71,7 @@ export function registerChatHandlers(io, socket) {
 
       // Re-check membership on every send — the socket could have been kicked,
       // or is replaying a stale roomId. Never trust the client's claim.
-      if (!(await isMember(roomId, socket.user.id))) {
+      if (!(await canAccessRoom(socket.user, roomId))) {
         return ack?.({ ok: false, error: "You are not a member of this room" });
       }
 
@@ -95,6 +90,18 @@ export function registerChatHandlers(io, socket) {
       logger.error("message:send failed:", err);
       ack?.({ ok: false, error: "Could not send message" });
     }
+  });
+
+  // Activity announcements — "X started a Ludo game", "X opened the whiteboard",
+  // "X started the call". Relayed to everyone in the room except the sender so
+  // their UI can pop a toast. Purely a notification; carries no trust.
+  socket.on("room:announce", ({ roomId, activity } = {}) => {
+    if (!roomId || !socket.rooms.has(roomKey(roomId)) || !activity) return;
+    socket.to(roomKey(roomId)).emit("room:notify", {
+      activity, // "call" | "board" | "skribbl" | "ludo"
+      name: socket.user.name,
+      userId: socket.user.id,
+    });
   });
 
   // Transient — never stored. `socket.to` = everyone in the room EXCEPT sender.

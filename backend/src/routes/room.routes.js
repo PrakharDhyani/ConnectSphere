@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authenticate } from "../middleware/authenticate.js";
+import { requireFullUser } from "../middleware/requireFullUser.js";
 import { validate } from "../middleware/validate.js";
 import {
   createRoomSchema,
@@ -22,13 +23,16 @@ const router = Router();
 // Every room endpoint requires a logged-in user.
 router.use(authenticate);
 
-router.post("/", validate(createRoomSchema), createRoom);
-router.get("/", listMyRooms);
-router.post("/join", validate(joinRoomSchema), joinRoom);
+// Registered-user-only actions (guests get 403 via requireFullUser).
+router.post("/", requireFullUser, validate(createRoomSchema), createRoom);
+router.get("/", requireFullUser, listMyRooms);
+router.post("/join", requireFullUser, validate(joinRoomSchema), joinRoom);
+router.patch("/:id", requireFullUser, validate(renameRoomSchema), renameRoom);
+router.delete("/:id", requireFullUser, deleteRoom);
+
+// Allowed for scoped guests too (access is gated per-room inside the handlers).
 router.get("/:id", getRoom);
 router.get("/:id/messages", getRoomMessages);
-router.patch("/:id", validate(renameRoomSchema), renameRoom);
 router.post("/:id/leave", leaveRoom);
-router.delete("/:id", deleteRoom);
 
 export default router;

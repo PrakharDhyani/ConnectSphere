@@ -15,7 +15,12 @@ export function authenticate(req, res, next) {
 
   try {
     const decoded = verifyAccessToken(token);
-    req.user = { id: decoded.sub, role: decoded.role };
+    req.user = {
+      id: decoded.sub,
+      role: decoded.role,
+      isGuest: Boolean(decoded.isGuest),
+      room: decoded.room || null, // guests are scoped to one room
+    };
     next();
   } catch {
     // Covers both expired tokens and bad signatures — same generic message,

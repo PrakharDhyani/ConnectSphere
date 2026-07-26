@@ -3,6 +3,7 @@ import { Room } from "../models/Room.js";
 import { Message } from "../models/Message.js";
 import { io } from "../sockets/index.js";
 import { roomKey } from "../sockets/chat.handlers.js";
+import { isScopedGuest } from "../utils/roomAccess.js";
 
 // Lightweight shape for lists/create/join — one place decides what a room looks
 // like to clients.
@@ -98,9 +99,11 @@ export async function getRoom(req, res, next) {
     const room = await loadRoom(req.params.id, { populateMembers: true });
 
     // Membership gate. 403, not 404: the room exists, you're just not in it —
-    // and the join-by-code flow is the door.
-    const isMember = room.members.some((m) => m._id.toString() === req.user.id);
-    if (!isMember) throw forbidden("You are not a member of this room");
+    // and the join-by-code flow is the door. Scoped guests are let in too.
+    const allowed =
+      isScopedGuest(req.user, req.params.id) ||
+      room.members.some((m) => m._id.toString() === req.user.id);
+    if (!allowed) throw forbidden("You are not a member of this room");
 
     res.json({ success: true, data: { room: toRoomDetail(room, req.user.id) } });
   } catch (error) {

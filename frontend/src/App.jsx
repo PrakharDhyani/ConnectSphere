@@ -10,6 +10,7 @@ import AuthCallbackPage from "@/pages/AuthCallbackPage.jsx";
 import EmailVerifiedPage from "@/pages/EmailVerifiedPage.jsx";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage.jsx";
 import ResetPasswordPage from "@/pages/ResetPasswordPage.jsx";
+import JoinPage from "@/pages/JoinPage.jsx";
 import DashboardPage from "@/pages/DashboardPage.jsx";
 import ProfilePage from "@/pages/ProfilePage.jsx";
 import RoomPage from "@/pages/RoomPage.jsx";
@@ -34,12 +35,13 @@ export default function App() {
       <Route path="/email-verified" element={<EmailVerifiedPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/join/:code" element={<JoinPage />} />
 
       {/* Protected */}
       <Route
         path="/dashboard"
         element={
-          <ProtectedRoute>
+          <ProtectedRoute fullUserOnly>
             <DashboardPage />
           </ProtectedRoute>
         }
@@ -47,7 +49,7 @@ export default function App() {
       <Route
         path="/profile"
         element={
-          <ProtectedRoute>
+          <ProtectedRoute fullUserOnly>
             <ProfilePage />
           </ProtectedRoute>
         }

@@ -34,3 +34,9 @@ export const resetPasswordSchema = Joi.object({
   token: Joi.string().required(),
   password: passwordRule,
 });
+
+// Guest join: a display name + the room's 6-char invite code (case-normalized).
+export const guestSchema = Joi.object({
+  name: Joi.string().trim().min(2).max(100).required(),
+  code: Joi.string().trim().lowercase().length(6).hex().required(),
+});

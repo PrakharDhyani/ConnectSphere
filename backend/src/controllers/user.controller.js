@@ -13,6 +13,7 @@ function toSafeUser(user) {
     avatarUrl: user.avatarUrl,
     role: user.role,
     emailVerified: user.emailVerified,
+    isGuest: Boolean(user.isGuest),
   };
 }
 

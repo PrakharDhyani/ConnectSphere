@@ -18,7 +18,7 @@ export async function authenticateSocket(socket, next) {
     if (!token) return next(new Error("UNAUTHENTICATED"));
 
     const decoded = verifyAccessToken(token); // throws on bad/expired token
-    const user = await User.findById(decoded.sub).select("name avatarUrl role");
+    const user = await User.findById(decoded.sub).select("name avatarUrl role isGuest");
     if (!user) return next(new Error("UNAUTHENTICATED"));
 
     socket.user = {
@@ -26,6 +26,8 @@ export async function authenticateSocket(socket, next) {
       name: user.name,
       avatarUrl: user.avatarUrl,
       role: user.role,
+      isGuest: Boolean(user.isGuest),
+      room: decoded.room || null, // guests are scoped to one room
     };
     next();
   } catch {

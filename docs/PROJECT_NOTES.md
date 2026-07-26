@@ -49,6 +49,11 @@ together on one `feature/*` branch — and documented in both this journal (the
 16. [Feature: Rooms — create, list, join by code](#16-feature-rooms--create-list-join-by-code)
 17. [Feature: Real-time Chat in Rooms (Socket.io)](#17-feature-real-time-chat-in-rooms-socketio)
 18. [Feature: Room Polish — member list, rename, leave, delete](#18-feature-room-polish--member-list-rename-leave-delete)
+19. [Feature: Video Calls — mediasoup WebRTC SFU](#19-feature-video-calls--mediasoup-webrtc-sfu)
+20. [Feature: Landing Page & Guest Access (join via link)](#20-feature-landing-page--guest-access-join-via-link)
+21. [Feature: Collaborative Whiteboard (Excalidraw)](#21-feature-collaborative-whiteboard-excalidraw)
+22. [Feature: Draw & Guess Game (Skribbl-style)](#22-feature-draw--guess-game-skribbl-style)
+23. [Feature: Ludo — Board Game (2–4 players)](#23-feature-ludo--board-game-24-players)
 
 ---
 
@@ -954,6 +959,285 @@ connected member + 404 after, member leave 200 + owner leave 400 — all passed.
 
 ---
 
+## 19. Feature: Video Calls — mediasoup WebRTC SFU
+
+*(Full template entry: [feature-map F15](notes/feature-map.md) — the headline feature)*
+
+### The Feature
+Live audio/video in a room: publish your camera/mic once, see/hear everyone
+else, and people joining mid-call appear automatically. Built on the Socket.io
+layer from §17.
+
+### Ways to Implement Group Video
+1. **P2P mesh** — every browser connects directly to every other. Dead simple
+   for 2, but each person uploads N-1 copies → melts past ~3–4 people. Rejected.
+2. **MCU** (server mixes everyone into one stream) — light on clients, but huge
+   server CPU and no per-user layout control. Rejected.
+3. **(chosen) SFU** — each browser uploads ONE stream to the server, which
+   selectively forwards it to the others. Uploads stay constant regardless of
+   room size; clients get individual streams. **mediasoup** is the SFU.
+
+### What We Did
+- **Server (mediasoup):** a `Worker` at boot; a `Router` per room (Opus/VP8);
+  each peer gets a **send** + **recv** `WebRtcTransport`; `Producer`s (incoming
+  tracks) and `Consumer`s (outgoing) tracked per-peer so leave/disconnect closes
+  exactly them, and the router frees when the call empties.
+- **Signaling over Socket.io** (not media!): `getRtpCapabilities`, create/connect
+  transport, produce, getProducers, consume, resume, leave — all membership-gated.
+  The audio/video itself flows over the transports' UDP.
+- **Client (mediasoup-client):** a `useMediaRoom` hook loads a `Device`, does
+  `getUserMedia`, produces mic+cam, consumes existing + newly-arriving producers,
+  and toggles mic/camera. Imperative objects (device/transports/consumers) live in
+  refs; only the streams are React state. A `VideoTile` renders each MediaStream.
+- **Windows win:** mediasoup's native worker was the big risk (historically
+  Linux/macOS/WSL only) — **it runs natively on Windows 11 here (3.21.0)**, so no
+  Docker-for-backend or WSL needed.
+
+### Challenges / Design Notes
+- **Signaling vs media split** is the whole mental model: Socket.io only carries
+  the *setup*; the tracks travel over WebRTC UDP transports.
+- **Consume paused, then resume:** consumers start paused so no frames arrive
+  before the `<video>` is wired up; the client resumes once ready.
+- **`<video>` can't take a stream as a prop** — must set `el.srcObject`
+  imperatively in an effect (VideoTile).
+- **Cleanup is easy to leak:** closing a transport closes its producers/consumers,
+  so leave/disconnect/unmount just close transports + stop local tracks.
+- **Local tile muted + mirrored** — never play your own mic (echo), mirror for a
+  natural selfie.
+
+### Verification
+mediasoup runs natively (probe). Server-side signaling script proved capabilities
++ send/recv transport creation + ICE candidates + membership gate. Lint + build
+clean; 72 backend tests green. **The full A/V loop (produce↔consume) needs a real
+browser + camera → manual 2-tab test** (open two browsers, same room, Join call).
+
+### Interview Q&A
+- *Why an SFU over a mesh?* Mesh upload cost is O(N) per person and collapses
+  past a few users; an SFU keeps each client's upload at one stream.
+- *Does the video go through Socket.io?* No — Socket.io only negotiates setup;
+  media flows over the mediasoup WebRTC transports (UDP).
+- *How does a late joiner see people already talking?* `media:getProducers`
+  returns everyone currently producing; the joiner consumes each, and
+  `media:newProducer` keeps them in sync afterward.
+- *What's needed for production?* A Worker pool (~1/core), the Socket.io Redis
+  adapter + sticky sessions for multi-instance, and a **TURN** server (coturn)
+  for users behind strict NATs.
+
+---
+
+## 20. Feature: Landing Page & Guest Access (join via link)
+
+*(Full template entry: [feature-map F16](notes/feature-map.md))*
+
+### The Feature
+Three connected changes: a real marketing **Home page** (not the login screen);
+**copy a link, not a code**; and **guest access** — join a meeting from a link
+with just a name, participate fully in the call, but no dashboard/profile/room
+creation — with guests being ephemeral (leave no trace).
+
+### Ways to Implement Guests
+1. Add guests to `room.members` and delete later — pollutes the member list and
+   leaves dangling refs when the ephemeral user is cleaned up. Rejected.
+2. A fully separate guest auth system — duplicate token/socket logic. Rejected.
+3. **(chosen)** A normal (but ephemeral) `User` with an `isGuest` flag + a
+   **room-scoped token**: a `room` claim grants access to exactly one room
+   without membership, and a Mongo **TTL index** auto-deletes the guest. Reuses
+   all existing auth/socket plumbing.
+
+### What We Did
+- **Landing page** — hero, live-feature grid, how-it-works, "coming soon"
+  roadmap (filters/whiteboard/games/recording), CTAs; auth-aware.
+- **Copy link** — the room page copies `${origin}/join/${code}`; `/join/:code`
+  auto-joins registered users and offers "join as guest" to everyone else.
+- **Room-scoped guest token** — `generateGuestToken` embeds `{isGuest, room}`.
+- **One shared access rule** — `utils/roomAccess.js` `canAccessRoom()` (member OR
+  scoped guest), used by both socket handlers and both room/message controllers,
+  replacing the duplicated `isMember`.
+- **Guardrails** — `requireFullUser` → 403 for guests on create/list/join/rename/
+  delete rooms + profile edits; `ProtectedRoute fullUserOnly` mirrors it in the UI.
+- **Ephemeral cleanup** — `expiresAt` + a TTL index; guests never enter
+  `room.members`, so nothing dangles when they're removed.
+
+### Challenges / Design Notes
+- **Email was required + unique.** Guests have none → made email optional +
+  **sparse** (same trick as `googleId`), so many guests coexist; the register
+  validator still enforces email for real signups.
+- **Membership vs scoped access.** Guests aren't members, so the whole access
+  check had to move to a shared helper that also honors the token's `room` claim
+  — otherwise chat/video would reject them.
+- **Guest scoping is a security boundary** — a guest token for room A must not
+  touch room B. Enforced by comparing the token's `room` claim to the target
+  room, and covered by a test.
+
+### Verification
+81 backend tests (9 new guest tests), incl. scoped-access and every blocked
+action. Live script confirmed join → scoped read → 403 on create/list → bad
+code. Lint + build clean.
+
+### Interview Q&A
+- *How do guests get into a room without being members?* Their JWT carries a
+  `room` claim; the shared `canAccessRoom` check allows a scoped guest into
+  exactly that room — no `room.members` entry, so nothing to clean up.
+- *How are ephemeral guests cleaned up?* A Mongo TTL index on `expiresAt` deletes
+  the guest user automatically; nothing references them elsewhere.
+- *How do you stop a guest from wandering into other rooms or hosting?* The
+  token is single-room scoped (tested), and `requireFullUser` returns 403 on all
+  registered-only actions.
+- *Why let email be null for guests but keep it unique?* A **sparse** unique
+  index enforces uniqueness only on documents that have the field.
+
+---
+
+## 21. Feature: Collaborative Whiteboard (Excalidraw)
+
+*(Full template entry: [feature-map F18](notes/feature-map.md))*
+
+### The Feature
+An Excalidraw-grade whiteboard inside every room that the whole group edits
+together in real time — infinite canvas, all tools, live cursors, persistence.
+
+### Ways to Implement
+1. **Build a canvas engine from scratch** (shapes, arrows, text, selection,
+   undo, export, snapping…) — literally rebuilding Excalidraw. Months of work,
+   strictly worse. Rejected.
+2. **A lighter canvas lib** (fabric.js/tldraw-core) + custom tools — still huge.
+3. **(chosen) Integrate the official Excalidraw React component** — it already
+   ships ~the entire requested feature list; we add only the *group* layer
+   (real-time sync + presence + persistence) over our Socket.io.
+
+### What We Did
+- **Reused Excalidraw** for the whole drawing surface (canvas, tools, arrows,
+  text, images, frames, styling, alignment, layers, undo/redo, export, library,
+  mobile/stylus, shortcuts). Lazy-loaded (~1.8 MB, code-split) so it only loads
+  when the board is opened.
+- **Group layer (ours):** `whiteboard.handlers.js` — membership-gated join that
+  syncs the current scene, live `whiteboard:update` broadcasts, presence
+  cursors, and **debounced Mongo persistence** (a `Whiteboard` doc per room) so
+  boards survive restarts and late joiners get current state.
+- **Reconciliation:** remote element sets merge by element **`version`**
+  (last-write-wins per element) so concurrent edits converge without dropping
+  local work; deletions ride Excalidraw's `isDeleted` + version bump.
+- RoomPage gets a **Room / Whiteboard toggle**; the call keeps running hidden so
+  audio continues while you draw.
+
+### Challenges / Design Notes
+- **Echo loops:** applying a remote scene fires Excalidraw's `onChange`, which
+  would rebroadcast. Guarded with a `suppress` flag around `updateScene` + a
+  throttle, plus version-based merge so it converges regardless.
+- **Bundle size:** Excalidraw pulls katex/cytoscape/mermaid for diagram
+  features → lazy-load + `Suspense` keeps it off the initial app load.
+- **"OT/CRDT-friendly" wish-list item:** our socket-sync + version reconcile IS
+  the ready architecture; swapping in a true CRDT (Yjs) later is a contained change.
+
+### Verification
+Live 2-socket script: join, update broadcast, non-member blocked, late-joiner
+scene sync — all passed. 81 backend tests green; lint + build clean. Full
+drawing UX is a manual browser test (2 tabs).
+
+### Interview Q&A
+- *Why integrate Excalidraw instead of building it?* The requested feature list
+  IS Excalidraw's feature set; rebuilding it would take months and be worse. The
+  value we add is the *collaboration* layer, which is platform-specific.
+- *How do concurrent edits not clobber each other?* Elements carry a `version`;
+  remote sets merge last-write-wins per element, so both sides converge and
+  neither drops the other's elements.
+- *How does a late joiner get the board?* The server keeps the live scene in
+  memory (debounced-persisted to Mongo) and hands it to any joiner on
+  `whiteboard:join`.
+
+---
+
+## 22. Feature: Draw & Guess Game (Skribbl-style)
+
+*(Full template entry: [feature-map F19](notes/feature-map.md) — first mini-game)*
+
+### The Feature
+A real-time party game in a room: one player draws a secret word, everyone else
+races to guess; speed-based scoring; rounds; final scoreboard. Mobile-friendly.
+
+### What We Did
+- **Server-authoritative state machine** (`game.handlers.js`):
+  idle→choosing→drawing→reveal→…→ended, all timers/word/scoring on the server.
+  Guessers get a **masked** word (hint letters reveal over time); the drawer gets
+  the real word **privately** (a per-user socket room `user:<id>`).
+- **Scoring:** guesser `50+300·(timeLeft/turn)` (50–350, faster=more); drawer
+  `+40`/correct guesser. Turn ends on timeout or when everyone's guessed.
+- **Presence-driven players** (built from who's in the room; guests included);
+  drawer-disconnect skips the turn.
+- **Responsive canvas:** fixed 1000×600 buffer scaled by CSS + **normalized
+  0..1 stroke coords** → crisp and identical on phone/laptop; Pointer Events +
+  `touch-none` for finger/stylus. Palette, eraser, brush size, clear.
+- **RoomPage** now has a **Room / Board / Game** switcher; the call keeps
+  running hidden underneath.
+
+### Challenges / Design Notes
+- **Server must be authoritative** — the word, timers, and scoring can't live on
+  the client (cheating). Guessers never receive the word until the turn ends.
+- **Private word to the drawer:** Socket.io broadcasts hit everyone, so each
+  socket joins a `user:<id>` room and the drawer's word is sent only there.
+- **Responsive drawing across devices:** normalized coordinates + a fixed
+  internal buffer make one stroke look the same everywhere without redraw-on-resize.
+
+### Verification
+Live 2-socket script: start, private word, correct guess, speed scoring
+(drawer +40 / guesser +350), duplicate-guess ignore — all passed. 81 backend
+tests green; lint + build clean.
+
+### Interview Q&A
+- *Why is the game state on the server, not the client?* It's authoritative:
+  the secret word, the countdown, and scoring must be tamper-proof; clients only
+  render what the server tells them (guessers get a masked word).
+- *How does only the drawer get the word?* Every socket joins a personal
+  `user:<id>` room; the word is emitted only to the drawer's room.
+- *How is the canvas responsive?* Strokes are normalized to 0..1 against a fixed
+  1000×600 buffer, then CSS-scaled — so a phone and a laptop see the same drawing.
+
+---
+
+## 23. Feature: Ludo — Board Game (2–4 players)
+
+*(Full template entry: [feature-map F20](notes/feature-map.md) — second mini-game)*
+
+### The Feature
+Classic Ludo in a room: seat up 2–4 players, roll to leave base, move/capture,
+race all four tokens home. Server-authoritative.
+
+### What We Did
+- **Step-based board model:** a token is a single number 0..57 (yard → 52-cell
+  shared track → home column → center). The server runs every rule from just
+  that plus start-offsets, a safe-cell set, and a `trackIndex()` helper — captures
+  are "two tokens with the same track index on a non-safe cell."
+- **Rules:** 6 to leave base, exact-roll to finish, capture-to-base on shared
+  non-safe cells, safe stars, extra turn on 6/capture/home, 3-sixes forfeit,
+  all-4-home win. Dice + turn order + board all live on the server.
+- **Client geometry:** the 15×15 board coordinates (track path, home columns,
+  yards) live only on the client, which maps each `step` to a `[row,col]`.
+- **Two games now** share the 🎮 Game tab via a chooser (Draw&Guess | Ludo).
+
+### Challenges / Design Notes
+- **The whole game reduces to one integer per token.** Modeling position as a
+  0..57 `step` (not board x/y) makes moves, captures, home, and win trivial and
+  keeps the server tiny; rendering geometry stays entirely on the client.
+- **Server-authoritative dice:** the roll and legal-move computation are on the
+  server so a client can't fake a 6 or an illegal move.
+- **Test flakiness (not a code bug):** running 10 suites that each boot an
+  in-memory Mongo in parallel *while the dev servers were running* timed out;
+  `--maxWorkers=2` → all 81 green. Worth remembering for CI tuning.
+
+### Verification
+Live 2-socket driver: seats, start, tokens leaving base across random turns,
+turn rotation — all passed. 81 backend tests green; lint + build clean.
+
+### Interview Q&A
+- *How do you represent a Ludo board so the rules are simple?* Each token is a
+  single `step` 0..57 along its own path; the shared track is a modular offset
+  per color, so captures/home/win are one-line checks. Pixel geometry is a
+  client-only concern.
+- *Why is the game server-authoritative?* The dice and legal moves must be
+  tamper-proof; clients only render and send roll/move intents.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -977,15 +1261,47 @@ typing + durable history, verified live with 2 clients.
 **Done — Room Polish (§18):** member list, owner rename/delete, member leave,
 `room:closed` broadcast. **72 tests green.**
 
+**Done — Video Calls (§19):** mediasoup SFU + WebRTC signaling + client video
+grid + mic/cam controls. mediasoup runs natively on Windows; signaling verified
+server-side. **Manual 2-tab A/V test is the one open verification.**
+
+**Also done:** dependency hygiene — `npm audit fix` (backend prod vulns → 0) and
+react-router upgraded v6 → v7.
+
+**Done — Landing + Guest access (§20):** marketing home page, copy-link (not
+code), and ephemeral guest join-via-link with room-scoped access. **81 tests green.**
+
 **Branch state (stacked — merge PRs in this order):**
 `feature/auth-extras` → `feature/auth-frontend` → `feature/user-profiles` →
-`feature/rooms` → `feature/room-chat` → `feature/room-polish`, each based on the
-previous; merge into `develop` in that order to keep every diff clean.
+`feature/rooms` → `feature/room-chat` → `feature/room-polish` → `feature/video`
+→ `feature/landing-guest`, each based on the previous; merge into `develop` in
+that order.
+
+**Done — Screen share:** `getDisplayMedia` → a mediasoup producer tagged
+camera/screen; screen tiles render large. Guest-join 500 (duplicate-null email)
+fixed via a **partial** unique index + dev-only `syncIndexes` self-heal.
+
+**Direction shift (2026-07-25):** repositioning to a **fun group-hangout
+platform** (video is just the room; USP = group fun). Planned: mini-games
+(ludo, skribbl, quiz), watch-party (**synced YouTube embeds** — not ad-stripping,
+which violates ToS), Excalidraw whiteboard. Rename to a French name (TBD).
+**Responsive (mobile/tablet/laptop) is now a hard requirement.**
+
+**Done — Whiteboard (§21):** collaborative Excalidraw in rooms.
+**Done — Draw & Guess game (§22)** and **Ludo (§23):** two mini-games in a
+games hub, both server-authoritative + responsive, live-verified.
+
+**Done — Activity social layer (feature-map F21):** Skribbl **ready-up lobby**
+(host starts only when 2+ all ready), **activity notifications** (tap-to-join
+toasts when someone starts a call/board/game), and **mic on every tab**
+(audio-only "Join voice" + a persistent VoiceBar). Verified: ready-up gate.
 
 **Next:**
-1. Merge the branch chain into `develop`.
-2. Phase 3 continues: **mediasoup video core** (WebRTC SFU) — signaling rides the
-   socket layer we just built; then whiteboard, then recording (Kafka pipeline).
+1. **Friends system** (requests, friends list, invite friends to a room/activity) —
+   the one deferred item; a standalone persistent subsystem, its own build.
+2. **Manual browser tests** across all activities (2 tabs) + guest link.
+3. **Responsive pass** polish; watch-party (synced YouTube); rename (French, TBD).
+4. Merge the branch chain into `develop`; later coturn (TURN) for real-network calls.
 
 ## Note: No Paid Cloud Services
 
@@ -1003,4 +1319,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-25 (real-time chat + room polish: member list, rename, leave, delete)*
+*Last updated: 2026-07-26 (Ludo board game; + Draw & Guess, whiteboard, screen share)*
