@@ -103,6 +103,8 @@ export function startHarness() {
     await User.syncIndexes(); // materialize unique(email) / sparse(googleId)
     const { Room } = await import("../../src/models/Room.js");
     await Room.syncIndexes(); // materialize unique(code)
+    const { Friendship } = await import("../../src/models/Friendship.js");
+    await Friendship.syncIndexes(); // materialize unique(requester, recipient)
   });
 
   afterAll(async () => {
