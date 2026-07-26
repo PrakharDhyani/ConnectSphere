@@ -19,6 +19,7 @@ import { passport, configurePassport } from "./config/passport.js";
 import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import roomRoutes from "./routes/room.routes.js";
+import friendRoutes from "./routes/friend.routes.js";
 
 // ── Error handler ──
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -86,6 +87,7 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/rooms", roomRoutes);
+app.use("/api/friends", friendRoutes);
 
 // ── 404 & error handling (always last) ──
 app.use(notFound);

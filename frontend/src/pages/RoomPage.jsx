@@ -9,6 +9,7 @@ import { useMediaRoom } from "@/hooks/useMediaRoom.js";
 import VideoTile from "@/components/VideoTile.jsx";
 import GamesHub from "@/components/GamesHub.jsx";
 import VoiceBar from "@/components/VoiceBar.jsx";
+import InviteFriends from "@/components/InviteFriends.jsx";
 import Button from "@/components/ui/Button.jsx";
 
 const ACT_LABEL = {
@@ -266,6 +267,7 @@ export default function RoomPage() {
               ) : (
                 <Button onClick={call.joinCall} loading={call.joining}>Join call</Button>
               )}
+              {!me?.isGuest && <InviteFriends roomId={roomId} />}
               <Button variant="secondary" onClick={copyLink}>{copied ? "Copied ✓" : "🔗 Copy invite link"}</Button>
             </div>
           </div>

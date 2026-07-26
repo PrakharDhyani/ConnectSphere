@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api.js";
 import { disconnectSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
+import { useFriends } from "@/hooks/useFriends.js";
 import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
 
@@ -13,6 +14,8 @@ export default function DashboardPage() {
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const clearAuth = useAuthStore((s) => s.clearAuth);
+  const { requests } = useFriends();
+  const pendingCount = requests.data?.incoming?.length || 0;
   const [resent, setResent] = useState(false);
   const [roomName, setRoomName] = useState("");
   const [joinCode, setJoinCode] = useState("");
@@ -68,6 +71,14 @@ export default function DashboardPage() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
         <span className="text-xl font-bold text-brand-400">🌐 ConnectSphere</span>
         <div className="flex items-center gap-4">
+          <Link to="/friends" className="relative text-sm text-gray-400 hover:text-brand-400">
+            👥 Friends
+            {pendingCount > 0 && (
+              <span className="absolute -top-2 -right-3 bg-brand-600 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">
+                {pendingCount}
+              </span>
+            )}
+          </Link>
           <Link to="/profile" className="flex items-center gap-2 text-sm text-gray-400 hover:text-brand-400">
             {user?.avatarUrl ? (
               <img src={user.avatarUrl} alt="" className="w-7 h-7 rounded-full object-cover" />
