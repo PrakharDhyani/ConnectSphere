@@ -12,16 +12,22 @@
 ## 📚 Detailed Notes (file-by-file, local companion docs)
 
 This journal stays the **interview-prep** view (decisions, trade-offs, Q&A).
-The **detailed walkthroughs** — every file explained from `index.js` to the test
-suite — live in three parts under `docs/notes/`:
+The **detailed, from-zero walkthroughs** — every feature and file explained so
+someone who knows only a little frontend/backend can follow — live under
+`docs/notes/` (local only). Start with the [reading guide](notes/README.md).
 
 | Part | Covers |
 |---|---|
-| [Part 0 — Technologies](notes/part-0-technologies.md) | **Start here.** Every single technology explained from zero — no assumed knowledge: HTTP/JSON/ports, Node, Express, MongoDB, **Redis**, **Kafka**, **ZooKeeper**, Docker, JWT, bcrypt, OAuth, React, Vite, Jest… what each is, why we use it, where it lives |
-| [Feature Map](notes/feature-map.md) | Every feature in one fixed template: **tool & technology → what needs to be done → how it's done → workflow → file by file** |
-| [Part 1 — Foundations](notes/part-1-foundations.md) | Everything common to backend & frontend: Docker Compose, git/GitHub workflow, `.env`, how FE↔BE talk (Vite proxy, CORS, cookies), shared tooling, ports |
-| [Part 2 — Backend, file by file](notes/part-2-backend-auth.md) | The whole backend in request-pipeline order: `index.js`, `app.js`, `config/`, `utils/`, `middleware/`, `models/`, `validators/`, `services/`, `controllers/`, `routes/`, `sockets/`, and the entire `tests/` folder |
-| [Part 3 — Frontend](notes/part-3-frontend.md) | The React scaffold file by file + the Auth UI feature; grows with every feature |
+| [Part 0 — Technologies](notes/part-0-technologies.md) | **Start here.** Every technology from zero: HTTP/JSON/ports, Node, Express, MongoDB, **Redis**, **Kafka**, Docker, JWT, bcrypt, OAuth, React, Vite, WebSocket, WebRTC, Jest — what each is, why, where |
+| [Part 1 — Foundations](notes/part-1-foundations.md) | Shared by both sides: Docker Compose, git workflow, `.env`, how FE↔BE talk (Vite proxy, CORS, cookies), ports |
+| [Part 2 — Backend, file by file](notes/part-2-backend-auth.md) | The whole backend in request-pipeline order, auth as the worked example, + the test suite |
+| [Part 3 — Frontend](notes/part-3-frontend.md) | The React scaffold + Auth UI (store, axios silent-refresh, protected routes) |
+| [Part 4 — Rooms, Chat & Presence](notes/part-4-rooms-chat.md) | Rooms + real-time chat/presence/typing — the Socket.io foundation every activity reuses |
+| [Part 5 — Video, Screen share & Voice](notes/part-5-video-media.md) | WebRTC via the mediasoup SFU; signaling vs media; screen share; the VoiceBar |
+| [Part 6 — Landing + Guest Access](notes/part-6-guest-landing.md) | Marketing home page + ephemeral room-scoped guest access (TTL cleanup, partial-index fix) |
+| [Part 7 — Whiteboard](notes/part-7-whiteboard.md) | Integrating Excalidraw + our live sync / cursors / persistence layer |
+| [Part 8 — Mini-Games](notes/part-8-games.md) | Draw & Guess (ready-up lobby, scoring), Ludo (step-based board model), Games Hub, activity notifications |
+| [Feature Map](notes/feature-map.md) | Every feature (F1–F21) in one fixed template: **tool → what → how → workflow → file-by-file** |
 
 **Workflow from here:** every feature is built **full-stack** — backend + frontend
 together on one `feature/*` branch — and documented in both this journal (the
