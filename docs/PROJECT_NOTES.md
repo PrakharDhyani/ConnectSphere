@@ -27,7 +27,8 @@ someone who knows only a little frontend/backend can follow — live under
 | [Part 6 — Landing + Guest Access](notes/part-6-guest-landing.md) | Marketing home page + ephemeral room-scoped guest access (TTL cleanup, partial-index fix) |
 | [Part 7 — Whiteboard](notes/part-7-whiteboard.md) | Integrating Excalidraw + our live sync / cursors / persistence layer |
 | [Part 8 — Mini-Games](notes/part-8-games.md) | Draw & Guess (ready-up lobby, scoring), Ludo (step-based board model), Games Hub, activity notifications |
-| [Feature Map](notes/feature-map.md) | Every feature (F1–F21) in one fixed template: **tool → what → how → workflow → file-by-file** |
+| [Part 9 — Friends](notes/part-9-friends.md) | Friend requests/list, real-time invites to a room, the global notification system |
+| [Feature Map](notes/feature-map.md) | Every feature (F1–F22) in one fixed template: **tool → what → how → workflow → file-by-file** |
 
 **Workflow from here:** every feature is built **full-stack** — backend + frontend
 together on one `feature/*` branch — and documented in both this journal (the
@@ -60,6 +61,7 @@ together on one `feature/*` branch — and documented in both this journal (the
 21. [Feature: Collaborative Whiteboard (Excalidraw)](#21-feature-collaborative-whiteboard-excalidraw)
 22. [Feature: Draw & Guess Game (Skribbl-style)](#22-feature-draw--guess-game-skribbl-style)
 23. [Feature: Ludo — Board Game (2–4 players)](#23-feature-ludo--board-game-24-players)
+24. [Feature: Friends — requests, list, invite to a room](#24-feature-friends--requests-list-invite-to-a-room)
 
 ---
 
@@ -1244,6 +1246,57 @@ turn rotation — all passed. 81 backend tests green; lint + build clean.
 
 ---
 
+## 24. Feature: Friends — requests, list, invite to a room
+
+*(Full template entry: [feature-map F22](notes/feature-map.md) · deep dive: [Part 9](notes/part-9-friends.md))*
+
+### The Feature
+A social layer: find people, send/accept friend requests, keep a friends list
+(with online status), and **invite a friend straight into a room** — with live
+notifications anywhere in the app.
+
+### Ways to Model Friendships
+1. Arrays on the User (`friends: [ids]`, `requests: [...]`) — denormalized,
+   awkward to query "pending incoming vs outgoing," easy to get out of sync.
+2. **(chosen)** A separate `Friendship` collection — one directed row per pair
+   (`requester`, `recipient`, `status`) + a **unique compound index**. Clean
+   queries, and "are A & B friends?" is a single either-direction lookup.
+
+### What We Did
+- **Backend** (`friend.controller.js`, guest-blocked via `requireFullUser`):
+  search (annotated with our relationship so the UI shows Add/Requested/Friends),
+  send/accept/decline/cancel, list friends (+ online via `fetchSockets`),
+  unfriend, and **invite-to-room**. Requests/accepts/invites are pushed live to
+  the target's **per-user socket room** (`user:<id>`) — the same channel the game
+  uses to send the drawer their word.
+- **Frontend:** a global `notify` store + `Toaster`, and an **app-wide socket
+  listener in `App.jsx`** so friend events pop a toast on any page (not just in a
+  room). `FriendsPage` (debounced search, requests, list), an `InviteFriends`
+  dropdown in the room, and a Dashboard Friends link with a pending badge. The
+  invite's "Join" reuses the existing `/join/:code` flow.
+- **Tests:** 12 supertest cases (suite → **93 green**) — this feature has real
+  automated coverage, unlike the socket-only ones.
+
+### Challenges / Design Notes
+- **Preventing duplicate/reverse requests:** the unique `(requester, recipient)`
+  index stops A→A twice, and the controller checks the reverse (B→A) before
+  creating A→B, so a pair can never have two rows.
+- **Where the socket listener lives:** app-wide (in `App.jsx`), gated on
+  `authed && !guest`, so invites arrive regardless of which page you're on.
+- **Invites are fire-and-forget:** an offline friend simply misses it (no
+  persistent invite store yet — a clear future enhancement).
+
+### Interview Q&A
+- *Why a separate Friendship collection over arrays on User?* Clean, indexable
+  queries for pending/accepted in both directions, and no two-sided sync bugs.
+- *How does a real-time invite reach a specific user on any page?* Every socket
+  joins a personal room `user:<id>`; the server emits the invite there, and an
+  app-level listener shows a toast.
+- *Why can't guests use friends?* Guests are ephemeral (auto-expire) and
+  room-scoped; `requireFullUser` returns 403 on all friend endpoints.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -1325,4 +1378,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-26 (Ludo board game; + Draw & Guess, whiteboard, screen share)*
+*Last updated: 2026-07-26 (Friends system — requests, list, invite to a room; + all games/whiteboard/video merged to develop)*
