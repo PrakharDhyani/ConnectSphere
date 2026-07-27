@@ -238,4 +238,24 @@ export function registerLudoHandlers(io, socket) {
     games.set(roomId, freshGame(socket.user.id));
     broadcast(io, roomId);
   });
+
+  // Free the game (and its turn timer) once no seated player is still connected.
+  socket.on("disconnecting", () => {
+    const rooms = [...socket.rooms].filter((k) => k.startsWith("room:")).map((k) => k.slice(5));
+    setImmediate(async () => {
+      for (const roomId of rooms) {
+        const g = games.get(roomId);
+        if (!g) continue;
+        const sockets = await io.in(roomKey(roomId)).fetchSockets();
+        const present = new Set(sockets.map((s) => s.user.id));
+        const seated = COLORS.map((c) => g.seats[c]?.id).filter(Boolean);
+        if (seated.length === 0 || !seated.some((id) => present.has(id))) {
+          clearTimeout(g.timer);
+          games.delete(roomId);
+        } else {
+          broadcast(io, roomId);
+        }
+      }
+    });
+  });
 }

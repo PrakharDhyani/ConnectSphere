@@ -17,7 +17,10 @@
  */
 import { Message } from "../models/Message.js";
 import { canAccessRoom } from "../utils/roomAccess.js";
+import { allow } from "../utils/socketRate.js";
 import { logger } from "../utils/logger.js";
+
+const ANNOUNCE_ACTIVITIES = new Set(["call", "board", "skribbl", "ludo"]);
 
 // The Socket.io room name for an app room. Exported so REST controllers can
 // broadcast to the same group (e.g. "room:closed" when a room is deleted).
@@ -68,6 +71,7 @@ export function registerChatHandlers(io, socket) {
       const text = (payload?.text || "").trim();
       if (!roomId || !text) return ack?.({ ok: false, error: "Message cannot be empty" });
       if (text.length > 2000) return ack?.({ ok: false, error: "Message is too long (max 2000)" });
+      if (!allow(socket, "msg", 15, 10_000)) return ack?.({ ok: false, error: "Slow down a moment" });
 
       // Re-check membership on every send — the socket could have been kicked,
       // or is replaying a stale roomId. Never trust the client's claim.
@@ -96,7 +100,8 @@ export function registerChatHandlers(io, socket) {
   // "X started the call". Relayed to everyone in the room except the sender so
   // their UI can pop a toast. Purely a notification; carries no trust.
   socket.on("room:announce", ({ roomId, activity } = {}) => {
-    if (!roomId || !socket.rooms.has(roomKey(roomId)) || !activity) return;
+    if (!roomId || !socket.rooms.has(roomKey(roomId)) || !ANNOUNCE_ACTIVITIES.has(activity)) return;
+    if (!allow(socket, "announce", 5, 10_000)) return;
     socket.to(roomKey(roomId)).emit("room:notify", {
       activity, // "call" | "board" | "skribbl" | "ludo"
       name: socket.user.name,
@@ -106,7 +111,7 @@ export function registerChatHandlers(io, socket) {
 
   // Transient — never stored. `socket.to` = everyone in the room EXCEPT sender.
   socket.on("typing", (roomId) => {
-    if (!roomId) return;
+    if (!roomId || !allow(socket, "typing", 10, 5000)) return;
     socket.to(roomKey(roomId)).emit("typing", {
       roomId,
       user: { id: socket.user.id, name: socket.user.name },

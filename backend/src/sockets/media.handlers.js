@@ -21,6 +21,7 @@
  */
 import { getWorker, mediaCodecs } from "../config/mediasoup.js";
 import { canAccessRoom } from "../utils/roomAccess.js";
+import { allow } from "../utils/socketRate.js";
 import { roomKey } from "./chat.handlers.js";
 import { logger } from "../utils/logger.js";
 
@@ -75,6 +76,7 @@ export function registerMediaHandlers(io, socket) {
 
   socket.on("media:createTransport", async ({ roomId, direction }, cb) => {
     try {
+      if (!allow(socket, "media:transport", 12, 10_000)) return cb?.({ error: "Too many transports" });
       if (!(await canAccessRoom(socket.user, roomId))) return notMember(cb);
       const rm = await getRoomMedia(roomId);
       const peer = getPeer(rm, socket.id);

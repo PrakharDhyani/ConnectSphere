@@ -13,7 +13,15 @@
  */
 import { pickWords, maskWord, letterIndices } from "../games/words.js";
 import { canAccessRoom } from "../utils/roomAccess.js";
+import { allow } from "../utils/socketRate.js";
 import { roomKey } from "./chat.handlers.js";
+
+// A drawing segment is normalized 0..1 coords + small style — reject anything else.
+const num01 = (n) => typeof n === "number" && n >= -0.1 && n <= 1.1;
+const validStroke = (s) =>
+  s && num01(s.x0) && num01(s.y0) && num01(s.x1) && num01(s.y1) &&
+  typeof s.color === "string" && s.color.length <= 16 &&
+  typeof s.size === "number" && s.size >= 0 && s.size <= 64;
 
 const TURN_MS = 75_000;
 const CHOOSE_MS = 15_000;
@@ -236,6 +244,7 @@ export function registerGameHandlers(io, socket) {
   socket.on("game:draw", ({ roomId, stroke } = {}) => {
     const g = games.get(roomId);
     if (!g || g.status !== "drawing" || uid !== g.drawerId) return;
+    if (!allow(socket, "draw", 80, 1000) || !validStroke(stroke)) return;
     socket.to(roomKey(roomId)).emit("game:draw", { stroke });
   });
 
@@ -249,8 +258,9 @@ export function registerGameHandlers(io, socket) {
     const g = games.get(roomId);
     if (!g || g.status !== "drawing" || !g.players.has(uid)) return;
     if (uid === g.drawerId || g.guessed.has(uid)) return;
+    if (!allow(socket, "guess", 12, 5000)) return;
     const guess = (text || "").trim().toLowerCase();
-    if (!guess) return;
+    if (!guess || guess.length > 100) return;
 
     if (guess === g.word.toLowerCase()) {
       g.guessed.add(uid);
@@ -276,6 +286,14 @@ export function registerGameHandlers(io, socket) {
         if (!g) continue;
         g.lobby.delete(uid);
         if (g.hostId === uid) g.hostId = [...g.lobby.keys()][0] || null;
+
+        // Free the game entirely once nobody's left (no lobby, no present players).
+        const present = await presentIds(io, roomId);
+        if (g.lobby.size === 0 && !g.order.some((id) => present.has(id))) {
+          clearTimers(g);
+          games.delete(roomId);
+          continue;
+        }
         if ((g.status === "choosing" || g.status === "drawing") && g.drawerId === uid) {
           endTurn(io, roomId);
         } else {
