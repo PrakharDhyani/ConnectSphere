@@ -47,6 +47,16 @@ describe("POST /api/auth/register", () => {
     expect(res.body.success).toBe(false);
   });
 
+  it("rejects a duplicate username (case-insensitive) with 409", async () => {
+    await registerValid(h.app);
+    const res = await registerValid(h.app, {
+      email: "different@example.com",
+      name: VALID.name.toUpperCase(), // same name, different case
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toMatch(/username/i);
+  });
+
   it("rejects a weak password with 400", async () => {
     const res = await registerValid(h.app, { password: "weak" });
     expect(res.status).toBe(400);

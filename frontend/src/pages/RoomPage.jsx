@@ -11,6 +11,7 @@ import GamesHub from "@/components/GamesHub.jsx";
 import VoiceBar from "@/components/VoiceBar.jsx";
 import InviteFriends from "@/components/InviteFriends.jsx";
 import Button from "@/components/ui/Button.jsx";
+import Logo from "@/components/Logo.jsx";
 
 const ACT_LABEL = {
   call: "started the call 📞",
@@ -194,7 +195,7 @@ export default function RoomPage() {
       </div>
 
       <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-800 gap-2">
-        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-xl font-bold text-brand-400 shrink-0">🌐</Link>
+        <Link to={me?.isGuest ? "/" : "/dashboard"} className="shrink-0"><Logo withText={false} /></Link>
         <div className="flex items-center gap-1 sm:gap-2">
           <Button variant={view === "room" ? "primary" : "secondary"} onClick={() => setView("room")}>💬 Room</Button>
           <Button variant={view === "board" ? "primary" : "secondary"} onClick={() => setView("board")}>🖊️ Board</Button>

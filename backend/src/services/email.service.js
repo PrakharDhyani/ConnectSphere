@@ -41,9 +41,9 @@ async function send({ to, subject, html }) {
 export function sendVerificationEmail(to, verifyUrl) {
   return send({
     to,
-    subject: "Verify your ConnectSphere email",
+    subject: "Verify your Groot email",
     html: `
-      <h2>Welcome to ConnectSphere 🌐</h2>
+      <h2>Welcome to Groot 🌐</h2>
       <p>Confirm your email address to activate your account:</p>
       <p><a href="${verifyUrl}">Verify my email</a></p>
       <p>This link expires in 24 hours. If you didn't sign up, ignore this email.</p>
@@ -54,7 +54,7 @@ export function sendVerificationEmail(to, verifyUrl) {
 export function sendPasswordResetEmail(to, resetUrl) {
   return send({
     to,
-    subject: "Reset your ConnectSphere password",
+    subject: "Reset your Groot password",
     html: `
       <h2>Password reset</h2>
       <p>We received a request to reset your password. Click below to choose a new one:</p>

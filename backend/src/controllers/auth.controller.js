@@ -91,6 +91,19 @@ export async function register(req, res, next) {
       throw error;
     }
 
+    // Usernames must be unique (case-insensitive) among real accounts. Guests
+    // are ephemeral display names, so they don't reserve a username.
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const nameTaken = await User.findOne({
+      name: new RegExp(`^${escaped}$`, "i"),
+      isGuest: { $ne: true },
+    });
+    if (nameTaken) {
+      const error = new Error("That username is already taken");
+      error.statusCode = 409;
+      throw error;
+    }
+
     const user = await User.create({ name, email, password });
     const accessToken = await issueTokens(res, user);
 

@@ -7,6 +7,7 @@ import { api } from "@/lib/api.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import Input from "@/components/ui/Input.jsx";
 import Button from "@/components/ui/Button.jsx";
+import Logo from "@/components/Logo.jsx";
 
 const schema = z.object({
   name: z.string().min(2, "At least 2 characters").max(100),
@@ -62,7 +63,7 @@ export default function ProfilePage() {
   return (
     <div className="min-h-screen">
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-        <Link to="/dashboard" className="text-xl font-bold text-brand-400">🌐 ConnectSphere</Link>
+        <Link to="/dashboard"><Logo /></Link>
         <Link to="/dashboard" className="text-sm text-gray-400 hover:text-brand-400">← Back to dashboard</Link>
       </header>
 

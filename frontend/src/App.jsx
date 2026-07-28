@@ -6,6 +6,7 @@ import { connectSocket, getSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useNotify } from "@/stores/notify.store.js";
 import ProtectedRoute from "@/components/ProtectedRoute.jsx";
+import PublicOnlyRoute from "@/components/PublicOnlyRoute.jsx";
 import Toaster from "@/components/Toaster.jsx";
 
 import HomePage from "@/pages/HomePage.jsx";
@@ -73,8 +74,8 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
 
         {/* Auth */}
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/login" element={<PublicOnlyRoute><LoginPage /></PublicOnlyRoute>} />
+        <Route path="/register" element={<PublicOnlyRoute><RegisterPage /></PublicOnlyRoute>} />
         <Route path="/auth/callback" element={<AuthCallbackPage />} />
         <Route path="/email-verified" element={<EmailVerifiedPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />

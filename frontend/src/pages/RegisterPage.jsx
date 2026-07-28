@@ -12,14 +12,20 @@ import Button from "@/components/ui/Button.jsx";
 // Client-side mirror of the backend's Joi registerSchema — same rules, checked
 // instantly for UX. The backend still enforces them (client checks are never
 // security, the server can't trust us).
-const schema = z.object({
-  name: z.string().min(2, "At least 2 characters").max(100),
-  email: z.string().email("Enter a valid email"),
-  password: z
-    .string()
-    .min(8, "At least 8 characters")
-    .regex(/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, "Needs an uppercase letter, a lowercase letter, and a number"),
-});
+const schema = z
+  .object({
+    name: z.string().min(2, "At least 2 characters").max(100),
+    email: z.string().email("Enter a valid email"),
+    password: z
+      .string()
+      .min(8, "At least 8 characters")
+      .regex(/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, "Needs an uppercase letter, a lowercase letter, and a number"),
+    confirmPassword: z.string(),
+  })
+  .refine((v) => v.password === v.confirmPassword, {
+    message: "Passwords don't match",
+    path: ["confirmPassword"],
+  });
 
 export default function RegisterPage() {
   const navigate = useNavigate();
@@ -33,7 +39,9 @@ export default function RegisterPage() {
   async function onSubmit(values) {
     setServerError(null);
     try {
-      const res = await api.post("/auth/register", values);
+      // eslint-disable-next-line no-unused-vars -- drop the confirm field, only send the rest
+      const { confirmPassword, ...payload } = values;
+      const res = await api.post("/auth/register", payload);
       setAuth(res.data.data); // registered users are logged in immediately
       navigate("/dashboard"); // dashboard shows the "verify your email" banner
     } catch (err) {
@@ -42,14 +50,16 @@ export default function RegisterPage() {
   }
 
   return (
-    <AuthCard title="Create your account" subtitle="Join ConnectSphere">
+    <AuthCard title="Create your account" subtitle="Join Groot">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
-        <Input label="Name" type="text" placeholder="Ada Lovelace"
+        <Input label="Username" type="text" placeholder="pick a unique name"
           error={errors.name?.message} {...register("name")} />
         <Input label="Email" type="email" placeholder="you@example.com"
           error={errors.email?.message} {...register("email")} />
         <Input label="Password" type="password" placeholder="Min 8 chars, Aa1"
           error={errors.password?.message} {...register("password")} />
+        <Input label="Confirm password" type="password" placeholder="Re-enter your password"
+          error={errors.confirmPassword?.message} {...register("confirmPassword")} />
 
         {serverError && <p className="text-sm text-red-400">{serverError}</p>}
 

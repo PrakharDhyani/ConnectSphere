@@ -39,7 +39,7 @@ export default function LoginPage() {
   }
 
   return (
-    <AuthCard title="Welcome back" subtitle="Log in to ConnectSphere">
+    <AuthCard title="Welcome back" subtitle="Log in to Groot">
       {location.state?.message && (
         <p className="mb-4 text-sm text-green-400 bg-green-950/50 border border-green-900 rounded-lg p-3">
           {location.state.message}
