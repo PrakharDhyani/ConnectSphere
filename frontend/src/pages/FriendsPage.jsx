@@ -4,6 +4,7 @@ import { useFriends, searchUsers } from "@/hooks/useFriends.js";
 import Avatar from "@/components/Avatar.jsx";
 import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
+import Logo from "@/components/Logo.jsx";
 
 const REL_LABEL = { friends: "Friends", outgoing: "Requested", incoming: "Wants to add you", none: null };
 
@@ -34,7 +35,7 @@ export default function FriendsPage() {
   return (
     <div className="min-h-screen">
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-        <Link to="/dashboard" className="text-xl font-bold text-brand-400">🌐 ConnectSphere</Link>
+        <Link to="/dashboard"><Logo /></Link>
         <Link to="/dashboard" className="text-sm text-gray-400 hover:text-brand-400">← Dashboard</Link>
       </header>
 

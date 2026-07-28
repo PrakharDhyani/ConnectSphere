@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/stores/auth.store.js";
 import Button from "@/components/ui/Button.jsx";
+import Logo from "@/components/Logo.jsx";
 
 const LIVE_FEATURES = [
   {
@@ -65,7 +66,7 @@ export default function HomePage() {
     <div className="min-h-screen">
       {/* Nav */}
       <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
-        <span className="text-xl font-bold text-brand-400">🌐 ConnectSphere</span>
+        <Logo />
         <div className="flex items-center gap-3">
           {authed ? (
             <Link to="/dashboard"><Button>Dashboard</Button></Link>
@@ -88,7 +89,7 @@ export default function HomePage() {
           <span className="text-brand-400">all in your browser.</span>
         </h1>
         <p className="mt-6 text-lg text-gray-400 max-w-2xl mx-auto">
-          ConnectSphere is a real-time video calling &amp; collaboration platform: think Zoom&apos;s calls,
+          Groot is a real-time video calling &amp; collaboration platform: think Zoom&apos;s calls,
           Snapchat&apos;s filters, a Figma-style whiteboard, and in-call mini-games — combined into a
           single link you can share with anyone.
         </p>
@@ -122,7 +123,7 @@ export default function HomePage() {
         <h2 className="text-2xl font-bold text-center">One tab. Everything you need to connect.</h2>
         <p className="mt-4 text-gray-400 text-center max-w-2xl mx-auto">
           Most tools make you choose: a call app here, a chat app there, a whiteboard somewhere else.
-          ConnectSphere puts real-time video, messaging, and collaboration behind a single shareable
+          Groot puts real-time video, messaging, and collaboration behind a single shareable
           room — fast, browser-native, and built on the same WebRTC technology the big platforms use.
         </p>
       </section>
@@ -192,7 +193,7 @@ export default function HomePage() {
       </section>
 
       <footer className="border-t border-gray-900 py-8 text-center text-sm text-gray-600">
-        🌐 ConnectSphere — real-time video & collaboration. Built with the MERN stack, WebRTC (mediasoup), Socket.io & Redis.
+        Groot — real-time video & collaboration. Built with the MERN stack, WebRTC (mediasoup), Socket.io & Redis.
       </footer>
     </div>
   );

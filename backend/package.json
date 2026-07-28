@@ -1,7 +1,7 @@
 {
-  "name": "connectsphere-backend",
+  "name": "groot-backend",
   "version": "1.0.0",
-  "description": "ConnectSphere API — Node.js + Express + Socket.io + mediasoup",
+  "description": "Groot API — Node.js + Express + Socket.io + mediasoup",
   "main": "src/index.js",
   "type": "module",
   "scripts": {

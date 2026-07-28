@@ -1,5 +1,5 @@
 /**
- * ConnectSphere — Backend Entry Point
+ * Groot — Backend Entry Point
  *
  * Boot order:
  *  1. Load env vars
@@ -50,7 +50,7 @@ async function bootstrap() {
     initSocket(httpServer);
 
     httpServer.listen(PORT, () => {
-      logger.info(`🚀 ConnectSphere backend running on port ${PORT}`);
+      logger.info(`🚀 Groot backend running on port ${PORT}`);
       logger.info(`📡 Environment: ${process.env.NODE_ENV}`);
     });
   } catch (error) {

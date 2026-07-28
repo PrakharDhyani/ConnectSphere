@@ -111,7 +111,7 @@ export default function WhiteboardPanel({ roomId }) {
         onChange={handleChange}
         onPointerUpdate={handlePointer}
         theme="dark"
-        name="ConnectSphere whiteboard"
+        name="Groot whiteboard"
       />
     </div>
   );

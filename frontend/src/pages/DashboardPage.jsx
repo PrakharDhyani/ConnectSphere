@@ -7,6 +7,7 @@ import { useAuthStore } from "@/stores/auth.store.js";
 import { useFriends } from "@/hooks/useFriends.js";
 import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
+import Logo from "@/components/Logo.jsx";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -69,7 +70,7 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen">
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-        <span className="text-xl font-bold text-brand-400">🌐 ConnectSphere</span>
+        <Logo />
         <div className="flex items-center gap-4">
           <Link to="/friends" className="relative text-sm text-gray-400 hover:text-brand-400">
             👥 Friends
