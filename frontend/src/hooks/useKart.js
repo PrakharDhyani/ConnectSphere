@@ -35,8 +35,8 @@ export function useKart(roomId) {
       killFeedRef.current.push({ text: `${killerName} 💥 ${victimName}`, at: performance.now() });
       if (killFeedRef.current.length > 5) killFeedRef.current.shift();
     };
-    const onBoom = ({ x, y }) => {
-      boomsRef.current.push({ x, y, consumed: false });
+    const onBoom = ({ x, y, big, freeze }) => {
+      boomsRef.current.push({ x, y, big, freeze, consumed: false });
       if (boomsRef.current.length > 8) boomsRef.current.shift();
     };
 
@@ -85,6 +85,26 @@ export function useKart(roomId) {
     [run, roomId]
   );
   const reset = useCallback(() => getSocket().emit("kart:reset", { roomId }), [roomId]);
+  const addBot = useCallback(
+    (difficulty) =>
+      new Promise((resolve) =>
+        getSocket().emit("kart:addBot", { roomId, difficulty }, (res) => {
+          setError(res?.error || null);
+          resolve(res);
+        })
+      ),
+    [roomId]
+  );
+  const removeBot = useCallback(
+    (botId) =>
+      new Promise((resolve) =>
+        getSocket().emit("kart:removeBot", { roomId, botId }, (res) => {
+          setError(res?.error || null);
+          resolve(res);
+        })
+      ),
+    [roomId]
+  );
   const sendInput = useCallback((input) => getSocket().emit("kart:input", { roomId, input }), [roomId]);
   const setConfig = useCallback(
     (cfg) => getSocket().emit("kart:config", { roomId, ...cfg }),
@@ -94,5 +114,5 @@ export function useKart(roomId) {
   const joined = Boolean(view?.players?.some((p) => p.id === me?.id));
   const isHost = view?.hostId === me?.id;
 
-  return { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig };
+  return { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig, addBot, removeBot };
 }

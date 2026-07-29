@@ -8,9 +8,16 @@ const Dot = ({ color, size = 12 }) => (
   <span style={{ background: COLOR_HEX[color], width: size, height: size }} className="inline-block rounded-full" />
 );
 
+const BOT_LEVELS = [
+  { id: "easy", name: "Easy" },
+  { id: "medium", name: "Medium" },
+  { id: "hard", name: "Hard" },
+];
+
 export default function LudoPanel({ roomId }) {
-  const { state, me, myColor, isMyTurn, join, leave, start, roll, move, reset } = useLudo(roomId);
+  const { state, me, myColor, isMyTurn, join, leave, start, roll, move, reset, addBot, removeBot } = useLudo(roomId);
   const [error, setError] = useState(null);
+  const [botDiff, setBotDiff] = useState("medium");
 
   if (!state) {
     return <p className="text-center text-gray-500 py-8">Loading game…</p>;
@@ -31,6 +38,11 @@ export default function LudoPanel({ roomId }) {
     const res = await start();
     if (res?.error) setError(res.error);
   }
+  async function doAddBot() {
+    setError(null);
+    const res = await addBot(botDiff);
+    if (res?.error) setError(res.error);
+  }
 
   // ── Lobby ──
   if (state.status === "lobby") {
@@ -46,9 +58,41 @@ export default function LudoPanel({ roomId }) {
               <Dot color={c} />
               <span className="capitalize text-gray-400 w-16">{c}</span>
               <span className="text-gray-200">{state.seats[c] ? state.seats[c].name : <span className="text-gray-600">empty</span>}</span>
+              {state.seats[c]?.isBot && <span className="text-xs px-1.5 rounded bg-gray-800 text-gray-400">bot</span>}
+              {isHost && state.seats[c]?.isBot && (
+                <button onClick={() => removeBot(c)} className="ml-auto text-xs text-gray-500 hover:text-red-400" aria-label={`Remove ${state.seats[c].name}`}>
+                  remove
+                </button>
+              )}
             </li>
           ))}
         </ul>
+
+        {isHost && (
+          <div className="mt-4 pt-4 border-t border-gray-800 text-left">
+            <div className="text-xs uppercase text-gray-500 mb-1.5">Add a bot</div>
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1">
+                {BOT_LEVELS.map((d) => (
+                  <button
+                    key={d.id}
+                    onClick={() => setBotDiff(d.id)}
+                    className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-brand-600 border-brand-500" : "bg-gray-800 border-gray-700 hover:border-brand-500"}`}
+                  >
+                    {d.name}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={doAddBot}
+                disabled={seated.length >= 4}
+                className="ml-auto px-3 py-1 rounded-md text-sm bg-gray-800 border border-gray-700 hover:border-brand-500 disabled:opacity-40"
+              >
+                + Bot
+              </button>
+            </div>
+          </div>
+        )}
 
         {error && <p className="text-sm text-red-400 mt-3">{error}</p>}
 

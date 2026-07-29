@@ -1544,6 +1544,70 @@ pointed at the client. The Vite log then showed the actual trigger —
 **Also:** the panel now renders the ack's `error` instead of swallowing it —
 a silent `{error}` ack is indistinguishable from a dead button.
 
+### More powerups, and bots with difficulty levels (both games)
+
+**Three new Smash Karts powerups** (8 total), all added to the pure core:
+- **🔱 Triple shot** — each shot becomes a 3-way spread for 8s.
+- **❄️ Freeze (EMP)** — detonates on pickup; every enemy within 340u is locked
+  for ~2s (inputs zeroed, kart coasts to a stop).
+- **🧨 Mines** — lays a trail of 3 proximity mines behind you; they arm after
+  700ms and blast anyone who drives over them. Introduced a new world entity
+  (`g.mines`) + snapshot field.
+
+**Shield is now the universal counter** — and it already was for bombs. The
+existing `detonate()` skipped shielded victims, so "a shield saves you from the
+suicide bomb" was working before this pass; the change was *proving* it and
+extending the same rule to mines and freezes. Bomb/mine damage were also
+unified into one `areaDamage()` helper so the immunity rules (owner, teammate,
+shield) can't drift apart between the two.
+
+**Bots — the payoff of server-authoritative design, again.** A bot is an
+ordinary entry in `g.players` carrying `isBot: true`. The *only* difference is
+where its input comes from:
+
+```js
+for (const p of game.players.values())
+  if (p.isBot && p.alive) p.input = botInput(game, p, now);   // vs. arriving by socket
+const { kills, booms } = stepWorld(game, dt, now);            // simulation is unchanged
+```
+
+The simulation literally cannot tell bots from humans, so **no physics, scoring,
+powerup or snapshot code changed at all**. Same story in Ludo: the roll/move
+rules were extracted out of the socket handlers into socket-free `doRoll()` /
+`doMove()`, and a bot's timer calls exactly the functions a human's socket event
+calls. A bot can only pick from `g.movable` — the server-computed legal list —
+so **a bot can no more cheat than a client can**.
+
+**Difficulty is a table of knobs, not a different algorithm:**
+
+| | Kart bot | Ludo bot |
+|---|---|---|
+| **Easy** | 420ms reaction, ±0.30 rad aim wobble, 62% throttle, 620u range, no target leading | picks at random (takes an obvious capture ~half the time) |
+| **Medium** | 220ms, ±0.14 rad, 85% throttle, 900u, partial leading | greedy: ranks moves by immediate payoff (capture > home > leave yard > progress) |
+| **Hard** | 90ms, ±0.045 rad, full throttle, 1250u, full predictive leading | scores payoff **minus risk** — counts how many enemies could reach the landing square next roll, and prefers relocating threatened tokens |
+
+Kart bots also seek pickups (health when hurt), avoid obstacles via whisker
+probes, refuse to shoot through walls (sampled line-of-sight), and back off from
+a bomb carrier.
+
+**Lifecycle detail worth keeping:** bots must never keep a game alive. Both
+cleanup paths now count *humans* only — otherwise a lobby of bots would hold a
+30 Hz tick loop (or a Ludo turn timer) open forever after the last person left.
+A bot also can't become host.
+
+**Tests: 37 new unit tests** (backend suite 101 → **138**) — the first real
+coverage of the kart core, which was possible only because it's socket-free.
+They pin the shield rules (bomb / bullet / mine / freeze / friendly-fire), each
+new powerup, and bot *behaviour* rather than config: easy is measurably slower,
+wobblier and shorter-ranged; medium takes a greedy move that hard rejects as too
+exposed.
+
+**A bug the tests caught:** kart bots reversed for the first half-second of
+every life. The stuck-detector compared the bot's position against a baseline
+that defaulted to *its own current position*, so the first sample always read
+"hasn't moved". Fixed by treating the first sample as baseline-only — a good
+reminder that `?? self` defaults can silently fabricate a false measurement.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

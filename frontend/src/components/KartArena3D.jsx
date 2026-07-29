@@ -47,6 +47,9 @@ const PICKUP_META = {
   speed: { color: 0x22d3ee, emoji: "⚡" },
   shield: { color: 0x3b82f6, emoji: "🛡️" },
   bomb: { color: 0xef4444, emoji: "💀" },
+  triple: { color: 0xa855f7, emoji: "🔱" },
+  freeze: { color: 0x7dd3fc, emoji: "❄️" },
+  mine: { color: 0xfbbf24, emoji: "🧨" },
 };
 
 const fmtTime = (ms) => {
@@ -1288,6 +1291,32 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       return bulletPool[i];
     }
 
+    // ── Mines ── pooled discs with a blinking core; enemy mines render dimmer.
+    const minePool = [];
+    const mineDiscGeo = new THREE.CylinderGeometry(17, 20, 8, 10);
+    const mineCoreGeo = new THREE.SphereGeometry(5.5, 8, 8);
+    function getMine(i) {
+      while (minePool.length <= i) {
+        const g = new THREE.Group();
+        const disc = new THREE.Mesh(
+          mineDiscGeo,
+          new THREE.MeshStandardMaterial({ color: 0x3f3f46, roughness: 0.7, metalness: 0.5 })
+        );
+        disc.position.y = 4;
+        disc.castShadow = true;
+        const core = new THREE.Mesh(
+          mineCoreGeo,
+          new THREE.MeshBasicMaterial({ color: 0xff3b30, toneMapped: false })
+        );
+        core.position.y = 11;
+        g.add(disc, core);
+        g.visible = false;
+        scene.add(g);
+        minePool.push({ group: g, core });
+      }
+      return minePool[i];
+    }
+
     // Skid dust pool.
     const dustPool = [];
     function spawnDust(x, z, colorInt) {
@@ -1313,6 +1342,9 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         : pad.type === "shield" ? new THREE.IcosahedronGeometry(20)
         : pad.type === "speed" ? new THREE.ConeGeometry(18, 34, 6)
         : pad.type === "bomb" ? new THREE.SphereGeometry(20, 16, 16)
+        : pad.type === "triple" ? new THREE.TorusKnotGeometry(13, 4.5, 48, 8)
+        : pad.type === "freeze" ? new THREE.OctahedronGeometry(21, 0)
+        : pad.type === "mine" ? new THREE.CylinderGeometry(18, 20, 16, 8)
         : new THREE.OctahedronGeometry(22);
       const mat = new THREE.MeshStandardMaterial({ color: meta.color, emissive: meta.color, emissiveIntensity: 0.9, roughness: 0.3, metalness: 0.3, transparent: true });
       const mesh = new THREE.Mesh(geo, mat);
@@ -1486,10 +1518,18 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
             spawnDust(x - Math.cos(angle) * 32, z - Math.sin(angle) * 32, 0x55ccff);
           }
 
-          // Aura color by powerup priority: bomb > speed > rapid.
+          // Frozen: icy tint + the kart visibly locked (aura goes cyan-white).
+          if (p.frozen) {
+            k.bodyMat.emissive.setHex(0x7dd3fc);
+            k.bodyMat.emissiveIntensity = 0.55 + 0.2 * Math.sin(now * 0.02);
+          }
+
+          // Aura color by powerup priority: frozen > bomb > speed > triple > rapid.
           let auraHex = null;
-          if (p.bomb > 0) auraHex = 0xff3b30;
+          if (p.frozen) auraHex = 0x7dd3fc;
+          else if (p.bomb > 0) auraHex = 0xff3b30;
           else if (p.speed) auraHex = 0x22d3ee;
+          else if (p.triple) auraHex = 0xa855f7;
           else if (p.rapid) auraHex = 0xfacc15;
           k.aura.visible = p.alive && auraHex !== null;
           if (k.aura.visible) {
@@ -1520,6 +1560,20 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           b.visible = true;
         }
         for (let i = bullets.length; i < bulletPool.length; i++) bulletPool[i].visible = false;
+
+        // Mines — armed ones blink; unarmed sit dark. Yours glow brighter.
+        const mines = cur.mines || [];
+        for (let i = 0; i < mines.length; i++) {
+          const m = mines[i];
+          const mm = getMine(i);
+          mm.group.position.set(m.x, 0, m.y);
+          mm.group.visible = true;
+          const mine = m.ownerId === myId;
+          mm.core.material.color.setHex(mine ? 0x22d3ee : 0xff3b30);
+          const blink = m.armed ? 0.55 + 0.45 * Math.sin(now * 0.009 + m.id) : 0.12;
+          mm.core.scale.setScalar(mine ? blink : blink * 0.7);
+        }
+        for (let i = mines.length; i < minePool.length; i++) minePool[i].group.visible = false;
 
         // Pickups.
         for (const pad of cur.pickups || []) {
@@ -1630,7 +1684,10 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       const booms = boomsRef?.current;
       if (booms) {
         for (const bm of booms) {
-          if (!bm.consumed) { bm.consumed = true; spawnExplosion(bm.x, bm.y, 0xff3b30, true); }
+          if (bm.consumed) continue;
+          bm.consumed = true;
+          // Freeze pops are icy and small; bombs are big; mines in between.
+          spawnExplosion(bm.x, bm.y, bm.freeze ? 0x7dd3fc : 0xff3b30, bm.big !== false);
         }
       }
 

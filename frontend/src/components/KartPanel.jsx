@@ -10,6 +10,11 @@ const COLOR_HEX = {
   yellow: "#eab308", orange: "#f97316", purple: "#a855f7",
 };
 const TEAM_HEX = { A: "#3b82f6", B: "#ef4444" };
+const BOT_LEVELS = [
+  { id: "easy", name: "Easy" },
+  { id: "medium", name: "Medium" },
+  { id: "hard", name: "Hard" },
+];
 const mapName = (id) => MAP_LIST.find((m) => m.id === id)?.name || "Speedway";
 const modeName = (id) => MODES.find((m) => m.id === id)?.name || "Free for all";
 
@@ -33,8 +38,9 @@ function HoldButton({ onHold, className, children, label }) {
 }
 
 export default function KartPanel({ roomId, onExit }) {
-  const { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig } =
+  const { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig, addBot, removeBot } =
     useKart(roomId);
+  const [botDiff, setBotDiff] = useState("medium");
 
   // ── Shared input pipeline (keyboard + touch) ──
   const keysRef = useRef(new Set());
@@ -116,6 +122,7 @@ export default function KartPanel({ roomId, onExit }) {
         <div className="text-4xl">🏎️</div>
         <h2 className="text-lg font-semibold mt-2">Smash Karts 3D</h2>
         <p className="text-gray-500 text-sm mb-4">Drive, shoot, grab powerups — most kills in 3 minutes wins.</p>
+        <p className="text-xs text-gray-600 mb-4">🛡️ shield blocks bullets, bombs, mines <i>and</i> freezes.</p>
 
         {/* Map + mode selection */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 mb-4 space-y-3">
@@ -160,10 +167,42 @@ export default function KartPanel({ roomId, onExit }) {
               <li key={p.id} className="flex items-center gap-2 text-sm">
                 <span className="w-3 h-3 rounded-full" style={{ background: COLOR_HEX[p.color] }} />
                 <span>{p.name}{p.id === me?.id && " (you)"}</span>
+                {p.isBot && <span className="text-xs px-1.5 rounded bg-gray-800 text-gray-400">bot</span>}
                 {p.id === view?.hostId && <span className="text-xs text-gray-500">host</span>}
+                {isHost && p.isBot && (
+                  <button onClick={() => removeBot(p.id)} className="ml-auto text-xs text-gray-500 hover:text-red-400" aria-label={`Remove ${p.name}`}>
+                    remove
+                  </button>
+                )}
               </li>
             ))}
           </ul>
+
+          {isHost && (
+            <div className="mt-3 pt-3 border-t border-gray-800">
+              <div className="text-xs uppercase text-gray-500 mb-1.5">Add a bot</div>
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1">
+                  {BOT_LEVELS.map((d) => (
+                    <button
+                      key={d.id}
+                      onClick={() => setBotDiff(d.id)}
+                      className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-brand-600 border-brand-500" : "bg-gray-800 border-gray-700 hover:border-brand-500"}`}
+                    >
+                      {d.name}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => addBot(botDiff)}
+                  disabled={players.length >= 6}
+                  className="ml-auto px-3 py-1 rounded-md text-sm bg-gray-800 border border-gray-700 hover:border-brand-500 disabled:opacity-40"
+                >
+                  + Bot
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex gap-2 justify-center">
@@ -264,7 +303,7 @@ export default function KartPanel({ roomId, onExit }) {
       </div>
 
       <p className="text-center text-xs text-gray-600 mt-2">
-        <b>WASD / arrows</b> drive · <b>Space</b> shoot · ❤️ health · ⚡ speed · 🔥 rapid · 🛡️ shield · 💀 bomb
+        <b>WASD / arrows</b> drive · <b>Space</b> shoot · ❤️ health · ⚡ speed · 🔥 rapid · 🛡️ shield · 💀 bomb · 🔱 triple · ❄️ freeze · 🧨 mines
       </p>
 
       {confirmLeave && <LeaveModal />}

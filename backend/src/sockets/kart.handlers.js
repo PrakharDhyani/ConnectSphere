@@ -20,12 +20,17 @@ import {
   respawnPlayer,
 } from "../games/kartArena.js";
 import { MAPS, DEFAULT_MAP, getMap } from "../games/kartMaps.js";
+import { botInput, botName, DIFFICULTIES, DEFAULT_DIFFICULTY } from "../games/kartBot.js";
 import { canAccessRoom } from "../utils/roomAccess.js";
 import { allow } from "../utils/socketRate.js";
 import { roomKey } from "./chat.handlers.js";
 
 const games = new Map(); // roomId -> game
 const MODES = new Set(["ffa", "tdm"]);
+const MAX_KARTS = 6;
+
+const isBotId = (id) => typeof id === "string" && id.startsWith("bot:");
+const humanPlayers = (g) => [...g.players.values()].filter((p) => !p.isBot);
 
 // Attach a map to a game. Every map-derived field must be set HERE — the world
 // size included: a map swap that updated obstacles/spawns but kept the previous
@@ -56,6 +61,9 @@ function newGame(hostId) {
     h: map.h,
     players: new Map(), // userId -> player
     bullets: [],
+    mines: [],
+    nextMineId: 1,
+    nextBotId: 1,
     pickups: [],
     startedAt: 0,
     endsAt: 0,
@@ -66,7 +74,7 @@ function newGame(hostId) {
   };
 }
 
-function newPlayer(id, name, color, seatIndex, spawns) {
+function newPlayer(id, name, color, seatIndex, spawns, opts = {}) {
   const s = spawns[seatIndex % spawns.length];
   return {
     id, name, color, seatIndex,
@@ -76,7 +84,10 @@ function newPlayer(id, name, color, seatIndex, spawns) {
     kills: 0, deaths: 0,
     lastFire: 0,
     rapidUntil: 0, speedUntil: 0, shieldUntil: 0, bombAt: 0,
+    tripleUntil: 0, frozenUntil: 0, minesLeft: 0, nextMineAt: 0,
     team: null,
+    isBot: Boolean(opts.isBot),
+    difficulty: opts.difficulty || null,
     input: { throttle: 0, steer: 0, shoot: false },
   };
 }
@@ -132,9 +143,20 @@ function snapshot(g, now = Date.now()) {
         speed: now < p.speedUntil,
         shield: now < p.shieldUntil,
         bomb: p.bombAt ? Math.max(0, p.bombAt - now) : 0,
+        triple: now < p.tripleUntil,
+        frozen: now < p.frozenUntil,
+        isBot: p.isBot,
+        difficulty: p.difficulty,
       }))
       .sort((a, b) => b.kills - a.kills),
     bullets: g.bullets.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y) })),
+    // Mines are visible to everyone (one shared snapshot per room — hiding them
+    // per-viewer would mean a per-socket snapshot at 15 Hz). They work as area
+    // denial rather than a hidden trap, and the client dims enemy ones.
+    mines: (g.mines || []).map((m) => ({
+      id: m.id, x: Math.round(m.x), y: Math.round(m.y),
+      ownerId: m.ownerId, team: m.team, armed: now >= m.armAt,
+    })),
     pickups: g.pickups.map((p) => ({ id: p.id, x: p.x, y: p.y, type: p.type, active: p.active })),
   };
 }
@@ -180,6 +202,12 @@ function startLoop(io, roomId) {
     if (!game || game.status !== "playing") return stopLoop(game);
     const now = Date.now();
 
+    // Bots produce the SAME input tuple a client would have sent, so the
+    // simulation below can't tell them apart from humans.
+    for (const p of game.players.values()) {
+      if (p.isBot && p.alive) p.input = botInput(game, p, now);
+    }
+
     const { kills, booms } = stepWorld(game, dt, now);
     for (const k of kills) {
       io.to(roomKey(roomId)).emit("kart:kill", {
@@ -213,7 +241,7 @@ export function registerKartHandlers(io, socket) {
 
     if (!g.players.has(uid)) {
       const seat = freeSeat(g);
-      if (!seat) return cb?.({ error: "Arena is full (6 karts)" });
+      if (!seat) return cb?.({ error: `Arena is full (${MAX_KARTS} karts)` });
       const p = newPlayer(uid, socket.user.name, seat.color, seat.seatIndex, g.spawns);
       if (g.status === "playing") {
         if (g.mode === "tdm") p.team = smallerTeam(g);
@@ -221,18 +249,62 @@ export function registerKartHandlers(io, socket) {
       }
       g.players.set(uid, p);
     }
-    if (!g.hostId || !g.players.has(g.hostId)) g.hostId = [...g.players.keys()][0];
+    // A bot must never end up hosting — the host drives start/config.
+    if (!g.hostId || !g.players.has(g.hostId) || isBotId(g.hostId)) {
+      g.hostId = humanPlayers(g)[0]?.id || null;
+    }
 
     broadcast(io, roomId);
     cb?.({ ok: true, color: g.players.get(uid)?.color });
+  });
+
+  // ── Bots ── host-only; a bot is a normal player driven by botInput().
+  socket.on("kart:addBot", async ({ roomId, difficulty } = {}, cb) => {
+    if (!(await guard(roomId))) return cb?.({ error: "Not allowed" });
+    const g = games.get(roomId);
+    if (!g) return cb?.({ error: "Join the arena first" });
+    if (g.hostId !== uid) return cb?.({ error: "Only the host can add bots" });
+    if (g.players.size >= MAX_KARTS) return cb?.({ error: `Arena is full (${MAX_KARTS} karts)` });
+
+    const diff = DIFFICULTIES.includes(difficulty) ? difficulty : DEFAULT_DIFFICULTY;
+    const seat = freeSeat(g);
+    if (!seat) return cb?.({ error: "No free seat" });
+    const id = `bot:${g.nextBotId++}`;
+    const botCount = [...g.players.values()].filter((p) => p.isBot).length;
+    const p = newPlayer(id, botName(botCount, diff), seat.color, seat.seatIndex, g.spawns, {
+      isBot: true,
+      difficulty: diff,
+    });
+    if (g.status === "playing") {
+      if (g.mode === "tdm") p.team = smallerTeam(g);
+      respawnPlayer(p, Date.now(), p.seatIndex, g.spawns);
+    }
+    g.players.set(id, p);
+    broadcast(io, roomId);
+    cb?.({ ok: true, id });
+  });
+
+  socket.on("kart:removeBot", async ({ roomId, botId } = {}, cb) => {
+    const g = games.get(roomId);
+    if (!g) return cb?.({ error: "No arena" });
+    if (g.hostId !== uid) return cb?.({ error: "Only the host can remove bots" });
+    // No id given → drop the most recently added bot.
+    const target = botId && isBotId(botId)
+      ? botId
+      : [...g.players.values()].filter((p) => p.isBot).pop()?.id;
+    if (!target || !g.players.get(target)?.isBot) return cb?.({ error: "No bot to remove" });
+    g.players.delete(target);
+    broadcast(io, roomId);
+    cb?.({ ok: true });
   });
 
   socket.on("kart:leave", ({ roomId } = {}) => {
     const g = games.get(roomId);
     if (!g) return;
     g.players.delete(uid);
-    if (g.hostId === uid) g.hostId = [...g.players.keys()][0] || null;
-    if (g.players.size === 0) { stopLoop(g); games.delete(roomId); return; }
+    if (g.hostId === uid) g.hostId = humanPlayers(g)[0]?.id || null;
+    // Bots alone must never keep a tick loop (and a match) running forever.
+    if (humanPlayers(g).length === 0) { stopLoop(g); games.delete(roomId); return; }
     broadcast(io, roomId);
   });
 
@@ -264,6 +336,7 @@ export function registerKartHandlers(io, socket) {
       respawnPlayer(p, now, p.seatIndex, g.spawns);
     }
     g.bullets = [];
+    g.mines = [];
     g.pickups = g.map.pickups.map((pad) => ({ ...pad, active: true, readyAt: 0 }));
     g.status = "playing";
     g.startedAt = now;
@@ -297,11 +370,13 @@ export function registerKartHandlers(io, socket) {
     stopLoop(g);
     g.status = "lobby";
     g.bullets = [];
+    g.mines = [];
     g.winnerId = null;
     g.winnerTeam = null;
     for (const p of g.players.values()) {
       p.alive = false; p.kills = 0; p.deaths = 0; p.speed = 0;
       p.rapidUntil = 0; p.speedUntil = 0; p.shieldUntil = 0; p.bombAt = 0;
+      p.tripleUntil = 0; p.frozenUntil = 0; p.minesLeft = 0;
     }
     broadcast(io, roomId);
   });
@@ -313,11 +388,13 @@ export function registerKartHandlers(io, socket) {
         const g = games.get(roomId);
         if (!g) continue;
         g.players.delete(uid);
-        if (g.hostId === uid) g.hostId = [...g.players.keys()][0] || null;
+        if (g.hostId === uid) g.hostId = humanPlayers(g)[0]?.id || null;
 
         const sockets = await io.in(roomKey(roomId)).fetchSockets();
         const present = new Set(sockets.map((s) => s.user.id));
-        if (g.players.size === 0 || ![...g.players.keys()].some((id) => present.has(id))) {
+        // Only HUMANS count as "someone is still here" — a lobby of bots is not.
+        const humans = humanPlayers(g);
+        if (humans.length === 0 || !humans.some((p) => present.has(p.id))) {
           stopLoop(g);
           games.delete(roomId);
         } else {

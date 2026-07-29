@@ -45,11 +45,28 @@ export const RESPAWN_MS = 3000;
 export const RAPID_MS = 6000; // faster fire rate
 export const SPEED_MS = 5000; // top-speed + accel burst
 export const SPEED_MULT = 1.6;
-export const SHIELD_MS = 5000; // invulnerability
+export const SHIELD_MS = 5000; // invulnerability — blocks bullets, bombs AND mines
 export const HEALTH_AMOUNT = 45;
 export const BOMB_FUSE_MS = 5000; // "suicide" pickup: explode after this long
 export const BOMB_RADIUS = 180; // blast radius
 export const BOMB_DAMAGE = 95; // blast damage to others in range
+
+// Triple shot — every shot becomes a 3-way spread.
+export const TRIPLE_MS = 8000;
+export const TRIPLE_SPREAD = 0.17; // radians between spread bullets
+
+// Freeze (EMP) — detonates on pickup, locking nearby enemies in place.
+export const FREEZE_MS = 1900; // how long victims stay frozen
+export const FREEZE_RADIUS = 340;
+
+// Mines — grabbing the pack lays a short trail of proximity mines behind you.
+export const MINE_COUNT = 3; // mines dropped per pickup
+export const MINE_DROP_GAP_MS = 550; // spacing between drops
+export const MINE_ARM_MS = 700; // can't hurt anyone until armed
+export const MINE_TTL_MS = 25000;
+export const MINE_TRIGGER = 34; // proximity radius that sets it off
+export const MINE_BLAST_RADIUS = 130;
+export const MINE_DAMAGE = 65;
 
 // Pickups recharge this long after being grabbed.
 export const PICKUP_RESPAWN_MS = 8000;
@@ -96,28 +113,47 @@ export function respawnPlayer(p, now, spawnIndex, spawns = SPAWN_POINTS) {
   p.speedUntil = 0;
   p.shieldUntil = 0;
   p.bombAt = 0;
+  p.tripleUntil = 0;
+  p.frozenUntil = 0;
+  p.minesLeft = 0;
+  p.nextMineAt = 0;
   p.input = { throttle: 0, steer: 0, shoot: false };
 }
 
-// Detonate a bomb carrier: area damage to non-teammates in range, self dies.
-function detonate(g, bomber, now, kills, booms) {
-  booms.push({ x: bomber.x, y: bomber.y });
+// Area damage shared by bombs and mines. Skips the owner, teammates (in TDM)
+// and SHIELDED players — a shield makes you immune to explosive damage, not
+// just bullets. Returns the kills it caused.
+function areaDamage(g, { x, y, radius, damage, ownerId, team }, now, kills) {
   for (const q of g.players.values()) {
-    if (q.id === bomber.id || !q.alive) continue;
-    if (g.mode === "tdm" && q.team && q.team === bomber.team) continue; // no friendly fire
-    if (now < q.shieldUntil) continue; // shielded survivors
-    const dx = q.x - bomber.x, dy = q.y - bomber.y;
-    if (dx * dx + dy * dy > BOMB_RADIUS * BOMB_RADIUS) continue;
-    q.hp -= BOMB_DAMAGE;
+    if (q.id === ownerId || !q.alive) continue;
+    if (g.mode === "tdm" && q.team && team && q.team === team) continue; // no friendly fire
+    if (now < q.shieldUntil) continue; // shielded → takes nothing
+    const dx = q.x - x, dy = q.y - y;
+    if (dx * dx + dy * dy > radius * radius) continue;
+    q.hp -= damage;
     if (q.hp <= 0) {
       q.hp = 0;
       q.alive = false;
       q.deaths += 1;
       q.respawnAt = now + RESPAWN_MS;
-      bomber.kills += 1;
-      kills.push({ killerId: bomber.id, victimId: q.id });
+      const owner = g.players.get(ownerId);
+      if (owner) owner.kills += 1;
+      kills.push({ killerId: ownerId, victimId: q.id });
     }
   }
+}
+
+// Detonate a bomb carrier: area damage to non-teammates in range, self dies.
+// NOTE: a shielded victim survives untouched (see areaDamage) — the shield is
+// the hard counter to the suicide bomb.
+function detonate(g, bomber, now, kills, booms) {
+  booms.push({ x: bomber.x, y: bomber.y, big: true });
+  areaDamage(
+    g,
+    { x: bomber.x, y: bomber.y, radius: BOMB_RADIUS, damage: BOMB_DAMAGE, ownerId: bomber.id, team: bomber.team },
+    now,
+    kills
+  );
   bomber.alive = false;
   bomber.bombAt = 0;
   bomber.deaths += 1;
@@ -131,6 +167,8 @@ export function stepWorld(g, dt, now) {
   const booms = [];
   const spawns = g.spawns || SPAWN_POINTS;
   const obstacles = g.obstacles || [];
+  if (!g.mines) g.mines = [];
+  if (g.nextMineId === undefined) g.nextMineId = 1;
   // Per-map world size (curvy maps are bigger); default rectangle otherwise.
   const W = g.w || ARENA_W;
   const H = g.h || ARENA_H;
@@ -150,7 +188,10 @@ export function stepWorld(g, dt, now) {
       continue;
     }
 
-    const inp = p.input || { throttle: 0, steer: 0, shoot: false };
+    // Frozen by an EMP: controls are dead and the kart coasts to a stop.
+    const frozen = now < p.frozenUntil;
+    const inp = frozen ? { throttle: 0, steer: 0, shoot: false } : (p.input || { throttle: 0, steer: 0, shoot: false });
+    if (frozen) p.speed -= p.speed * clamp(6 * dt, 0, 1);
     const boosted = now < p.speedUntil;
     const accel = boosted ? ACCEL * SPEED_MULT : ACCEL;
     const maxSpeed = boosted ? MAX_SPEED * SPEED_MULT : MAX_SPEED;
@@ -187,21 +228,67 @@ export function stepWorld(g, dt, now) {
       }
     }
 
-    // Fire.
+    // Lay the mine trail behind the kart, one at a time.
+    if (p.minesLeft > 0 && now >= p.nextMineAt) {
+      p.minesLeft -= 1;
+      p.nextMineAt = now + MINE_DROP_GAP_MS;
+      g.mines.push({
+        id: g.nextMineId++,
+        ownerId: p.id,
+        team: p.team,
+        x: p.x - Math.cos(p.angle) * (CAR_RADIUS + 14),
+        y: p.y - Math.sin(p.angle) * (CAR_RADIUS + 14),
+        armAt: now + MINE_ARM_MS,
+        expiresAt: now + MINE_TTL_MS,
+      });
+    }
+
+    // Fire — triple shot turns each shot into a 3-way spread.
     if (inp.shoot) {
       const cd = now < p.rapidUntil ? RAPID_COOLDOWN : FIRE_COOLDOWN;
       if (now - p.lastFire >= cd) {
         p.lastFire = now;
-        g.bullets.push({
-          ownerId: p.id,
-          x: p.x + Math.cos(p.angle) * (CAR_RADIUS + 4),
-          y: p.y + Math.sin(p.angle) * (CAR_RADIUS + 4),
-          vx: Math.cos(p.angle) * BULLET_SPEED,
-          vy: Math.sin(p.angle) * BULLET_SPEED,
-          ttl: BULLET_TTL,
-        });
+        const spread = now < p.tripleUntil ? [-TRIPLE_SPREAD, 0, TRIPLE_SPREAD] : [0];
+        for (const off of spread) {
+          const a = p.angle + off;
+          g.bullets.push({
+            ownerId: p.id,
+            x: p.x + Math.cos(a) * (CAR_RADIUS + 4),
+            y: p.y + Math.sin(a) * (CAR_RADIUS + 4),
+            vx: Math.cos(a) * BULLET_SPEED,
+            vy: Math.sin(a) * BULLET_SPEED,
+            ttl: BULLET_TTL,
+          });
+        }
       }
     }
+  }
+
+  // ── Mines ── proximity-triggered once armed; shielded karts drive over safely.
+  if (g.mines?.length) {
+    const liveMines = [];
+    for (const m of g.mines) {
+      if (now >= m.expiresAt) continue;
+      let triggered = false;
+      if (now >= m.armAt) {
+        for (const p of players) {
+          if (!p.alive || p.id === m.ownerId) continue;
+          if (tdm && p.team && m.team && p.team === m.team) continue;
+          if (now < p.shieldUntil) continue; // shield → drives straight over it
+          const dx = p.x - m.x, dy = p.y - m.y;
+          if (dx * dx + dy * dy <= (MINE_TRIGGER + CAR_RADIUS) ** 2) { triggered = true; break; }
+        }
+      }
+      if (!triggered) { liveMines.push(m); continue; }
+      booms.push({ x: m.x, y: m.y, big: false });
+      areaDamage(
+        g,
+        { x: m.x, y: m.y, radius: MINE_BLAST_RADIUS, damage: MINE_DAMAGE, ownerId: m.ownerId, team: m.team },
+        now,
+        kills
+      );
+    }
+    g.mines = liveMines;
   }
 
   // ── Bullets ──
@@ -263,6 +350,19 @@ export function stepWorld(g, dt, now) {
         case "speed": p.speedUntil = now + SPEED_MS; break;
         case "shield": p.shieldUntil = now + SHIELD_MS; break;
         case "bomb": if (!p.bombAt) p.bombAt = now + BOMB_FUSE_MS; break;
+        case "triple": p.tripleUntil = now + TRIPLE_MS; break;
+        case "mine": p.minesLeft = MINE_COUNT; p.nextMineAt = now; break;
+        case "freeze":
+          // EMP: detonates immediately, locking every nearby enemy in place.
+          booms.push({ x: p.x, y: p.y, big: false, freeze: true });
+          for (const q of players) {
+            if (q.id === p.id || !q.alive) continue;
+            if (tdm && q.team && p.team && q.team === p.team) continue;
+            if (now < q.shieldUntil) continue; // shield blocks the freeze too
+            const ddx = q.x - p.x, ddy = q.y - p.y;
+            if (ddx * ddx + ddy * ddy <= FREEZE_RADIUS * FREEZE_RADIUS) q.frozenUntil = now + FREEZE_MS;
+          }
+          break;
         default: break;
       }
       pad.active = false;

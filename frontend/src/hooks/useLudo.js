@@ -31,9 +31,17 @@ export function useLudo(roomId) {
   const roll = useCallback(() => getSocket().emit("ludo:roll", { roomId }), [roomId]);
   const move = useCallback((token) => getSocket().emit("ludo:move", { roomId, token }), [roomId]);
   const reset = useCallback(() => getSocket().emit("ludo:reset", { roomId }), [roomId]);
+  const addBot = useCallback(
+    (difficulty) => new Promise((r) => getSocket().emit("ludo:addBot", { roomId, difficulty }, r)),
+    [roomId]
+  );
+  const removeBot = useCallback(
+    (color) => new Promise((r) => getSocket().emit("ludo:removeBot", { roomId, color }, r)),
+    [roomId]
+  );
 
   const myColor = state ? COLORS.find((c) => state.seats?.[c]?.id === me?.id) || null : null;
   const isMyTurn = state?.status === "playing" && state.turn === myColor && !state.winner;
 
-  return { state, me, myColor, isMyTurn, join, leave, start, roll, move, reset };
+  return { state, me, myColor, isMyTurn, join, leave, start, roll, move, reset, addBot, removeBot };
 }

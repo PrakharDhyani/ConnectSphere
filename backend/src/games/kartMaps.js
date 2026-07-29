@@ -117,7 +117,10 @@ const CIRCUIT = (() => {
     const side = k % 2 === 0 ? 0.5 : -0.5;
     return { kind: "tyre", x: center[i].x + nx * HALF * side, y: center[i].y + ny * HALF * side, r: 38 };
   });
-  const types = ["speed", "health", "rapid", "shield", "health", "bomb", "speed", "health", "rapid", "shield", "health", "bomb"];
+  const types = [
+    "speed", "health", "rapid", "triple", "shield", "mine",
+    "health", "bomb", "speed", "freeze", "health", "triple",
+  ];
   const pickups = [7, 14, 20, 26, 33, 39, 47, 54, 60, 66, 73, 79].map((i, k) => ({
     id: k, x: center[i].x, y: center[i].y, type: types[k],
   }));
@@ -138,7 +141,7 @@ const CANYON = (() => {
     spawns.push({ x: cx + Math.cos(a) * 960, y: cy + Math.sin(a) * 960 * 0.75, angle: a + Math.PI / 2 });
   }
   const outerTypes = ["speed", "health", "rapid", "shield", "health", "bomb"];
-  const innerTypes = ["health", "speed", "shield", "rapid", "bomb", "health"];
+  const innerTypes = ["triple", "speed", "mine", "freeze", "bomb", "health"];
   const pickups = [];
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
@@ -194,6 +197,12 @@ export const MAPS = {
       { id: 9, x: 3400, y: 1900, type: "rapid" },
       { id: 10, x: 2600, y: 950, type: "bomb" },
       { id: 11, x: 2600, y: 1950, type: "bomb" },
+      { id: 12, x: 1800, y: 1900, type: "triple" },
+      { id: 13, x: 3400, y: 1000, type: "triple" },
+      { id: 14, x: 1100, y: 1450, type: "mine" },
+      { id: 15, x: 4100, y: 1450, type: "mine" },
+      { id: 16, x: 2600, y: 350, type: "freeze" },
+      { id: 17, x: 2600, y: 2550, type: "freeze" },
     ],
   },
 
@@ -236,6 +245,12 @@ export const MAPS = {
       { id: 9, x: 3200, y: 1450, type: "rapid" },
       { id: 10, x: 1300, y: 600, type: "bomb" },
       { id: 11, x: 3900, y: 2300, type: "bomb" },
+      { id: 12, x: 1300, y: 2300, type: "triple" },
+      { id: 13, x: 3900, y: 600, type: "triple" },
+      { id: 14, x: 2600, y: 500, type: "mine" },
+      { id: 15, x: 2600, y: 2400, type: "mine" },
+      { id: 16, x: 1700, y: 1450, type: "freeze" },
+      { id: 17, x: 3500, y: 1450, type: "freeze" },
     ],
   },
 
@@ -278,6 +293,12 @@ export const MAPS = {
       { id: 9, x: 3900, y: 2200, type: "speed" },
       { id: 10, x: 2000, y: 1900, type: "bomb" },
       { id: 11, x: 3200, y: 1000, type: "shield" },
+      { id: 12, x: 1300, y: 2200, type: "triple" },
+      { id: 13, x: 3900, y: 700, type: "triple" },
+      { id: 14, x: 1700, y: 1450, type: "mine" },
+      { id: 15, x: 3500, y: 1450, type: "mine" },
+      { id: 16, x: 2600, y: 400, type: "freeze" },
+      { id: 17, x: 2600, y: 2500, type: "freeze" },
     ],
   },
 
