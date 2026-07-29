@@ -16,6 +16,9 @@ export function useKart(roomId) {
   const boomsRef = useRef([]); // [{ x, y, at, consumed }] — bomb blasts to render
   const [status, setStatus] = useState("lobby");
   const [view, setView] = useState(null); // snapshot for lobby/ended UI
+  // Errors from guarded actions surface in the UI instead of being swallowed
+  // (a silent `{error}` ack looked exactly like "the button does nothing").
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     if (!roomId) return;
@@ -37,34 +40,49 @@ export function useKart(roomId) {
       if (boomsRef.current.length > 8) boomsRef.current.shift();
     };
 
+    const sync = () =>
+      socket.emit("kart:sync", { roomId }, (s) => {
+        if (!s) return;
+        snapRef.current = { prev: null, cur: s, at: performance.now() };
+        setStatus(s.status);
+        setView(s);
+      });
+
     socket.on("kart:state", onState);
     socket.on("kart:kill", onKill);
     socket.on("kart:boom", onBoom);
-    socket.emit("kart:sync", { roomId }, (s) => {
-      if (!s) return;
-      snapRef.current = { prev: null, cur: s, at: performance.now() };
-      setStatus(s.status);
-      setView(s);
-    });
+    // Re-sync after a reconnect too — the arena may have started/ended while
+    // we were disconnected (useRoomChat re-joins the socket room on connect).
+    socket.on("connect", sync);
+    sync();
 
     return () => {
       socket.off("kart:state", onState);
       socket.off("kart:kill", onKill);
       socket.off("kart:boom", onBoom);
+      socket.off("connect", sync);
     };
   }, [roomId]);
 
-  const join = useCallback(() => new Promise((r) => getSocket().emit("kart:join", { roomId }, r)), [roomId]);
-  const leave = useCallback(() => getSocket().emit("kart:leave", { roomId }), [roomId]);
-  const start = useCallback(
-    () =>
-      new Promise((r) =>
-        getSocket().emit("kart:start", { roomId }, (res) => {
-          if (res?.ok) getSocket().emit("room:announce", { roomId, activity: "kart" });
-          r(res);
+  const run = useCallback(
+    (event) =>
+      new Promise((resolve) =>
+        getSocket().emit(event, { roomId }, (res) => {
+          setError(res?.error || null);
+          resolve(res);
         })
       ),
     [roomId]
+  );
+  const join = useCallback(() => run("kart:join"), [run]);
+  const leave = useCallback(() => getSocket().emit("kart:leave", { roomId }), [roomId]);
+  const start = useCallback(
+    () =>
+      run("kart:start").then((res) => {
+        if (res?.ok) getSocket().emit("room:announce", { roomId, activity: "kart" });
+        return res;
+      }),
+    [run, roomId]
   );
   const reset = useCallback(() => getSocket().emit("kart:reset", { roomId }), [roomId]);
   const sendInput = useCallback((input) => getSocket().emit("kart:input", { roomId, input }), [roomId]);
@@ -76,5 +94,5 @@ export function useKart(roomId) {
   const joined = Boolean(view?.players?.some((p) => p.id === me?.id));
   const isHost = view?.hostId === me?.id;
 
-  return { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, join, leave, start, reset, sendInput, setConfig };
+  return { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig };
 }

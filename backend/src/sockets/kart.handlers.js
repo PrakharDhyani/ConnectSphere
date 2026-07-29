@@ -27,6 +27,21 @@ import { roomKey } from "./chat.handlers.js";
 const games = new Map(); // roomId -> game
 const MODES = new Set(["ffa", "tdm"]);
 
+// Attach a map to a game. Every map-derived field must be set HERE — the world
+// size included: a map swap that updated obstacles/spawns but kept the previous
+// map's w/h clamped karts outside the new arena (spawning them inside barriers,
+// unable to move).
+function applyMap(g, mapId) {
+  const map = getMap(mapId);
+  g.mapId = map.id;
+  g.map = map;
+  g.obstacles = map.obstacles;
+  g.spawns = map.spawns;
+  g.w = map.w;
+  g.h = map.h;
+  return map;
+}
+
 function newGame(hostId) {
   const map = getMap(DEFAULT_MAP);
   return {
@@ -225,12 +240,7 @@ export function registerKartHandlers(io, socket) {
   socket.on("kart:config", ({ roomId, mapId, mode } = {}) => {
     const g = games.get(roomId);
     if (!g || g.hostId !== uid || g.status === "playing") return;
-    if (mapId && MAPS[mapId]) {
-      g.mapId = mapId;
-      g.map = getMap(mapId);
-      g.obstacles = g.map.obstacles;
-      g.spawns = g.map.spawns;
-    }
+    if (mapId && MAPS[mapId]) applyMap(g, mapId);
     if (mode && MODES.has(mode)) g.mode = mode;
     broadcast(io, roomId);
   });
@@ -243,9 +253,7 @@ export function registerKartHandlers(io, socket) {
     if (g.status === "playing") return cb?.({ error: "Match already running" });
     if (g.players.size < 1) return cb?.({ error: "Need at least 1 kart" });
 
-    g.map = getMap(g.mapId);
-    g.obstacles = g.map.obstacles;
-    g.spawns = g.map.spawns;
+    applyMap(g, g.mapId);
 
     if (g.mode === "tdm") assignTeams(g);
     else for (const p of g.players.values()) p.team = null;

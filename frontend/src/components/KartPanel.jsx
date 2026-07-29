@@ -33,7 +33,7 @@ function HoldButton({ onHold, className, children, label }) {
 }
 
 export default function KartPanel({ roomId, onExit }) {
-  const { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, join, leave, start, reset, sendInput, setConfig } =
+  const { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig } =
     useKart(roomId);
 
   // ── Shared input pipeline (keyboard + touch) ──
@@ -178,6 +178,7 @@ export default function KartPanel({ roomId, onExit }) {
             </button>
           )}
         </div>
+        {error && <p className="text-sm text-red-400 mt-3">{error}</p>}
         {!isHost && joined && <p className="text-xs text-gray-500 mt-3">Waiting for the host to start…</p>}
         <p className="text-xs text-gray-600 mt-4"><b>WASD / arrows</b> drive, <b>Space</b> shoot — or the on-screen pad on touch.</p>
       </div>

@@ -1515,6 +1515,41 @@ First real playtest feedback drove a big balance/visual pass:
 - **Nitro boost VFX:** the speed pickup now shows flickering additive blue
   exhaust flames, a cyan trail, and an extra chase-cam FOV kick.
 
+### The "Join arena button does nothing" bug — two real defects
+Reported after the scale-up; the button looked dead. Debugged by driving the
+**real server with a socket script** rather than reading code: `kart:join`
+returned `{ok:true}` on a fresh connection, which cleared the server and
+pointed at the client. The Vite log then showed the actual trigger —
+`ECONNREFUSED` on `/socket.io` when nodemon restarted the backend.
+
+1. **Room membership was never restored after a reconnect.** `useRoomChat`
+   did `socket.once("connect", join)`. Socket.io auto-reconnects with a
+   **brand-new server-side socket whose `rooms` set is empty**, but `once`
+   (already consumed, or never registered when the socket was connected at
+   mount) meant `room:join` never fired again. Every guarded event — kart
+   join/start, chat send, ludo, skribbl — then failed `socket.rooms.has(...)`
+   and returned `{error:"Not allowed"}`, while the UI still looked connected.
+   Fix: `socket.on("connect", join)` (+ `off` on cleanup) so membership is
+   re-established on *every* connect; `useKart` re-`sync`s on connect too.
+   **This would have hit real users on any network blip or redeploy — not
+   just dev restarts.**
+2. **A map swap didn't update the world size.** `kart:config`/`kart:start`
+   refreshed `obstacles`/`spawns` but left `g.w`/`g.h` at the previous map's
+   values, so picking Circuit (7600×4800) kept Speedway's 5200×2900 clamp:
+   karts spawned outside the bounds, got clamped back *inside a barrier
+   capsule*, and genuinely could not move. Fix: one `applyMap(g, mapId)`
+   helper that sets every map-derived field, used by both handlers — the
+   classic "parallel assignments drift apart" bug, cured by centralising them.
+
+**Also:** the panel now renders the ack's `error` instead of swallowing it —
+a silent `{error}` ack is indistinguishable from a dead button.
+
+**Interview takeaway:** "the button does nothing" was never a button problem.
+Reproducing against the live server split client from server in one step, and
+the dev-server log held the trigger. The deeper lesson is that *reconnect is a
+state transition your app must handle* — anything the server stores per-socket
+(room membership, subscriptions) has to be re-established on every connect.
+
 ---
 
 ## Current Status / Next Steps
