@@ -214,14 +214,26 @@ export function botInput(g, bot, now) {
   let throttle = tune.throttle * (1 - 0.55 * turnPenalty);
 
   // ── Shoot when lined up, in range, and with a clear line ──
+  // Weapon choice changes the engagement envelope: a shotgun is only worth
+  // firing up close, a homing missile barely needs aiming at all.
   let shoot = false;
   if (foe && target.kind === "enemy") {
     const dist = target.dist ?? Math.hypot(foe.x - bot.x, foe.y - bot.y);
-    if (dist < tune.range && Math.abs(angleDiff(bot.angle, desired)) < tune.aimTolerance) {
+    let range = tune.range;
+    let tolerance = tune.aimTolerance;
+    switch (bot.weapon?.kind) {
+      case "shotgun": range = Math.min(range, 380); tolerance += 0.16; break;
+      case "laser": range = Math.max(range, 1400); tolerance *= 0.8; break;
+      case "homing": range = Math.max(range, 1600); tolerance += 0.5; break;
+      default: break;
+    }
+    if (dist < range && Math.abs(angleDiff(bot.angle, desired)) < tolerance) {
       shoot = !lineBlocked(g, bot, { x: foe.x, y: foe.y });
     }
+    // Spike armour turns ramming into a weapon — charge instead of backing off.
+    if (bot.spikesUntil && Date.now() < bot.spikesUntil && dist < 300) throttle = tune.throttle;
     // Don't ram a bomb carrier — back off while its fuse burns.
-    if (foe.bombAt && dist < 260) throttle = -0.6;
+    else if (foe.bombAt && dist < 260) throttle = -0.6;
   }
 
   return {

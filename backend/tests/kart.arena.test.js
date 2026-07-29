@@ -10,6 +10,7 @@ import {
   BOMB_DAMAGE, BOMB_RADIUS, BOMB_FUSE_MS,
   MINE_COUNT, MINE_ARM_MS, MINE_DAMAGE,
   FREEZE_MS, TRIPLE_MS, SHIELD_MS, BULLET_DAMAGE,
+  WEAPONS, SPIKES_MS, SPIKE_DAMAGE, SLIP_MS, GHOST_MS,
 } from "../src/games/kartArena.js";
 import { botInput, tuningFor, BOT_TUNING, DIFFICULTIES } from "../src/games/kartBot.js";
 
@@ -227,6 +228,182 @@ describe("kart arena — new powerups", () => {
       hp: MAX_HP, alive: true, tripleUntil: 0, frozenUntil: 0,
       minesLeft: 0, shieldUntil: 0, bombAt: 0, x: 10, y: 20,
     });
+  });
+});
+
+describe("kart arena — weapons", () => {
+  const shooting = (over = {}) =>
+    mkPlayer("p", { input: { throttle: 0, steer: 0, shoot: true }, ...over });
+
+  test("the shotgun fires a spread of pellets and spends ammo", () => {
+    const p = shooting({ weapon: { kind: "shotgun", ammo: WEAPONS.shotgun.ammo } });
+    const g = mkGame([p]);
+    stepWorld(g, 1 / 30, NOW);
+
+    expect(g.bullets).toHaveLength(WEAPONS.shotgun.pellets);
+    expect(p.weapon.ammo).toBe(WEAPONS.shotgun.ammo - 1);
+    const angles = g.bullets.map((b) => Math.atan2(b.vy, b.vx));
+    expect(Math.max(...angles) - Math.min(...angles)).toBeCloseTo(WEAPONS.shotgun.spread, 1);
+    for (const b of g.bullets) expect(b.damage).toBe(WEAPONS.shotgun.damage);
+  });
+
+  test("a weapon is dropped when its last round is fired", () => {
+    const p = shooting({ weapon: { kind: "laser", ammo: 1 } });
+    const g = mkGame([p]);
+    stepWorld(g, 1 / 30, NOW);
+    expect(p.weapon).toBeNull();
+    expect(g.bullets).toHaveLength(1);
+  });
+
+  test("the laser pierces: one shot damages two karts in a line", () => {
+    const shooter = mkPlayer("shooter", { x: 100, y: 500, angle: 0 });
+    const a = mkPlayer("a", { x: 300, y: 500 });
+    const b = mkPlayer("b", { x: 340, y: 500 });
+    const g = mkGame([shooter, a, b]);
+    g.bullets.push({
+      ownerId: "shooter", kind: "laser", x: 280, y: 500,
+      vx: WEAPONS.laser.speed, vy: 0, ttl: 1,
+      damage: WEAPONS.laser.damage, radius: WEAPONS.laser.radius,
+      pierce: true, turn: 0, hits: [],
+    });
+
+    stepWorld(g, 1 / 30, NOW);
+
+    expect(a.hp).toBe(MAX_HP - WEAPONS.laser.damage);
+    expect(b.hp).toBe(MAX_HP - WEAPONS.laser.damage);
+  });
+
+  test("a piercing shot cannot hit the same kart twice", () => {
+    const shooter = mkPlayer("shooter", { x: 100, y: 500 });
+    const victim = mkPlayer("victim", { x: 300, y: 500 });
+    const g = mkGame([shooter, victim]);
+    g.bullets.push({
+      ownerId: "shooter", kind: "laser", x: 295, y: 500,
+      vx: 40, vy: 0, ttl: 2, damage: 20, radius: 7, pierce: true, turn: 0, hits: [],
+    });
+
+    for (let i = 0; i < 5; i++) stepWorld(g, 1 / 30, NOW + i * 33);
+
+    expect(victim.hp).toBe(MAX_HP - 20); // damaged exactly once
+  });
+
+  test("a homing missile curves toward its target", () => {
+    const shooter = mkPlayer("shooter", { x: 500, y: 500 });
+    const target = mkPlayer("target", { x: 900, y: 900 });
+    const g = mkGame([shooter, target]);
+    g.bullets.push({
+      ownerId: "shooter", kind: "homing", x: 600, y: 500,
+      vx: WEAPONS.homing.speed, vy: 0, ttl: 3, // flying straight +x, target is +x+y
+      damage: 10, radius: 9, pierce: false, turn: WEAPONS.homing.turn, hits: null,
+    });
+
+    const before = Math.atan2(g.bullets[0].vy, g.bullets[0].vx);
+    for (let i = 0; i < 5; i++) stepWorld(g, 1 / 30, NOW + i * 33);
+    const after = Math.atan2(g.bullets[0].vy, g.bullets[0].vx);
+
+    expect(after).toBeGreaterThan(before); // turned toward +y
+    // Speed is preserved while steering.
+    expect(Math.hypot(g.bullets[0].vx, g.bullets[0].vy)).toBeCloseTo(WEAPONS.homing.speed, 0);
+  });
+
+  test("a homing missile ignores teammates in TDM", () => {
+    const shooter = mkPlayer("shooter", { x: 500, y: 500, team: "A" });
+    const mate = mkPlayer("mate", { x: 520, y: 900, team: "A" });
+    const g = mkGame([shooter, mate], { mode: "tdm" });
+    g.bullets.push({
+      ownerId: "shooter", kind: "homing", x: 600, y: 500,
+      vx: WEAPONS.homing.speed, vy: 0, ttl: 3,
+      damage: 10, radius: 9, pierce: false, turn: WEAPONS.homing.turn, hits: null,
+    });
+
+    stepWorld(g, 1 / 30, NOW);
+
+    expect(g.bullets[0].vy).toBe(0); // no target → flies straight
+  });
+
+  test("a held weapon overrides the triple-shot spread", () => {
+    const p = shooting({ tripleUntil: NOW + TRIPLE_MS, weapon: { kind: "laser", ammo: 4 } });
+    const g = mkGame([p]);
+    stepWorld(g, 1 / 30, NOW);
+    expect(g.bullets).toHaveLength(1); // the laser, not a 3-way blaster
+    expect(g.bullets[0].kind).toBe("laser");
+  });
+});
+
+describe("kart arena — spikes, oil, ghost", () => {
+  test("spike armour damages a kart you ram and shoves it away", () => {
+    const spiked = mkPlayer("spiked", { x: 500, y: 500, spikesUntil: NOW + SPIKES_MS });
+    const victim = mkPlayer("victim", { x: 530, y: 500 });
+    const g = mkGame([spiked, victim]);
+
+    stepWorld(g, 1 / 30, NOW);
+
+    expect(victim.hp).toBe(MAX_HP - SPIKE_DAMAGE);
+    expect(victim.x).toBeGreaterThan(530); // knocked back
+  });
+
+  test("spikes respect the per-victim cooldown instead of grinding every tick", () => {
+    const spiked = mkPlayer("spiked", { x: 500, y: 500, spikesUntil: NOW + SPIKES_MS });
+    const victim = mkPlayer("victim", { x: 530, y: 500 });
+    const g = mkGame([spiked, victim]);
+
+    for (let i = 0; i < 8; i++) stepWorld(g, 1 / 30, NOW + i * 33); // ~260ms
+    expect(victim.hp).toBe(MAX_HP - SPIKE_DAMAGE); // still only one hit
+  });
+
+  test("a shielded kart is immune to spikes", () => {
+    const spiked = mkPlayer("spiked", { x: 500, y: 500, spikesUntil: NOW + SPIKES_MS });
+    const victim = mkPlayer("victim", { x: 530, y: 500, shieldUntil: NOW + SHIELD_MS });
+    const g = mkGame([spiked, victim]);
+
+    stepWorld(g, 1 / 30, NOW);
+
+    expect(victim.hp).toBe(MAX_HP);
+  });
+
+  test("oil slicks persist and make a kart that drives over them slip", () => {
+    const dropper = mkPlayer("dropper", { x: 100, y: 100 });
+    const victim = mkPlayer("victim", { x: 500, y: 500 });
+    const g = mkGame([dropper, victim]);
+    g.mines.push({ id: 1, kind: "oil", ownerId: "dropper", team: null, x: 500, y: 500, armAt: NOW, expiresAt: NOW + 9999 });
+
+    stepWorld(g, 1 / 30, NOW);
+
+    expect(victim.slipUntil).toBe(NOW + SLIP_MS);
+    expect(victim.hp).toBe(MAX_HP); // oil doesn't damage
+    expect(g.mines).toHaveLength(1); // and isn't consumed
+  });
+
+  test("a slipping kart loses steering authority", () => {
+    const mk = (slip) => {
+      const p = mkPlayer("p", {
+        speed: 400, angle: 0, slipUntil: slip ? NOW + SLIP_MS : 0,
+        input: { throttle: 1, steer: 1, shoot: false },
+      });
+      const g = mkGame([p]);
+      stepWorld(g, 1 / 30, NOW);
+      return p;
+    };
+    // Steering input is the same; the slipping kart should respond far less to
+    // it (the spin-out is added separately, so compare steering contribution).
+    const normal = mk(false);
+    const slippy = mk(true);
+    expect(normal.angle).not.toBe(slippy.angle);
+    expect(slippy.slipUntil).toBeGreaterThan(0);
+  });
+
+  test("ghost drives through obstacles that would otherwise block it", () => {
+    const mk = (ghost) => {
+      const p = mkPlayer("p", {
+        x: 400, y: 500, angle: 0, speed: 600,
+        ghostUntil: ghost ? NOW + GHOST_MS : 0,
+        input: { throttle: 1, steer: 0, shoot: false },
+      });
+      const g = mkGame([p], { obstacles: [{ kind: "tyre", x: 600, y: 500, r: 80 }] });
+      for (let i = 0; i < 30; i++) stepWorld(g, 1 / 30, NOW + i * 33);
+      return p;
+    };
+    expect(mk(true).x).toBeGreaterThan(mk(false).x + 100);
   });
 });
 

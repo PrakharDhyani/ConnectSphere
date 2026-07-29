@@ -145,16 +145,25 @@ function snapshot(g, now = Date.now()) {
         bomb: p.bombAt ? Math.max(0, p.bombAt - now) : 0,
         triple: now < p.tripleUntil,
         frozen: now < p.frozenUntil,
+        spikes: now < p.spikesUntil,
+        ghost: now < p.ghostUntil,
+        slip: now < p.slipUntil,
+        weapon: p.weapon ? p.weapon.kind : null,
+        ammo: p.weapon ? p.weapon.ammo : 0,
         isBot: p.isBot,
         difficulty: p.difficulty,
       }))
       .sort((a, b) => b.kills - a.kills),
-    bullets: g.bullets.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y) })),
+    bullets: g.bullets.map((b) => ({
+      x: Math.round(b.x), y: Math.round(b.y),
+      k: b.kind || "blaster",
+      a: Number(Math.atan2(b.vy, b.vx).toFixed(2)), // lets the client orient tracers
+    })),
     // Mines are visible to everyone (one shared snapshot per room — hiding them
     // per-viewer would mean a per-socket snapshot at 15 Hz). They work as area
     // denial rather than a hidden trap, and the client dims enemy ones.
     mines: (g.mines || []).map((m) => ({
-      id: m.id, x: Math.round(m.x), y: Math.round(m.y),
+      id: m.id, x: Math.round(m.x), y: Math.round(m.y), kind: m.kind || "mine",
       ownerId: m.ownerId, team: m.team, armed: now >= m.armAt,
     })),
     pickups: g.pickups.map((p) => ({ id: p.id, x: p.x, y: p.y, type: p.type, active: p.active })),

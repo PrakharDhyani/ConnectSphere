@@ -50,7 +50,23 @@ const PICKUP_META = {
   triple: { color: 0xa855f7, emoji: "🔱" },
   freeze: { color: 0x7dd3fc, emoji: "❄️" },
   mine: { color: 0xfbbf24, emoji: "🧨" },
+  shotgun: { color: 0xf59e0b, emoji: "🔫" },
+  laser: { color: 0xf43f5e, emoji: "🔺" },
+  homing: { color: 0x84cc16, emoji: "🚀" },
+  spikes: { color: 0x94a3b8, emoji: "⚙️" },
+  oil: { color: 0x1f2937, emoji: "🛢️" },
+  ghost: { color: 0xe0e7ff, emoji: "👻" },
 };
+
+// Bullet look per weapon: [color, length multiplier, radius].
+const BULLET_STYLE = {
+  blaster: { color: 0xffe08a, halo: 0xffb84d, len: 1, r: 8 },
+  shotgun: { color: 0xfcd34d, halo: 0xf59e0b, len: 0.7, r: 5 },
+  laser: { color: 0xff4d6d, halo: 0xf43f5e, len: 5, r: 6 },
+  homing: { color: 0xbef264, halo: 0x84cc16, len: 1.8, r: 9 },
+};
+
+const WEAPON_LABEL = { shotgun: "🔫 Shotgun", laser: "🔺 Laser", homing: "🚀 Homing" };
 
 const fmtTime = (ms) => {
   const s = Math.max(0, Math.ceil(ms / 1000));
@@ -1098,8 +1114,10 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     }
 
     // ── Reusable kart model ──
-    const sharedWheelGeo = new THREE.CylinderGeometry(9, 9, 8, 18);
-    const sharedHubGeo = new THREE.CylinderGeometry(4.5, 4.5, 8.6, 12);
+    const sharedWheelGeo = new THREE.CylinderGeometry(10, 10, 9, 20);
+    const sharedRearTyreGeo = new THREE.CylinderGeometry(12, 12, 12, 20); // fat rears
+    const sharedHubGeo = new THREE.CylinderGeometry(5, 5, 12.4, 12);
+    const sharedSpokeGeo = new THREE.BoxGeometry(1.8, 12.6, 14);
     function makeKart(colorInt) {
       const g = new THREE.Group();
       const chassis = new THREE.Group(); // everything that leans in corners
@@ -1110,38 +1128,107 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       bodyMat.emissiveIntensity = 0;
       const darkMat = new THREE.MeshStandardMaterial({ color: 0x1a2030, roughness: 0.6, metalness: 0.3 });
 
-      const body = new THREE.Mesh(new THREE.BoxGeometry(52, 14, 30), bodyMat);
-      body.position.y = 13; body.castShadow = true; chassis.add(body);
-      const hood = new THREE.Mesh(new THREE.BoxGeometry(20, 8, 26), bodyMat);
-      hood.position.set(26, 15, 0); hood.rotation.z = -0.16; hood.castShadow = true; chassis.add(hood);
-      const nose = new THREE.Mesh(new THREE.BoxGeometry(14, 9, 22), bodyMat);
-      nose.position.set(34, 11, 0); nose.castShadow = true; chassis.add(nose);
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(48, 1.6, 8),
-        new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.4 }));
-      stripe.position.set(0, 20.6, 0); chassis.add(stripe);
+      const trimMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.3, metalness: 0.6 });
+      const chromeMat = new THREE.MeshStandardMaterial({ color: 0xb8c2d0, roughness: 0.15, metalness: 0.95 });
+
+      // Main tub — a rounded, tapered body instead of a plain box. Lathe/sphere
+      // primitives are still cheap but read as bodywork rather than a crate.
+      const tub = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), bodyMat);
+      tub.scale.set(30, 11, 17);
+      tub.position.set(-2, 15, 0);
+      tub.castShadow = true;
+      chassis.add(tub);
+
+      // Sculpted nose cone.
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(11, 26, 14), bodyMat);
+      nose.rotation.z = -Math.PI / 2;
+      nose.position.set(36, 13, 0);
+      nose.scale.set(1, 1, 0.72);
+      nose.castShadow = true;
+      chassis.add(nose);
+      const splitter = new THREE.Mesh(new THREE.BoxGeometry(14, 2.2, 30), darkMat);
+      splitter.position.set(34, 6, 0);
+      chassis.add(splitter);
+
+      // Side pods with chrome intakes.
       for (const side of [-1, 1]) {
-        const skirt = new THREE.Mesh(new THREE.BoxGeometry(26, 6, 4), darkMat);
-        skirt.position.set(0, 8, side * 16);
-        chassis.add(skirt);
+        const pod = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), bodyMat);
+        pod.scale.set(15, 7, 6);
+        pod.position.set(2, 12, side * 17);
+        pod.castShadow = true;
+        chassis.add(pod);
+        const intake = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 4.6, 4, 12), chromeMat);
+        intake.rotation.x = Math.PI / 2;
+        intake.position.set(14, 13, side * 17);
+        chassis.add(intake);
       }
-      const spoiler = new THREE.Mesh(new THREE.BoxGeometry(5, 13, 30), bodyMat);
-      spoiler.position.set(-27, 22, 0); spoiler.castShadow = true; chassis.add(spoiler);
-      const spoilerTop = new THREE.Mesh(new THREE.BoxGeometry(14, 3, 34), bodyMat);
-      spoilerTop.position.set(-27, 29, 0); chassis.add(spoilerTop);
 
-      const cabin = new THREE.Mesh(new THREE.BoxGeometry(18, 12, 22),
-        new THREE.MeshStandardMaterial({ color: 0x0b1220, roughness: 0.15, metalness: 0.4 }));
-      cabin.position.set(-3, 24, 0); cabin.castShadow = true; chassis.add(cabin);
-      const helmet = new THREE.Mesh(new THREE.SphereGeometry(6.4, 14, 14),
-        new THREE.MeshStandardMaterial({ color: colorInt, roughness: 0.25, metalness: 0.35 }));
-      helmet.position.set(-3, 33, 0); helmet.castShadow = true; chassis.add(helmet);
-      const visor = new THREE.Mesh(new THREE.BoxGeometry(3, 3.6, 8),
-        new THREE.MeshStandardMaterial({ color: 0x0b1220, roughness: 0.1, metalness: 0.6 }));
-      visor.position.set(2.6, 33, 0); chassis.add(visor);
+      // Racing stripe over the spine.
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(46, 1.4, 7), trimMat);
+      stripe.position.set(-2, 25.4, 0);
+      chassis.add(stripe);
 
-      const cannon = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.8, 24, 10),
-        new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.7, roughness: 0.25 }));
-      cannon.rotation.z = Math.PI / 2; cannon.position.set(32, 15, 0); chassis.add(cannon);
+      // Roll cage hoop behind the driver.
+      const cage = new THREE.Mesh(new THREE.TorusGeometry(11, 1.8, 8, 18, Math.PI), chromeMat);
+      cage.position.set(-13, 26, 0);
+      cage.rotation.y = Math.PI / 2;
+      cage.castShadow = true;
+      chassis.add(cage);
+
+      // Rear wing on twin pylons.
+      for (const side of [-1, 1]) {
+        const pylon = new THREE.Mesh(new THREE.BoxGeometry(3, 13, 2.4), darkMat);
+        pylon.position.set(-28, 23, side * 9);
+        chassis.add(pylon);
+      }
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(11, 2.4, 36), bodyMat);
+      wing.position.set(-29, 30, 0);
+      wing.rotation.z = 0.18;
+      wing.castShadow = true;
+      chassis.add(wing);
+      const wingLip = new THREE.Mesh(new THREE.BoxGeometry(3, 4, 36), trimMat);
+      wingLip.position.set(-33, 31.5, 0);
+      chassis.add(wingLip);
+
+      // Cockpit: a dark recessed tub + seat + driver.
+      const cockpit = new THREE.Mesh(new THREE.CylinderGeometry(9, 8, 5, 14),
+        new THREE.MeshStandardMaterial({ color: 0x0b1220, roughness: 0.5 }));
+      cockpit.position.set(-4, 22, 0);
+      chassis.add(cockpit);
+      const torso = new THREE.Mesh(new THREE.CapsuleGeometry(4.6, 5, 6, 10),
+        new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 }));
+      torso.position.set(-6, 27, 0);
+      chassis.add(torso);
+      const helmet = new THREE.Mesh(new THREE.SphereGeometry(6.2, 16, 16),
+        new THREE.MeshStandardMaterial({ color: colorInt, roughness: 0.2, metalness: 0.45 }));
+      helmet.position.set(-4, 34, 0);
+      helmet.castShadow = true;
+      chassis.add(helmet);
+      const visor = new THREE.Mesh(new THREE.SphereGeometry(6.3, 16, 10, 0, Math.PI * 2, 0.9, 0.7),
+        new THREE.MeshStandardMaterial({ color: 0x0b1220, roughness: 0.05, metalness: 0.8 }));
+      visor.position.set(-4, 34, 0);
+      visor.rotation.z = -0.35;
+      chassis.add(visor);
+      // Steering wheel — small, but it sells the cockpit.
+      const wheelRim = new THREE.Mesh(new THREE.TorusGeometry(3.4, 0.7, 6, 12), darkMat);
+      wheelRim.position.set(2, 27, 0);
+      wheelRim.rotation.y = Math.PI / 2;
+      wheelRim.rotation.x = 0.5;
+      chassis.add(wheelRim);
+
+      // Roof-mounted cannon on a rotating-looking mount.
+      const mount = new THREE.Mesh(new THREE.CylinderGeometry(5, 6, 4, 10), darkMat);
+      mount.position.set(12, 24, 0);
+      chassis.add(mount);
+      const cannon = new THREE.Mesh(new THREE.CylinderGeometry(2.8, 3.6, 26, 12), chromeMat);
+      cannon.rotation.z = Math.PI / 2;
+      cannon.position.set(26, 25, 0);
+      cannon.castShadow = true;
+      chassis.add(cannon);
+      const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(4, 3.2, 5, 12), darkMat);
+      muzzle.rotation.z = Math.PI / 2;
+      muzzle.position.set(40, 25, 0);
+      chassis.add(muzzle);
       // Nitro flames — additive blue cones out of the exhausts, visible while
       // the speed powerup is active (flicker + trail driven per-frame).
       const flames = [];
@@ -1177,27 +1264,38 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         chassis.add(tail);
       }
 
-      // Wheels — front pair sits in pivot groups so it can visibly steer;
-      // all four spin with road speed.
-      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0d1018, roughness: 0.85 });
-      const hubMat = new THREE.MeshStandardMaterial({ color: 0x8a94a8, metalness: 0.7, roughness: 0.3 });
+      // Wheels — chunky treaded tyres with spoked hubs. The front pair sits in
+      // pivot groups so it can visibly steer; all four spin with road speed.
+      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.9 });
+      const hubMat = new THREE.MeshStandardMaterial({ color: 0xa8b3c5, metalness: 0.85, roughness: 0.25 });
       const wheels = [];
       const frontPivots = [];
-      for (const [x, z] of [[-19, -17], [19, -17], [-19, 17], [19, 17]]) {
-        const wh = new THREE.Mesh(sharedWheelGeo, wheelMat);
-        wh.rotation.x = Math.PI / 2;
-        wh.castShadow = true;
+      for (const [x, z] of [[-20, -18], [20, -18], [-20, 18], [20, 18]]) {
+        const rear = x < 0;
+        const wh = new THREE.Group();
+        const tyre = new THREE.Mesh(rear ? sharedRearTyreGeo : sharedWheelGeo, wheelMat);
+        tyre.rotation.x = Math.PI / 2;
+        tyre.castShadow = true;
+        wh.add(tyre);
         const hub = new THREE.Mesh(sharedHubGeo, hubMat);
+        hub.rotation.x = Math.PI / 2;
         wh.add(hub);
+        // Spokes give the wheels visible rotation instead of a smooth blur.
+        for (let s = 0; s < 4; s++) {
+          const spoke = new THREE.Mesh(sharedSpokeGeo, hubMat);
+          spoke.rotation.x = Math.PI / 2;
+          spoke.rotation.y = (s / 4) * Math.PI;
+          wh.add(spoke);
+        }
         wheels.push(wh);
         if (x > 0) {
           const pivot = new THREE.Group();
-          pivot.position.set(x, 9, z);
+          pivot.position.set(x, rear ? 11 : 10, z);
           pivot.add(wh);
           chassis.add(pivot);
           frontPivots.push(pivot);
         } else {
-          wh.position.set(x, 9, z);
+          wh.position.set(x, 11, z);
           chassis.add(wh);
         }
       }
@@ -1216,6 +1314,22 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       );
       shield.position.y = 16; shield.visible = false; g.add(shield);
 
+      // Spike armour — a ring of cones that only appears with the powerup.
+      const spikeRing = new THREE.Group();
+      const spikeMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.9, roughness: 0.25 });
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        const spike = new THREE.Mesh(new THREE.ConeGeometry(3.4, 15, 6), spikeMat);
+        spike.position.set(Math.cos(a) * 34, 12, Math.sin(a) * 34);
+        // Point each cone outward, lying flat.
+        spike.rotation.z = -Math.PI / 2;
+        spike.rotation.y = -a;
+        spike.castShadow = true;
+        spikeRing.add(spike);
+      }
+      spikeRing.visible = false;
+      g.add(spikeRing);
+
       // Team ring under the kart (TDM).
       const teamRing = new THREE.Mesh(
         new THREE.RingGeometry(26, 34, 24),
@@ -1223,7 +1337,17 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       );
       teamRing.rotation.x = -Math.PI / 2; teamRing.position.y = 2; teamRing.visible = false; g.add(teamRing);
 
-      return { group: g, chassis, bodyMat, lampMats, wheels, frontPivots, flames, aura, shield, teamRing, spin: 0, steerVis: 0, dustAt: 0, nitroAt: 0 };
+      // Every material that should fade out while ghosting.
+      const fadeMats = [];
+      g.traverse((o) => {
+        if (o.isMesh && o.material && !fadeMats.includes(o.material)) fadeMats.push(o.material);
+      });
+
+      return {
+        group: g, chassis, bodyMat, lampMats, wheels, frontPivots, flames,
+        aura, shield, teamRing, spikeRing, fadeMats,
+        spin: 0, steerVis: 0, dustAt: 0, nitroAt: 0,
+      };
     }
 
     function makeSprite(w2, h2, scaleX, scaleY, y) {
@@ -1273,20 +1397,26 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     const karts = new Map();
     const pickupMeshes = new Map();
 
-    // Bullets: bright core + additive halo → bloom turns them into tracers.
+    // Bullets: a stretched core + additive halo → bloom turns them into
+    // tracers. One pooled mesh serves every weapon; the style table decides
+    // colour and how far it stretches along its flight direction.
     const bulletPool = [];
-    const bulletGeo = new THREE.SphereGeometry(8, 10, 10);
-    const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffe08a, toneMapped: false });
+    const bulletGeo = new THREE.SphereGeometry(1, 10, 10);
     function getBullet(i) {
       while (bulletPool.length <= i) {
-        const b = new THREE.Mesh(bulletGeo, bulletMat);
+        const mesh = new THREE.Mesh(
+          bulletGeo,
+          new THREE.MeshBasicMaterial({ color: 0xffe08a, toneMapped: false })
+        );
         const halo = new THREE.Sprite(new THREE.SpriteMaterial({
           map: glowTex, color: 0xffb84d, transparent: true, opacity: 0.8,
           blending: THREE.AdditiveBlending, depthWrite: false,
         }));
         halo.scale.set(36, 36, 1);
-        b.add(halo);
-        b.visible = false; scene.add(b); bulletPool.push(b);
+        mesh.add(halo);
+        mesh.visible = false;
+        scene.add(mesh);
+        bulletPool.push({ mesh, halo });
       }
       return bulletPool[i];
     }
@@ -1295,6 +1425,7 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     const minePool = [];
     const mineDiscGeo = new THREE.CylinderGeometry(17, 20, 8, 10);
     const mineCoreGeo = new THREE.SphereGeometry(5.5, 8, 8);
+    const oilGeo = new THREE.CircleGeometry(48, 20);
     function getMine(i) {
       while (minePool.length <= i) {
         const g = new THREE.Group();
@@ -1309,10 +1440,21 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           new THREE.MeshBasicMaterial({ color: 0xff3b30, toneMapped: false })
         );
         core.position.y = 11;
-        g.add(disc, core);
+        // Oil slick: a dark iridescent puddle lying on the ground.
+        const slick = new THREE.Mesh(
+          oilGeo,
+          new THREE.MeshStandardMaterial({
+            color: 0x0b0f16, roughness: 0.05, metalness: 0.9,
+            transparent: true, opacity: 0.88,
+          })
+        );
+        slick.rotation.x = -Math.PI / 2;
+        slick.position.y = 1.2;
+        slick.visible = false;
+        g.add(disc, core, slick);
         g.visible = false;
         scene.add(g);
-        minePool.push({ group: g, core });
+        minePool.push({ group: g, disc, core, slick });
       }
       return minePool[i];
     }
@@ -1345,6 +1487,12 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         : pad.type === "triple" ? new THREE.TorusKnotGeometry(13, 4.5, 48, 8)
         : pad.type === "freeze" ? new THREE.OctahedronGeometry(21, 0)
         : pad.type === "mine" ? new THREE.CylinderGeometry(18, 20, 16, 8)
+        : pad.type === "shotgun" ? new THREE.CylinderGeometry(7, 11, 34, 8)
+        : pad.type === "laser" ? new THREE.ConeGeometry(14, 34, 3)
+        : pad.type === "homing" ? new THREE.CapsuleGeometry(9, 16, 6, 12)
+        : pad.type === "spikes" ? new THREE.TorusGeometry(15, 5, 8, 12)
+        : pad.type === "oil" ? new THREE.CylinderGeometry(13, 15, 24, 12)
+        : pad.type === "ghost" ? new THREE.SphereGeometry(18, 14, 12)
         : new THREE.OctahedronGeometry(22);
       const mat = new THREE.MeshStandardMaterial({ color: meta.color, emissive: meta.color, emissiveIntensity: 0.9, roughness: 0.3, metalness: 0.3, transparent: true });
       const mesh = new THREE.Mesh(geo, mat);
@@ -1456,10 +1604,12 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           const dAng = angleDelta(k.lastAngle ?? angle, angle);
           k.lastX = x; k.lastZ = z; k.lastAngle = angle;
 
-          k.spin += (sSigned / 9) * fdt;
+          // Wheels roll about their axle (local Z once the tyre is laid flat),
+          // NOT about Y — that would just yaw them like a steering input.
+          k.spin += (sSigned / 11) * fdt;
           const steerTarget = clamp((dAng / Math.max(fdt, 1e-3)) / 4.1, -1, 1);
           k.steerVis += (steerTarget - k.steerVis) * Math.min(1, fdt * 10);
-          for (const wh of k.wheels) wh.rotation.y = k.spin;
+          for (const wh of k.wheels) wh.rotation.z = -k.spin;
           for (const piv of k.frontPivots) piv.rotation.y = -k.steerVis * 0.4;
           k.chassis.rotation.x = k.steerVis * Math.min(1, Math.abs(sSigned) / 520) * 0.2;
 
@@ -1538,6 +1688,29 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
             k.aura.rotation.z += fdt * 4;
             k.aura.material.opacity = 0.6 + 0.3 * Math.sin(now * 0.01);
           }
+          // Spike armour spins menacingly while active.
+          k.spikeRing.visible = p.alive && p.spikes;
+          if (k.spikeRing.visible) k.spikeRing.rotation.y += fdt * 2.2;
+
+          // Ghost: fade the whole kart out (your own stays readable enough to
+          // drive, everyone else nearly vanishes).
+          const ghosting = p.alive && p.ghost;
+          const targetOpacity = ghosting ? (p.id === myId ? 0.42 : 0.13) : 1;
+          if (k.ghostOpacity !== targetOpacity) {
+            k.ghostOpacity = targetOpacity;
+            for (const m of k.fadeMats) {
+              m.transparent = targetOpacity < 1;
+              m.opacity = targetOpacity;
+              m.depthWrite = targetOpacity >= 1;
+            }
+          }
+
+          // Spinning out on oil throws up smoke.
+          if (p.alive && p.slip && now - k.dustAt > 40) {
+            k.dustAt = now;
+            spawnDust(x, z, 0x64748b);
+          }
+
           k.shield.visible = p.alive && p.shield;
           k.teamRing.visible = p.alive && tdm && !!p.team;
           if (k.teamRing.visible) k.teamRing.material.color.setHex(TEAM_INT[p.team] ?? 0xffffff);
@@ -1552,26 +1725,41 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           if (!seen.has(id)) { scene.remove(k.group); karts.delete(id); }
         }
 
-        // Bullets.
+        // Bullets — stretched along their heading, styled per weapon.
         const bullets = cur.bullets || [];
         for (let i = 0; i < bullets.length; i++) {
-          const b = getBullet(i);
-          b.position.set(bullets[i].x, 16, bullets[i].y);
-          b.visible = true;
+          const b = bullets[i];
+          const st = BULLET_STYLE[b.k] || BULLET_STYLE.blaster;
+          const { mesh, halo } = getBullet(i);
+          mesh.position.set(b.x, 16, b.y);
+          mesh.rotation.y = -(b.a ?? 0);
+          mesh.scale.set(st.r * st.len, st.r, st.r);
+          mesh.material.color.setHex(st.color);
+          halo.material.color.setHex(st.halo);
+          halo.scale.setScalar(st.r * 5);
+          mesh.visible = true;
         }
-        for (let i = bullets.length; i < bulletPool.length; i++) bulletPool[i].visible = false;
+        for (let i = bullets.length; i < bulletPool.length; i++) bulletPool[i].mesh.visible = false;
 
-        // Mines — armed ones blink; unarmed sit dark. Yours glow brighter.
+        // Ground hazards — mines blink when armed; oil slicks are flat pools.
         const mines = cur.mines || [];
         for (let i = 0; i < mines.length; i++) {
           const m = mines[i];
           const mm = getMine(i);
+          const isOil = m.kind === "oil";
           mm.group.position.set(m.x, 0, m.y);
           mm.group.visible = true;
-          const mine = m.ownerId === myId;
-          mm.core.material.color.setHex(mine ? 0x22d3ee : 0xff3b30);
-          const blink = m.armed ? 0.55 + 0.45 * Math.sin(now * 0.009 + m.id) : 0.12;
-          mm.core.scale.setScalar(mine ? blink : blink * 0.7);
+          mm.disc.visible = !isOil;
+          mm.core.visible = !isOil;
+          mm.slick.visible = isOil;
+          if (isOil) {
+            mm.slick.rotation.z = m.id * 0.7;
+          } else {
+            const own = m.ownerId === myId;
+            mm.core.material.color.setHex(own ? 0x22d3ee : 0xff3b30);
+            const blink = m.armed ? 0.55 + 0.45 * Math.sin(now * 0.009 + m.id) : 0.12;
+            mm.core.scale.setScalar(own ? blink : blink * 0.7);
+          }
         }
         for (let i = mines.length; i < minePool.length; i++) minePool[i].group.visible = false;
 
@@ -1731,7 +1919,10 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       const me = cur.players.find((p) => p.id === myId) || null;
       const now = performance.now();
       const feed = (killFeedRef.current || []).filter((f) => now - f.at < 4500).slice(-4).reverse();
-      setHud({ timeLeft: cur.timeLeft, board, me, feed, mode: cur.mode || "ffa", teamScores: cur.teamScores || null });
+      setHud({
+        timeLeft: cur.timeLeft, board, me, feed,
+        mode: cur.mode || "ffa", teamScores: cur.teamScores || null,
+      });
     }, 200);
 
     // ── Resize ──
@@ -1801,10 +1992,22 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         ))}
       </div>
 
-      {/* Your HP */}
+      {/* Your HP + held weapon / active effects */}
       {hud.me && (
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-56">
-          <div className="h-3 rounded-full bg-black/50 overflow-hidden">
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-64 flex flex-col items-center gap-1">
+          <div className="flex items-center gap-2 text-xs">
+            {hud.me.weapon && (
+              <span className="px-2 py-0.5 rounded-full bg-black/60 text-amber-300 font-medium">
+                {WEAPON_LABEL[hud.me.weapon]} ×{hud.me.ammo}
+              </span>
+            )}
+            {hud.me.spikes && <span className="px-2 py-0.5 rounded-full bg-black/60 text-slate-200">⚙️ spikes</span>}
+            {hud.me.ghost && <span className="px-2 py-0.5 rounded-full bg-black/60 text-indigo-200">👻 ghost</span>}
+            {hud.me.shield && <span className="px-2 py-0.5 rounded-full bg-black/60 text-blue-300">🛡️ shield</span>}
+            {hud.me.slip && <span className="px-2 py-0.5 rounded-full bg-black/60 text-amber-200">🛢️ slipping!</span>}
+            {hud.me.frozen && <span className="px-2 py-0.5 rounded-full bg-black/60 text-cyan-200">❄️ frozen!</span>}
+          </div>
+          <div className="h-3 w-full rounded-full bg-black/50 overflow-hidden">
             <div className="h-full transition-all" style={{ width: `${Math.max(0, hud.me.hp)}%`, background: hud.me.hp > 40 ? "#22c55e" : "#ef4444" }} />
           </div>
         </div>

@@ -1608,6 +1608,66 @@ that defaulted to *its own current position*, so the first sample always read
 "hasn't moved". Fixed by treating the first sample as baseline-only — a good
 reminder that `?? self` defaults can silently fabricate a false measurement.
 
+### "The kart can't move forward" — finally root-caused (twice)
+Reported three times. The first two fixes (spawn crowding, per-map world size)
+were real but weren't the whole story. This time I stopped reading layouts and
+wrote a **headless drive test**: put a kart at every spawn of every map, hold
+full throttle for 3s, measure distance. Two spawns moved 356u out of a possible
+~1980u. Two genuine defects:
+
+1. **Karts were being PINNED to walls.** Collision did `p.speed *= 0.35` on
+   every contact, every tick. Since steering authority scales with speed, a kart
+   that touched a wall lost its speed → couldn't turn → stayed touching the wall.
+   Worse, a curvy track edge is ~80 barrier capsules and the penalty applied
+   once *per capsule*, compounding to 0.35ⁿ — instant paralysis. Replaced with
+   proper **sliding collision**: push out along the surface normal, then scale
+   speed by how head-on the contact was (`1 - 0.85 × alignment`), applied **once
+   per tick** using the worst contact. Head-on still hurts; a glancing scrape
+   now barely slows you and you slide along the wall like a real racing game.
+2. **Two spawns faced directly into a barrier log** 400u away. My earlier
+   "clearance" check only measured *radial* distance — it never checked what was
+   in the direction the kart was pointing, even though the notes claimed it did.
+   Mid-arena spawns now face along the open axis.
+
+The durable fix is `tests/kart.maps.test.js`: **every spawn on every map is
+driven for 3 seconds** and must cover >700u, plus wall-behaviour tests (head-on
+bleeds speed, glancing keeps it, a pinned kart can reverse out, a capsule chain
+doesn't compound, a kart spawned inside geometry is pushed out rather than
+flung). Layout edits can no longer reintroduce this class of bug silently.
+
+### Weapons overhaul — 14 powerups
+Six new pickups, all table-driven so adding a weapon never touches collision or
+damage code. Weapons **replace** your blaster until their ammo runs out, which
+makes picking one up a real trade-off.
+
+| Powerup | Effect |
+|---|---|
+| 🔫 **Shotgun** | 5-pellet cone, 8 shells — devastating in a brawl, useless at range |
+| 🔺 **Laser** | Hypersonic **piercing** railgun, 4 shots — skewers a whole line of karts |
+| 🚀 **Homing** | 3 missiles that curve toward the nearest enemy |
+| ⚙️ **Spike armour** | Ring of spikes; ramming deals 34 damage + knockback (per-victim cooldown) |
+| 🛢️ **Oil slick** | Drops 3 puddles; victims lose grip and spin out |
+| 👻 **Ghost** | Near-invisible *and* drives through scenery for 6.5s |
+
+Joining 🔱 triple, ❄️ freeze, 🧨 mines and the original ❤️⚡🔥🛡️💀. Oil slicks
+reuse the mine entity list (same lifecycle, different payload). **Shield now
+counters everything** — bullets, bombs, mines, spikes and freezes.
+
+**A bug the tests caught: bullet tunnelling.** The laser travels 2300 u/s = ~77u
+per 30 Hz tick, but a kart is only ~54u across — it flew straight through
+targets without ever registering a hit. Fixed with **swept collision**: bullets
+advance in sub-steps no larger than a car radius. A weapon fast enough to be
+exciting was fast enough to be broken, and only an integration-level test
+("does the laser damage two karts in a line?") would have shown it.
+
+### Kart model rebuilt
+Replaced the box-primitive kart with proper bodywork: a tapered ellipsoid tub,
+sculpted nose cone, side pods with chrome intakes, roll-cage hoop, rear wing on
+twin pylons, a real cockpit (recessed tub, seated driver, helmet with a curved
+visor, steering wheel) and a roof-mounted cannon with a muzzle. Wheels are now
+groups — fat rears, spoked chrome hubs — which also fixed their rotation axis
+(they were being yawed around Y instead of rolled about the axle).
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

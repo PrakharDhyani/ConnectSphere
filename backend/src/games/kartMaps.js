@@ -73,14 +73,20 @@ function ringPoints(cx, cy, radii, yScale) {
 }
 
 // Six spawns for a rectangular w×h arena: corners + top/bottom midpoints.
+//
+// FACING MATTERS as much as position. The mid spawns used to point straight at
+// the middle of the arena — directly into the horizontal barrier logs a few
+// hundred units away, so those two players drove into a wall on every respawn.
+// They now face ALONG the long axis, which is open. `kart.maps.test.js` drives
+// every spawn for 3s to keep this honest.
 function rectSpawns(w, h) {
   return [
     { x: 480, y: 450, angle: 0.4 },
     { x: w - 480, y: 450, angle: Math.PI - 0.4 },
     { x: 480, y: h - 450, angle: -0.4 },
     { x: w - 480, y: h - 450, angle: Math.PI + 0.4 },
-    { x: w / 2, y: 400, angle: Math.PI / 2 },
-    { x: w / 2, y: h - 400, angle: -Math.PI / 2 },
+    { x: w / 2, y: 320, angle: 0 },
+    { x: w / 2, y: h - 320, angle: Math.PI },
   ];
 }
 
@@ -118,10 +124,11 @@ const CIRCUIT = (() => {
     return { kind: "tyre", x: center[i].x + nx * HALF * side, y: center[i].y + ny * HALF * side, r: 38 };
   });
   const types = [
-    "speed", "health", "rapid", "triple", "shield", "mine",
-    "health", "bomb", "speed", "freeze", "health", "triple",
+    "speed", "shotgun", "health", "triple", "shield", "mine",
+    "laser", "bomb", "speed", "freeze", "health", "homing",
+    "spikes", "oil", "health", "ghost",
   ];
-  const pickups = [7, 14, 20, 26, 33, 39, 47, 54, 60, 66, 73, 79].map((i, k) => ({
+  const pickups = [5, 11, 17, 22, 28, 33, 39, 44, 50, 55, 61, 66, 71, 75, 79, 2].map((i, k) => ({
     id: k, x: center[i].x, y: center[i].y, type: types[k],
   }));
   return { center, outer, inner, spawns, obstacles, pickups };
@@ -140,16 +147,16 @@ const CANYON = (() => {
     const a = (i / 6) * Math.PI * 2 + 0.26;
     spawns.push({ x: cx + Math.cos(a) * 960, y: cy + Math.sin(a) * 960 * 0.75, angle: a + Math.PI / 2 });
   }
-  const outerTypes = ["speed", "health", "rapid", "shield", "health", "bomb"];
-  const innerTypes = ["triple", "speed", "mine", "freeze", "bomb", "health"];
+  const outerTypes = ["speed", "health", "shotgun", "shield", "health", "bomb", "laser", "spikes"];
+  const innerTypes = ["triple", "homing", "mine", "freeze", "oil", "health", "ghost", "rapid"];
   const pickups = [];
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
     pickups.push({ id: i, x: cx + Math.cos(a) * 1400, y: cy + Math.sin(a) * 1400 * 0.75, type: outerTypes[i] });
   }
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2 + 0.52;
-    pickups.push({ id: 6 + i, x: cx + Math.cos(a) * 700, y: cy + Math.sin(a) * 700 * 0.75, type: innerTypes[i] });
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + 0.4;
+    pickups.push({ id: 8 + i, x: cx + Math.cos(a) * 700, y: cy + Math.sin(a) * 700 * 0.75, type: innerTypes[i] });
   }
   return { boundary, spawns, pickups };
 })();
@@ -201,8 +208,18 @@ export const MAPS = {
       { id: 13, x: 3400, y: 1000, type: "triple" },
       { id: 14, x: 1100, y: 1450, type: "mine" },
       { id: 15, x: 4100, y: 1450, type: "mine" },
-      { id: 16, x: 2600, y: 350, type: "freeze" },
-      { id: 17, x: 2600, y: 2550, type: "freeze" },
+      { id: 16, x: 2600, y: 600, type: "freeze" },
+      { id: 17, x: 2600, y: 2300, type: "freeze" },
+      { id: 18, x: 1500, y: 1450, type: "shotgun" },
+      { id: 19, x: 3700, y: 1450, type: "shotgun" },
+      { id: 20, x: 2200, y: 1450, type: "laser" },
+      { id: 21, x: 3000, y: 1450, type: "homing" },
+      { id: 22, x: 900, y: 1100, type: "spikes" },
+      { id: 23, x: 4300, y: 1800, type: "spikes" },
+      { id: 24, x: 900, y: 1800, type: "oil" },
+      { id: 25, x: 4300, y: 1100, type: "oil" },
+      { id: 26, x: 2000, y: 700, type: "ghost" },
+      { id: 27, x: 3200, y: 2200, type: "ghost" },
     ],
   },
 
@@ -247,10 +264,20 @@ export const MAPS = {
       { id: 11, x: 3900, y: 2300, type: "bomb" },
       { id: 12, x: 1300, y: 2300, type: "triple" },
       { id: 13, x: 3900, y: 600, type: "triple" },
-      { id: 14, x: 2600, y: 500, type: "mine" },
-      { id: 15, x: 2600, y: 2400, type: "mine" },
+      { id: 14, x: 2600, y: 600, type: "mine" },
+      { id: 15, x: 2600, y: 2300, type: "mine" },
       { id: 16, x: 1700, y: 1450, type: "freeze" },
       { id: 17, x: 3500, y: 1450, type: "freeze" },
+      { id: 18, x: 1150, y: 1450, type: "shotgun" },
+      { id: 19, x: 4050, y: 1450, type: "shotgun" },
+      { id: 20, x: 2350, y: 1000, type: "laser" },
+      { id: 21, x: 2850, y: 1900, type: "homing" },
+      { id: 22, x: 700, y: 1450, type: "spikes" },
+      { id: 23, x: 4500, y: 1450, type: "spikes" },
+      { id: 24, x: 1600, y: 700, type: "oil" },
+      { id: 25, x: 3600, y: 2200, type: "oil" },
+      { id: 26, x: 3600, y: 700, type: "ghost" },
+      { id: 27, x: 1600, y: 2200, type: "ghost" },
     ],
   },
 
@@ -297,8 +324,18 @@ export const MAPS = {
       { id: 13, x: 3900, y: 700, type: "triple" },
       { id: 14, x: 1700, y: 1450, type: "mine" },
       { id: 15, x: 3500, y: 1450, type: "mine" },
-      { id: 16, x: 2600, y: 400, type: "freeze" },
-      { id: 17, x: 2600, y: 2500, type: "freeze" },
+      { id: 16, x: 2600, y: 600, type: "freeze" },
+      { id: 17, x: 2600, y: 2300, type: "freeze" },
+      { id: 18, x: 1150, y: 1100, type: "shotgun" },
+      { id: 19, x: 4050, y: 1800, type: "shotgun" },
+      { id: 20, x: 2150, y: 1450, type: "laser" },
+      { id: 21, x: 3050, y: 1450, type: "homing" },
+      { id: 22, x: 1150, y: 1800, type: "spikes" },
+      { id: 23, x: 4050, y: 1100, type: "spikes" },
+      { id: 24, x: 2100, y: 700, type: "oil" },
+      { id: 25, x: 3100, y: 2200, type: "oil" },
+      { id: 26, x: 3100, y: 700, type: "ghost" },
+      { id: 27, x: 2100, y: 2200, type: "ghost" },
     ],
   },
 

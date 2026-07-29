@@ -122,7 +122,10 @@ export default function KartPanel({ roomId, onExit }) {
         <div className="text-4xl">🏎️</div>
         <h2 className="text-lg font-semibold mt-2">Smash Karts 3D</h2>
         <p className="text-gray-500 text-sm mb-4">Drive, shoot, grab powerups — most kills in 3 minutes wins.</p>
-        <p className="text-xs text-gray-600 mb-4">🛡️ shield blocks bullets, bombs, mines <i>and</i> freezes.</p>
+        <p className="text-xs text-gray-600 mb-4">
+          14 powerups — guns (🔫🔺🚀), traps (🧨🛢️💀) and buffs (🛡️⚙️👻⚡).<br />
+          🛡️ shield blocks bullets, bombs, mines, spikes <i>and</i> freezes.
+        </p>
 
         {/* Map + mode selection */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 mb-4 space-y-3">
@@ -303,7 +306,9 @@ export default function KartPanel({ roomId, onExit }) {
       </div>
 
       <p className="text-center text-xs text-gray-600 mt-2">
-        <b>WASD / arrows</b> drive · <b>Space</b> shoot · ❤️ health · ⚡ speed · 🔥 rapid · 🛡️ shield · 💀 bomb · 🔱 triple · ❄️ freeze · 🧨 mines
+        <b>WASD / arrows</b> drive · <b>Space</b> shoot<br />
+        ❤️ health · ⚡ speed · 🔥 rapid · 🛡️ shield · 💀 bomb · 🔱 triple · ❄️ freeze · 🧨 mines ·
+        🔫 shotgun · 🔺 laser · 🚀 homing · ⚙️ spikes · 🛢️ oil · 👻 ghost
       </p>
 
       {confirmLeave && <LeaveModal />}
