@@ -12,7 +12,7 @@ export default function VoiceBar({ call }) {
   } = call;
 
   return (
-    <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-gray-900/95 border border-gray-800 rounded-full px-3 py-2 shadow-lg backdrop-blur">
+    <div className="fixed right-3 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 bg-gray-900/95 border border-gray-800 rounded-2xl px-3 py-3 shadow-lg backdrop-blur">
       {!inCall ? (
         <>
           <Button onClick={() => joinVoice()} loading={joining}>🎙️ Join voice</Button>

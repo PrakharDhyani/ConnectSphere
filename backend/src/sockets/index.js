@@ -18,6 +18,7 @@ import { registerMediaHandlers } from "./media.handlers.js";
 import { registerWhiteboardHandlers } from "./whiteboard.handlers.js";
 import { registerGameHandlers } from "./game.handlers.js";
 import { registerLudoHandlers } from "./ludo.handlers.js";
+import { registerKartHandlers } from "./kart.handlers.js";
 
 let io;
 
@@ -45,6 +46,7 @@ export function initSocket(httpServer) {
     registerWhiteboardHandlers(io, socket);
     registerGameHandlers(io, socket);
     registerLudoHandlers(io, socket);
+    registerKartHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {
       logger.info(`Socket disconnected: ${socket.id} — reason: ${reason}`);

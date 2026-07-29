@@ -18,8 +18,9 @@ const ACT_LABEL = {
   board: "opened the whiteboard 🖊️",
   skribbl: "started Draw & Guess 🎨",
   ludo: "started Ludo 🎲",
+  kart: "started Smash Karts 🏎️",
 };
-const ACT_VIEW = { call: "room", board: "board", skribbl: "game", ludo: "game" };
+const ACT_VIEW = { call: "room", board: "board", skribbl: "game", ludo: "game", kart: "game" };
 
 // Excalidraw is heavy (~1.8 MB) — load it only when the whiteboard is opened.
 const WhiteboardPanel = lazy(() => import("@/components/WhiteboardPanel.jsx"));

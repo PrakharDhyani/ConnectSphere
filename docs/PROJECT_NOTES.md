@@ -1297,6 +1297,147 @@ notifications anywhere in the app.
 
 ---
 
+## 25. Feature: Smash Karts — real-time 2D deathmatch
+
+*(Third mini-game — the first CONTINUOUS/real-time one, not turn-based)*
+
+### The Feature
+A top-down car-battle arena in a room: up to 6 players drive around a 1600×900
+arena, shoot each other, respawn on death, grab health / rapid-fire pickups.
+Most kills in a 3-minute match wins. Inspired by SmashKarts, built from scratch.
+
+### Options Considered
+- **3D (Three.js + a physics engine) vs. 2D top-down canvas.** Chose **2D**: it
+  reuses the existing socket/room/GamesHub stack, ships an MVP in days not weeks,
+  runs smooth on any device, and keeps the *same* "drive + shoot + respawn" loop.
+  3D would reuse almost none of the current architecture.
+- **Win condition:** deathmatch (most kills) vs. last-kart-standing vs. race+combat.
+  Chose **deathmatch** — closest to the reference and simplest to make fun.
+
+### What We Did
+- **The one new architectural muscle: a server tick loop.** Ludo/Skribbl are
+  event-driven (react to a roll/guess). A shooter can't be — the server runs a
+  fixed **30 Hz `setInterval`** per active arena that integrates physics and
+  broadcasts a world snapshot at **~15 Hz** (`SNAPSHOT_EVERY = 2` ticks).
+- **Server-authoritative everything.** Clients send only compact input
+  (`throttle`/`steer`/`shoot`, each clamped to [-1,1]); the server owns every
+  position, bullet, hit, score, and respawn. A client can lie about its input,
+  never about the outcome — the only way a shooter stays fair.
+- **Pure physics core** (`games/kartArena.js`): arcade car model (one speed
+  scalar along the heading; steering effectiveness scales with speed and flips
+  in reverse), wall clamping, bullets with TTL + circle-hit detection, respawn
+  timers, and health / rapid-fire pickup pads. Kept socket-free so it's unit-testable.
+- **Client is a dumb renderer** (`hooks/useKart.js` + `components/KartPanel.jsx`):
+  snapshots land in a **ref** (not React state — 15 re-renders/sec would thrash),
+  and a `requestAnimationFrame` loop draws the world on a `<canvas>`,
+  **interpolating** each kart between the last two snapshots for smoothness.
+  Keyboard (WASD/arrows/Space) → input, streamed only when it changes.
+- **Three games** now share the 🎮 tab (Draw&Guess | Ludo | Smash Karts), plus a
+  `kart` activity announcement ("X started Smash Karts 🏎️").
+
+### Challenges / Design Notes
+- **Re-render vs. render.** The hard part of a real-time UI in React is *not*
+  rendering through React. Snapshots go to a ref; React state only flips on
+  coarse lobby↔playing↔ended changes. The canvas is the render target.
+- **Client interpolation hides the 15 Hz wire rate.** Rendering the newest
+  snapshot raw looks choppy; lerping position + shortest-path angle between the
+  previous and current snapshot makes 15 Hz feel like 60.
+- **Input as a signature.** The client only emits `kart:input` when the
+  throttle/steer/shoot tuple actually changes (`"1|0|true"` string compare),
+  plus a `window.blur` reset so a dropped keyup doesn't leave a car stuck at
+  full throttle. Server keeps the last input between messages.
+- **Lifecycle cleanup.** The tick loop is a live `setInterval` — it's cleared on
+  match end, host reset, and when the last player disconnects (mirrors the
+  state-cleanup pattern from the socket-hardening pass, so an empty arena never
+  leaks a timer).
+
+### Verification
+101 backend tests green; backend + frontend lint clean; `vite build` succeeds.
+Manual playtest: 2 browser tabs → join, host start, drive/shoot/respawn,
+pickups, kill feed, 3-min timer → scoreboard.
+
+### Interview Q&A
+- *How is a real-time multiplayer game different from your turn-based ones?*
+  Turn-based games react to discrete events; a shooter needs a continuous
+  server-side simulation. I added a 30 Hz authoritative tick loop that steps
+  physics and broadcasts snapshots at 15 Hz — clients only send input.
+- *Why send snapshots at 15 Hz but render at 60?* Bandwidth. The client
+  interpolates between the two most recent snapshots (position + shortest-path
+  angle), so it looks smooth without 60 messages/sec per player.
+- *How do you keep it fair / cheat-resistant?* The server is authoritative over
+  all state; the client's only input is clamped throttle/steer/shoot. It can't
+  place itself, fake a hit, or award itself a kill.
+- *Why a ref instead of React state for the game state?* 15 snapshots/sec through
+  `setState` would re-render the whole tree 15×/sec. The canvas reads a mutable
+  ref in its rAF loop; React only re-renders on lobby/playing/ended transitions.
+
+### Update — went 3D (Three.js), server untouched
+Playtesting the 2D top-down build, it felt flat / not fun. Pivoted to a **3D
+chase-cam** renderer — and the payoff of the authoritative client/server split
+showed up here: **zero backend changes were needed**. The server already
+simulates karts on a flat plane (x, y, heading, speed); in 3D that's just the
+ground plane (x → x, y → z, heading → yaw). So:
+- Kept **all** netcode, physics, hit detection, scoring, the 30 Hz tick loop.
+- Swapped **only the client renderer**: 2D `<canvas>` → a Three.js scene
+  (`KartArena3D.jsx`) with ground/grid/walls, box-model karts, sphere bullets,
+  spinning pickups, floating name+HP sprite labels, and a **chase camera** that
+  lerps behind the local kart. Same snapshot interpolation as before.
+- HUD moved from canvas-drawn to a **DOM overlay** (timer/leaderboard/kill-feed/
+  HP), refreshed at 5 Hz — never per frame.
+- `KartArena3D` is **lazy-loaded** so Three.js (~530 kB) only downloads when the
+  game is opened, keeping it out of the main bundle.
+- Tuned the physics constants (faster top speed, snappier steering, faster
+  bullets) for a punchier arcade feel.
+
+**Interview takeaway:** because the client was always a "dumb renderer" over
+server snapshots, changing the *entire* visual dimension (2D→3D) was a
+renderer-only swap. That's the whole argument for server-authoritative design in
+one commit.
+
+### Graphics polish pass (all three games)
+A dedicated visual upgrade — again, **no game logic touched**, purely renderers:
+- **Smash Karts 3D:** soft shadow maps (`PCFSoftShadowMap`), ACES filmic tone
+  mapping, a gradient sky, neon-strip walls, a richer kart model (spoiler,
+  driver head, metallic body), glowing bullets, **kill explosions** (additive
+  particle bursts triggered on an alive→dead transition), **hit flashes**
+  (emissive pulse when HP drops), a **rapid-fire aura** ring, and point-lit
+  spinning pickups.
+- **Ludo:** glossy radial-gradient tokens with depth shadows, gradient base
+  quadrants, smooth CSS move-transitions, styled safe-star/start cells, a
+  trophy center, and a framed board.
+- **Draw & Guess:** expanded 14-swatch palette, a toolbar card with a **live
+  brush preview** and sized slider, and a shadowed canvas surface.
+- Kept `KartArena3D` **lazy-loaded** so Three.js stays out of the main bundle.
+
+### Maps, powerups, and game modes
+A big content expansion for Smash Karts — new data + physics on the server, new
+rendering on the client:
+- **Two maps** (`kartMaps.js`, mirrored server + client): **Speedway** (stadium,
+  neon walls, tyre chicane) and **Forest** (trees, fallen logs, rocks). Each has
+  its own theme (sky gradient, floor/wall colors) and obstacle layout. Obstacles
+  are real colliders — **circles** (tyres) and **capsules** (logs) — that push
+  karts out and block bullets. Host picks the map in the lobby.
+- **Powerups (5):** ❤️ health, 🔥 rapid-fire, ⚡ speed-burst (1.6× top speed +
+  accel), 🛡️ shield (5 s invulnerability), and 💀 **bomb** — a "suicide" pickup
+  that detonates after a 5 s fuse, dealing area damage to nearby enemies (the
+  carrier gets a red pulsing aura + a floating countdown, then a big blast).
+- **Two modes:** **FFA** (free-for-all, most kills) and **TDM** (team deathmatch
+  — auto-split teams, friendly fire off, team-summed scores, team-colored rings +
+  leaderboard). Host picks the mode in the lobby.
+- **Leave-with-confirmation:** an in-match "← Leave game" opens a modal; confirm
+  drops you from the arena and back to the games menu.
+- **Bandwidth note:** obstacle layouts are static, so the wire only carries the
+  `mapId` — the client renders obstacles from its mirrored `kartMaps.js` (same
+  pattern as `ludoBoard.js`). Kept snapshots tiny.
+
+### Ludo UX fix
+The always-on **VoiceBar** (mic/video) was centered at the bottom, overlapping
+the Ludo board (and kart HUD). Moved it to a vertical pill anchored on the
+**right edge, vertically centered** — clear of every centered board and the
+bottom touch controls.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
