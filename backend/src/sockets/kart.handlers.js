@@ -37,6 +37,8 @@ function newGame(hostId) {
     map,
     obstacles: map.obstacles,
     spawns: map.spawns,
+    w: map.w,
+    h: map.h,
     players: new Map(), // userId -> player
     bullets: [],
     pickups: [],

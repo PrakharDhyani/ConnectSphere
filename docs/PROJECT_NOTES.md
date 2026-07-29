@@ -1436,6 +1436,62 @@ the Ludo board (and kart HUD). Moved it to a vertical pill anchored on the
 **right edge, vertically centered** — clear of every centered board and the
 bottom touch controls.
 
+### Cinematic graphics pass — bloom, living backgrounds, Volcano map
+A renderer-only upgrade (zero game-logic changes) that moved the game from
+"bright pixels" to actual glow and living scenery:
+- **Post-processing chain:** `EffectComposer` → `UnrealBloomPass` → `OutputPass`
+  (ACES tone map + sRGB). Bloom is what makes neon wall trim, lava cracks,
+  headlights, bullets, and explosions genuinely *glow*; strength is tuned
+  per-map via the theme.
+- **Procedural canvas textures:** asphalt (speckle + tyre scuffs), grass,
+  basalt with **synced albedo/emissive crack maps** (the same crack polylines
+  stroked dark on one canvas and hot orange on the other, so the glow sits
+  exactly in the cracks), stadium crowds, sponsor billboards.
+- **Living backgrounds:** Speedway became a *night race* (star field, moon,
+  crowd camera flashes, floodlight cones, emissive billboards); Forest got
+  two tree species, bushes, a fog-blended mountain-ring horizon, drifting
+  clouds, a sun flare, and falling leaves. Every map gained a huge outer
+  ground plane so the world no longer floats in a void.
+- **New map — Volcano 🌋:** erupting cone (glowing crater, lava streaks,
+  looping smoke-plume sprites), pulsing lava pools, basalt columns, rising
+  embers, and the glowing-crack basalt floor. Server-side it's pure DATA
+  (rock + basalt-ridge colliders, its own pickup layout) — the physics core
+  needed no changes and the host's map picker lists it automatically.
+- **Kart juice:** spinning wheels + steering front-wheel pivots, body lean in
+  corners (inferred client-side from snapshot deltas — no wire changes), skid
+  dust, head/taillight lenses (bright at night) + a real `SpotLight` headlight
+  beam on the local kart, glowing bullet tracers, and explosions upgraded with
+  shockwave rings, flash sprites, and brief dynamic lights.
+
+### Shaped arenas — curvy tracks (Grand Circuit + Canyon)
+The arena stopped being "always one 1600×900 rectangle":
+- **The trick: curvy walls are just more capsules.** A closed Catmull-Rom
+  spline is sampled into a polyline and every segment becomes a `barrier`
+  capsule — the *existing* capsule collider (used for logs) handles karts and
+  bullets against any curve. The physics core's only change was reading a
+  per-map world size (`g.w`/`g.h`) instead of fixed constants.
+- **Generator mirrored server + client:** `sampleClosedSpline` / `offsetLoop`
+  / `loopCapsules` live byte-identical in both `kartMaps.js` files, so the
+  server's colliders and the client's rendered track can never drift apart.
+- **Grand Circuit (2400×1500):** a closed curvy ring track — the centerline
+  spline (varied radii → sweepers, pinches, S-curves) offset ±115 gives outer
+  and inner boundaries. Rendered as a `THREE.Shape` asphalt ribbon with a
+  grass infield island, **continuous armco rails** (posts + rail tube + neon
+  top tube via `TubeGeometry` along the spline), a checkered start line, and
+  sunset-dusk scenery (mountains, floodlights, billboards). Spawns sit ON the
+  centerline facing the racing direction (tangent angle).
+- **Canyon (2000×1300):** an open curvy blob arena — one winding boundary
+  rendered as a rough rock rim, sand floor with wind ripples, mesas + desert
+  rocks outside, and drifting dust motes. Rocks and ridges inside for cover.
+- **Renderer sizing:** all scenery builders read a `dims` object the map
+  rebuild updates (world size, center), and the shadow camera re-fits to the
+  map — so bigger arenas "just work".
+
+**Interview takeaway:** the shaped-arena feature cost the server ~6 lines
+because the collision primitives were already general. Choosing capsules as
+the wall primitive early meant "any curve" was a data problem, not an engine
+problem.
+
 ---
 
 ## Current Status / Next Steps
@@ -1519,4 +1575,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-26 (Friends system — requests, list, invite to a room; + all games/whiteboard/video merged to develop)*
+*Last updated: 2026-07-29 (Smash Karts: cinematic graphics pass — bloom pipeline, living backgrounds, Volcano map; shaped arenas with curvy spline tracks — Grand Circuit ring + Canyon blob; 5 maps total)*

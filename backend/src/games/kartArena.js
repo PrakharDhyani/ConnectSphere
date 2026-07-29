@@ -128,6 +128,9 @@ export function stepWorld(g, dt, now) {
   const booms = [];
   const spawns = g.spawns || SPAWN_POINTS;
   const obstacles = g.obstacles || [];
+  // Per-map world size (curvy maps are bigger); default rectangle otherwise.
+  const W = g.w || ARENA_W;
+  const H = g.h || ARENA_H;
   const tdm = g.mode === "tdm";
   const players = [...g.players.values()];
 
@@ -160,11 +163,12 @@ export function stepWorld(g, dt, now) {
     p.x += Math.cos(p.angle) * p.speed * dt;
     p.y += Math.sin(p.angle) * p.speed * dt;
 
-    // Arena walls.
+    // World bounds (shaped maps enforce their real edge via barrier capsules;
+    // this clamp is the outer safety net).
     if (p.x < CAR_RADIUS) { p.x = CAR_RADIUS; p.speed *= 0.3; }
-    if (p.x > ARENA_W - CAR_RADIUS) { p.x = ARENA_W - CAR_RADIUS; p.speed *= 0.3; }
+    if (p.x > W - CAR_RADIUS) { p.x = W - CAR_RADIUS; p.speed *= 0.3; }
     if (p.y < CAR_RADIUS) { p.y = CAR_RADIUS; p.speed *= 0.3; }
-    if (p.y > ARENA_H - CAR_RADIUS) { p.y = ARENA_H - CAR_RADIUS; p.speed *= 0.3; }
+    if (p.y > H - CAR_RADIUS) { p.y = H - CAR_RADIUS; p.speed *= 0.3; }
 
     // Obstacles — push the car back out and bleed speed on contact.
     for (const o of obstacles) {
@@ -204,7 +208,7 @@ export function stepWorld(g, dt, now) {
     if (b.ttl <= 0) continue;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
-    if (b.x < 0 || b.x > ARENA_W || b.y < 0 || b.y > ARENA_H) continue;
+    if (b.x < 0 || b.x > W || b.y < 0 || b.y > H) continue;
 
     // Obstacles block bullets.
     let blocked = false;
