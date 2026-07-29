@@ -1492,6 +1492,29 @@ because the collision primitives were already general. Choosing capsules as
 the wall primitive early meant "any curve" was a data problem, not an engine
 problem.
 
+### Playtest round 1 → the 10x scale-up
+First real playtest feedback drove a big balance/visual pass:
+- **All maps ~10x the area** (rects 5200×2900, Canyon 6400×4200, Circuit
+  7600×4800 with the track width **doubled** to 460 + a 12-tyre slalom
+  alternating sides of the racing line). Physics retuned to match (max speed
+  520→660, faster bullets with longer TTL) — and barrier capsule radii were
+  bumped WITH the speed so the contact band still exceeds max
+  distance-per-tick (the anti-tunneling invariant).
+- **Spawn clearance rule:** playtest showed karts boxed in by rocks at spawn
+  ("can't move forward"). Every layout now guarantees ≥300 units of clear
+  space around each spawn and nothing in the facing line.
+- **Readability:** volcano rocks blended into the dark basalt — rock color is
+  now theme-driven (`rockColor`/`rockEmissive`): obsidian with lava-lit
+  emissive edges on volcano, dark sandstone on canyon. Lesson: contrast is a
+  gameplay feature, not an aesthetic one.
+- **Scale-aware scenery:** every decoration formula that used fixed distances
+  (tree rings, mesas, lava pools, moon/sun/clouds/mountains, floodlights,
+  stands, fog near) broke at 3x linear scale — all now derive from a `dims`
+  object (perimeter scatter instead of center-radius rings, capped scale
+  factors). Shadow map bumped to 4096 to cover the bigger sun frustum.
+- **Nitro boost VFX:** the speed pickup now shows flickering additive blue
+  exhaust flames, a cyan trail, and an extra chase-cam FOV kick.
+
 ---
 
 ## Current Status / Next Steps

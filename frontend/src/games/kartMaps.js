@@ -24,6 +24,7 @@
  *   grid       draw the floor grid helper · centerRing: false → skip center ring
  *   deco       "stadium" | "forest" | "volcano" | "circuit" | "canyon"
  *   circle     how circle colliders render: "tyre" | "rock"
+ *   rockColor  rock albedo · rockEmissive: optional glow (contrast vs floor!)
  *   log        how capsule (log) colliders render: "wood" | "basalt"
  *   barrier    how shaped-track edges render: "rail" | "rock"
  *   dust       skid/dust particle tint
@@ -80,22 +81,37 @@ function ringPoints(cx, cy, radii, yScale) {
 }
 
 const CIRCUIT = (() => {
-  const cx = 1200, cy = 750;
+  const cx = 3800, cy = 2400;
   const center = sampleClosedSpline(
-    ringPoints(cx, cy, [520, 610, 450, 640, 560, 470, 650, 520, 430, 600], 0.78),
+    ringPoints(cx, cy, [1650, 1950, 1430, 2050, 1790, 1500, 2080, 1660, 1370, 1920], 0.78),
     8
   );
-  const outer = offsetLoop(center, 115, cx, cy);
-  const inner = offsetLoop(center, -115, cx, cy);
+  const HALF = 230;
+  const outer = offsetLoop(center, HALF, cx, cy);
+  const inner = offsetLoop(center, -HALF, cx, cy);
+  const N = center.length;
+  const nrm = (i) => {
+    const a = center[(i + N - 1) % N], b = center[(i + 1) % N];
+    let tx = b.x - a.x, ty = b.y - a.y;
+    const L = Math.hypot(tx, ty) || 1;
+    let nx = -ty / L, ny = tx / L;
+    if ((center[i].x - cx) * nx + (center[i].y - cy) * ny < 0) { nx = -nx; ny = -ny; }
+    return { nx, ny };
+  };
+  const obstacles = [4, 10, 17, 24, 30, 37, 44, 50, 57, 64, 70, 77].map((i, k) => {
+    const { nx, ny } = nrm(i);
+    const side = k % 2 === 0 ? 0.5 : -0.5;
+    return { kind: "tyre", x: center[i].x + nx * HALF * side, y: center[i].y + ny * HALF * side, r: 38 };
+  });
   const p = center[0], q = center[1];
   const start = { x: p.x, y: p.y, angle: Math.atan2(q.y - p.y, q.x - p.x) };
-  return { center, outer, inner, start };
+  return { center, outer, inner, obstacles, start, width: HALF * 2 };
 })();
 
 const CANYON = (() => {
-  const cx = 1000, cy = 650;
+  const cx = 3200, cy = 2100;
   const boundary = sampleClosedSpline(
-    ringPoints(cx, cy, [560, 630, 480, 700, 640, 520, 690, 560, 470], 0.75),
+    ringPoints(cx, cy, [1790, 2020, 1540, 2240, 2050, 1660, 2210, 1790, 1500], 0.75),
     8
   );
   return { boundary };
@@ -105,6 +121,8 @@ export const MAPS = {
   speedway: {
     id: "speedway",
     name: "Speedway",
+    w: 5200,
+    h: 2900,
     theme: {
       sky: ["#16244a", "#0b1430", "#04070f"],
       night: true,
@@ -116,6 +134,7 @@ export const MAPS = {
       wall: 0x2a3550,
       neon: 0x38bdf8,
       fog: 0x0b1424,
+      fogFar: 6200,
       exposure: 1.2,
       bloom: 0.7,
       grid: true,
@@ -128,21 +147,31 @@ export const MAPS = {
       ambient: "flash",
     },
     obstacles: [
-      { kind: "tyre", x: 560, y: 300, r: 32 },
-      { kind: "tyre", x: 1040, y: 300, r: 32 },
-      { kind: "tyre", x: 560, y: 600, r: 32 },
-      { kind: "tyre", x: 1040, y: 600, r: 32 },
-      { kind: "tyre", x: 800, y: 450, r: 36 },
-      { kind: "log", x1: 700, y1: 250, x2: 900, y2: 250, r: 16 },
-      { kind: "log", x1: 700, y1: 650, x2: 900, y2: 650, r: 16 },
-      { kind: "log", x1: 400, y1: 380, x2: 400, y2: 520, r: 16 },
-      { kind: "log", x1: 1200, y1: 380, x2: 1200, y2: 520, r: 16 },
+      { kind: "tyre", x: 2600, y: 1450, r: 55 },
+      { kind: "tyre", x: 2100, y: 950, r: 48 },
+      { kind: "tyre", x: 3100, y: 950, r: 48 },
+      { kind: "tyre", x: 2100, y: 1950, r: 48 },
+      { kind: "tyre", x: 3100, y: 1950, r: 48 },
+      { kind: "log", x1: 2250, y1: 800, x2: 2950, y2: 800, r: 24 },
+      { kind: "log", x1: 2250, y1: 2100, x2: 2950, y2: 2100, r: 24 },
+      { kind: "log", x1: 1300, y1: 1200, x2: 1300, y2: 1700, r: 24 },
+      { kind: "log", x1: 3900, y1: 1200, x2: 3900, y2: 1700, r: 24 },
+      { kind: "tyre", x: 900, y: 700, r: 40 },
+      { kind: "tyre", x: 900, y: 2200, r: 40 },
+      { kind: "log", x1: 700, y1: 1450, x2: 1100, y2: 1450, r: 20 },
+      { kind: "tyre", x: 4300, y: 700, r: 40 },
+      { kind: "tyre", x: 4300, y: 2200, r: 40 },
+      { kind: "log", x1: 4100, y1: 1450, x2: 4500, y2: 1450, r: 20 },
+      { kind: "tyre", x: 1800, y: 1450, r: 36 },
+      { kind: "tyre", x: 3400, y: 1450, r: 36 },
     ],
   },
 
   forest: {
     id: "forest",
     name: "Forest",
+    w: 5200,
+    h: 2900,
     theme: {
       sky: ["#9fd3f2", "#68a7d8", "#31628f"],
       night: false,
@@ -154,11 +183,13 @@ export const MAPS = {
       wall: 0x5a3d24,
       neon: 0x8ae06e,
       fog: 0x7aa8c4,
+      fogFar: 6200,
       exposure: 1.1,
       bloom: 0.35,
       grid: false,
       deco: "forest",
       circle: "rock",
+      rockColor: 0x707d68,
       log: "wood",
       dust: 0x8a7a55,
       sun: { color: 0xfff2cc, intensity: 1.7 },
@@ -166,21 +197,29 @@ export const MAPS = {
       ambient: "leaves",
     },
     obstacles: [
-      { kind: "log", x1: 500, y1: 250, x2: 750, y2: 200, r: 18 },
-      { kind: "log", x1: 900, y1: 700, x2: 1150, y2: 650, r: 18 },
-      { kind: "log", x1: 1100, y1: 260, x2: 1250, y2: 400, r: 18 },
-      { kind: "log", x1: 350, y1: 600, x2: 520, y2: 700, r: 18 },
-      { kind: "tyre", x: 800, y: 450, r: 38 },
-      { kind: "tyre", x: 520, y: 450, r: 28 },
-      { kind: "tyre", x: 1080, y: 450, r: 28 },
-      { kind: "tyre", x: 660, y: 640, r: 26 },
-      { kind: "tyre", x: 950, y: 260, r: 26 },
+      { kind: "log", x1: 1625, y1: 810, x2: 2440, y2: 650, r: 26 },
+      { kind: "log", x1: 2925, y1: 2275, x2: 3740, y2: 2110, r: 26 },
+      { kind: "log", x1: 3575, y1: 845, x2: 4060, y2: 1300, r: 26 },
+      { kind: "log", x1: 1140, y1: 1950, x2: 1690, y2: 2275, r: 26 },
+      { kind: "log", x1: 700, y1: 700, x2: 1200, y2: 900, r: 24 },
+      { kind: "log", x1: 4000, y1: 2000, x2: 4500, y2: 2200, r: 24 },
+      { kind: "tyre", x: 2600, y: 1450, r: 60 },
+      { kind: "tyre", x: 1690, y: 1450, r: 45 },
+      { kind: "tyre", x: 3510, y: 1450, r: 45 },
+      { kind: "tyre", x: 2145, y: 2080, r: 42 },
+      { kind: "tyre", x: 3090, y: 845, r: 42 },
+      { kind: "tyre", x: 900, y: 2300, r: 38 },
+      { kind: "tyre", x: 4300, y: 600, r: 38 },
+      { kind: "tyre", x: 2300, y: 700, r: 34 },
+      { kind: "tyre", x: 2900, y: 2200, r: 34 },
     ],
   },
 
   volcano: {
     id: "volcano",
     name: "Volcano",
+    w: 5200,
+    h: 2900,
     theme: {
       sky: ["#3a1b1b", "#57201a", "#120708"],
       night: true,
@@ -192,12 +231,16 @@ export const MAPS = {
       wall: 0x3a2c2c,
       neon: 0xff6b35,
       fog: 0x1a0d0c,
-      fogFar: 3800,
+      fogFar: 6800,
       exposure: 1.25,
       bloom: 0.8,
       grid: false,
       deco: "volcano",
       circle: "rock",
+      // Obsidian rocks with lava-lit edges — dark core + emissive glow so
+      // they pop against the dark basalt floor instead of blending in.
+      rockColor: 0x0f0c10,
+      rockEmissive: 0xff5a1f,
       log: "basalt",
       dust: 0x77706b,
       sun: { color: 0xff8c5a, intensity: 0.7 },
@@ -205,31 +248,36 @@ export const MAPS = {
       ambient: "embers",
     },
     obstacles: [
-      // Central boulder + satellite rocks.
-      { kind: "tyre", x: 800, y: 450, r: 46 },
-      { kind: "tyre", x: 480, y: 260, r: 30 },
-      { kind: "tyre", x: 1120, y: 640, r: 30 },
-      { kind: "tyre", x: 1120, y: 260, r: 26 },
-      { kind: "tyre", x: 480, y: 640, r: 26 },
-      // Basalt ridges guarding the center + side barriers.
-      { kind: "log", x1: 640, y1: 300, x2: 640, y2: 440, r: 16 },
-      { kind: "log", x1: 960, y1: 460, x2: 960, y2: 600, r: 16 },
-      { kind: "log", x1: 250, y1: 450, x2: 400, y2: 450, r: 14 },
-      { kind: "log", x1: 1200, y1: 450, x2: 1350, y2: 450, r: 14 },
+      { kind: "tyre", x: 2600, y: 1450, r: 75 },
+      { kind: "tyre", x: 1560, y: 845, r: 50 },
+      { kind: "tyre", x: 3640, y: 2080, r: 50 },
+      { kind: "tyre", x: 3640, y: 845, r: 45 },
+      { kind: "tyre", x: 1560, y: 2080, r: 45 },
+      { kind: "tyre", x: 700, y: 1450, r: 40 },
+      { kind: "tyre", x: 4500, y: 1450, r: 40 },
+      { kind: "tyre", x: 2300, y: 600, r: 40 },
+      { kind: "tyre", x: 2900, y: 2300, r: 40 },
+      { kind: "log", x1: 2080, y1: 975, x2: 2080, y2: 1430, r: 26 },
+      { kind: "log", x1: 3120, y1: 1490, x2: 3120, y2: 1950, r: 26 },
+      { kind: "log", x1: 810, y1: 1450, x2: 1300, y2: 1450, r: 22 },
+      { kind: "log", x1: 3900, y1: 1450, x2: 4390, y2: 1450, r: 22 },
+      { kind: "log", x1: 1800, y1: 500, x2: 2200, y2: 650, r: 20 },
+      { kind: "log", x1: 3000, y1: 2250, x2: 3400, y2: 2400, r: 20 },
     ],
   },
 
   circuit: {
     id: "circuit",
     name: "Grand Circuit",
-    w: 2400,
-    h: 1500,
+    w: 7600,
+    h: 4800,
     shape: {
       kind: "ring",
       outer: CIRCUIT.outer,
       inner: CIRCUIT.inner,
       center: CIRCUIT.center,
       start: CIRCUIT.start,
+      width: CIRCUIT.width,
     },
     theme: {
       sky: ["#ff9a56", "#b0486b", "#241b4d"],
@@ -243,7 +291,7 @@ export const MAPS = {
       wall: 0x3a4560,
       neon: 0x22d3ee,
       fog: 0x241626,
-      fogFar: 4400,
+      fogFar: 9500,
       exposure: 1.18,
       bloom: 0.65,
       grid: false,
@@ -258,16 +306,17 @@ export const MAPS = {
       ambient: null,
     },
     obstacles: [
-      ...loopCapsules(CIRCUIT.outer, 13),
-      ...loopCapsules(CIRCUIT.inner, 13),
+      ...loopCapsules(CIRCUIT.outer, 22),
+      ...loopCapsules(CIRCUIT.inner, 22),
+      ...CIRCUIT.obstacles,
     ],
   },
 
   canyon: {
     id: "canyon",
     name: "Canyon",
-    w: 2000,
-    h: 1300,
+    w: 6400,
+    h: 4200,
     shape: {
       kind: "blob",
       outer: CANYON.boundary,
@@ -283,13 +332,14 @@ export const MAPS = {
       wall: 0x8a5c3b,
       neon: 0xffb347,
       fog: 0xd8a878,
-      fogFar: 4000,
+      fogFar: 9000,
       exposure: 1.12,
       bloom: 0.3,
       grid: false,
       centerRing: false,
       deco: "canyon",
       circle: "rock",
+      rockColor: 0x4a3a2c,
       log: "wood",
       barrier: "rock",
       dust: 0xc9b089,
@@ -298,14 +348,20 @@ export const MAPS = {
       ambient: "dust",
     },
     obstacles: [
-      ...loopCapsules(CANYON.boundary, 16),
-      { kind: "tyre", x: 1000, y: 650, r: 44 },
-      { kind: "tyre", x: 700, y: 460, r: 30 },
-      { kind: "tyre", x: 1300, y: 840, r: 30 },
-      { kind: "tyre", x: 1320, y: 470, r: 26 },
-      { kind: "tyre", x: 690, y: 850, r: 26 },
-      { kind: "log", x1: 880, y1: 500, x2: 1000, y2: 470, r: 15 },
-      { kind: "log", x1: 1010, y1: 830, x2: 1130, y2: 800, r: 15 },
+      ...loopCapsules(CANYON.boundary, 26),
+      { kind: "tyre", x: 3200, y: 2100, r: 75 },
+      { kind: "tyre", x: 2240, y: 1470, r: 52 },
+      { kind: "tyre", x: 4160, y: 2690, r: 52 },
+      { kind: "tyre", x: 4220, y: 1500, r: 45 },
+      { kind: "tyre", x: 2210, y: 2720, r: 45 },
+      { kind: "tyre", x: 3200, y: 1200, r: 42 },
+      { kind: "tyre", x: 3200, y: 3000, r: 42 },
+      { kind: "tyre", x: 1600, y: 2100, r: 48 },
+      { kind: "tyre", x: 4800, y: 2100, r: 48 },
+      { kind: "log", x1: 2820, y1: 1600, x2: 3200, y2: 1500, r: 24 },
+      { kind: "log", x1: 3230, y1: 2660, x2: 3620, y2: 2560, r: 24 },
+      { kind: "log", x1: 1800, y1: 1600, x2: 2050, y2: 1780, r: 22 },
+      { kind: "log", x1: 4350, y1: 2420, x2: 4600, y2: 2600, r: 22 },
     ],
   },
 };

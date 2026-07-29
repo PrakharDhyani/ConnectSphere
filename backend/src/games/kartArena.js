@@ -19,16 +19,19 @@ export const SNAPSHOT_EVERY = 2; // broadcast every Nth tick → ~15 Hz on the w
 export const MATCH_MS = 3 * 60 * 1000; // 3-minute match
 
 // Car dynamics (world units / second). Arcade feel: quick accel, snappy turn.
+// Retuned for the 10x-area maps: faster cruise + longer-reaching bullets so
+// the bigger world still plays fast. (Barrier capsule radii were bumped with
+// this — contact band must exceed max distance-per-tick to avoid tunneling.)
 export const CAR_RADIUS = 20;
-export const MAX_SPEED = 520;
-export const MAX_REVERSE = 240;
-export const ACCEL = 920;
+export const MAX_SPEED = 660;
+export const MAX_REVERSE = 300;
+export const ACCEL = 1150;
 export const BRAKE_FRICTION = 1.8;
 export const TURN_RATE = 4.1;
 
 // Blaster.
-export const BULLET_SPEED = 820;
-export const BULLET_TTL = 1.1;
+export const BULLET_SPEED = 980;
+export const BULLET_TTL = 1.35;
 export const BULLET_RADIUS = 7;
 export const BULLET_DAMAGE = 25;
 export const FIRE_COOLDOWN = 300;

@@ -310,7 +310,7 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     const scene = new THREE.Scene();
     scene.fog = new THREE.Fog(0x0b1424, 1600, 3400);
 
-    const camera = new THREE.PerspectiveCamera(62, w / h, 1, 12000);
+    const camera = new THREE.PerspectiveCamera(62, w / h, 1, 26000);
     camera.position.set(dims.cx, 700, dims.h + 700);
     camera.lookAt(dims.cx, 0, dims.cz);
 
@@ -325,9 +325,9 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xffffff, 1.5);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(4096, 4096);
     sun.shadow.camera.near = 200;
-    sun.shadow.camera.far = 5200;
+    sun.shadow.camera.far = 20000;
     sun.shadow.bias = -0.0005;
     scene.add(sun, sun.target);
 
@@ -360,8 +360,12 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       const len = Math.hypot(dx, dz);
       const g = new THREE.Group();
       if (theme.log === "basalt") {
-        // A ridge of chunky hex prisms instead of a wooden log.
-        const mat = new THREE.MeshStandardMaterial({ color: 0x2c2531, roughness: 0.9 });
+        // A ridge of chunky hex prisms instead of a wooden log — faint lava
+        // glow at the base keeps it readable against the dark floor.
+        const mat = new THREE.MeshStandardMaterial({
+          color: 0x2c2531, roughness: 0.9,
+          emissive: 0xff5a1f, emissiveIntensity: 0.15,
+        });
         const n = Math.max(3, Math.round(len / 46));
         for (let i = 0; i < n; i++) {
           const hgt = o.r * (2.2 + ((i * 37) % 10) / 9);
@@ -393,7 +397,15 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     function buildCircle(o, theme) {
       const g = new THREE.Group();
       if (theme.circle === "rock") {
-        const mat = new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.95, flatShading: true });
+        // Rock color comes from the theme so rocks CONTRAST with each floor
+        // (obsidian + lava-glow edges on volcano, dark sandstone on canyon).
+        const mat = new THREE.MeshStandardMaterial({
+          color: theme.rockColor ?? 0x6b7280, roughness: 0.95, flatShading: true,
+        });
+        if (theme.rockEmissive) {
+          mat.emissive = new THREE.Color(theme.rockEmissive);
+          mat.emissiveIntensity = 0.45;
+        }
         const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(o.r * 1.05, 0), mat);
         rock.position.y = o.r * 0.75;
         rock.scale.y = 0.78;
@@ -455,7 +467,7 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       const pts = (y) => loop.map((p) => new THREE.Vector3(p.x, y, p.y));
       if (theme.barrier === "rock") {
         const rim = new THREE.Mesh(
-          new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts(8), true), loop.length, 24, 8, true),
+          new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts(10), true), loop.length, 34, 8, true),
           new THREE.MeshStandardMaterial({ color: theme.wall, roughness: 1, flatShading: true })
         );
         rim.castShadow = true;
@@ -464,31 +476,31 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         return;
       }
       const postMat = new THREE.MeshStandardMaterial({ color: 0x39424f, roughness: 0.6, metalness: 0.4 });
-      const postGeo = new THREE.CylinderGeometry(4, 4, 30, 6);
-      for (let i = 0; i < loop.length; i += 4) {
+      const postGeo = new THREE.CylinderGeometry(5, 5, 34, 6);
+      for (let i = 0; i < loop.length; i += 2) {
         const post = new THREE.Mesh(postGeo, postMat);
-        post.position.set(loop[i].x, 15, loop[i].y);
+        post.position.set(loop[i].x, 17, loop[i].y);
         mapGroup.add(post);
       }
       const rail = new THREE.Mesh(
-        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts(26), true), loop.length * 2, 7, 8, true),
+        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts(30), true), loop.length * 2, 9, 8, true),
         new THREE.MeshStandardMaterial({ color: theme.wall, roughness: 0.35, metalness: 0.7 })
       );
       rail.castShadow = true;
       mapGroup.add(rail);
       const neonTube = new THREE.Mesh(
-        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts(38), true), loop.length * 2, 3.2, 6, true),
+        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts(44), true), loop.length * 2, 4, 6, true),
         new THREE.MeshStandardMaterial({ color: theme.neon, emissive: theme.neon, emissiveIntensity: 2.4 })
       );
       mapGroup.add(neonTube);
     }
 
-    function buildStartLine(start) {
+    function buildStartLine(start, width) {
       const tex = checkerTexture();
       mapDisposables.push(tex);
       const g = new THREE.Group();
       const strip = new THREE.Mesh(
-        new THREE.PlaneGeometry(226, 46),
+        new THREE.PlaneGeometry((width || 230) * 0.98, 60),
         new THREE.MeshBasicMaterial({ map: tex })
       );
       strip.rotation.x = -Math.PI / 2;
@@ -504,10 +516,11 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       const N = 700;
       const pos = new Float32Array(N * 3);
       const col = new Float32Array(N * 3);
+      const base = Math.max(dims.w, dims.h) * 0.85 + 1400;
       for (let i = 0; i < N; i++) {
         const a = rnd() * Math.PI * 2;
         const el = 0.08 + rnd() * 1.35;
-        const r = 3200 + rnd() * 500;
+        const r = base + rnd() * 500;
         pos[i * 3] = dims.cx + Math.cos(a) * Math.cos(el) * r;
         pos[i * 3 + 1] = 150 + Math.sin(el) * r;
         pos[i * 3 + 2] = dims.cz + Math.sin(a) * Math.cos(el) * r;
@@ -529,46 +542,54 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       const moon = new THREE.Sprite(new THREE.SpriteMaterial({
         map: glowTex, color: 0xf4f0e0, fog: false, depthWrite: false,
       }));
-      moon.scale.set(300, 300, 1);
-      moon.position.set(dims.cx - 900, 1500, dims.cz - 2100);
+      const m = Math.max(dims.w, dims.h);
+      moon.scale.set(m * 0.11, m * 0.11, 1);
+      moon.position.set(dims.cx - m * 0.3, m * 0.5, dims.cz - m * 0.7);
       mapGroup.add(moon);
     }
 
-    function buildSunSprite(color, scale) {
+    function buildSunSprite(color) {
+      const m = Math.max(dims.w, dims.h);
       const s = new THREE.Sprite(new THREE.SpriteMaterial({
         map: glowTex, color, fog: false, depthWrite: false,
       }));
-      s.scale.set(scale, scale, 1);
-      s.position.set(dims.cx + 1400, 1600, dims.cz - 1900);
+      s.scale.set(m * 0.17, m * 0.17, 1);
+      s.position.set(dims.cx + m * 0.45, m * 0.5, dims.cz - m * 0.6);
       mapGroup.add(s);
     }
 
     function buildClouds(count, tint, opacity) {
       const rnd = mulberry32(67);
+      const m = Math.max(dims.w, dims.h);
+      const spread = m * 0.85;
       const clouds = [];
       for (let i = 0; i < count; i++) {
         const c = new THREE.Sprite(new THREE.SpriteMaterial({
           map: glowTex, color: tint, transparent: true, opacity,
           fog: false, depthWrite: false,
         }));
-        const sc = 420 + rnd() * 420;
+        const sc = m * 0.15 + rnd() * m * 0.15;
         c.scale.set(sc, sc * 0.45, 1);
-        c.position.set(dims.cx - 2400 + rnd() * 4800, 680 + rnd() * 260, dims.cz - 1400 - rnd() * 900);
+        c.position.set(dims.cx - spread + rnd() * spread * 2, m * 0.24 + rnd() * m * 0.1, dims.cz - m * 0.5 - rnd() * m * 0.3);
         mapGroup.add(c);
         clouds.push(c);
       }
       mapFx.clouds = clouds;
+      mapFx.cloudSpread = spread;
     }
 
     function buildMountains(colorInt) {
       const rnd = mulberry32(89);
       const mtnMat = new THREE.MeshStandardMaterial({ color: colorInt, roughness: 1, flatShading: true });
-      const base = Math.max(dims.w, dims.h) * 1.1 + 400;
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2 + rnd() * 0.2;
-        const r = base + rnd() * 600;
-        const hM = 380 + rnd() * 620;
-        const m = new THREE.Mesh(new THREE.ConeGeometry(300 + rnd() * 420, hM, 5), mtnMat);
+      // Ring sits just past the arena but inside the fog wall, and the peaks
+      // scale with the world so big maps still get a real horizon.
+      const base = Math.max(dims.w, dims.h) * 0.75 + 600;
+      const s = Math.max(1, base / 2400);
+      for (let i = 0; i < 18; i++) {
+        const a = (i / 18) * Math.PI * 2 + rnd() * 0.2;
+        const r = base + rnd() * 600 * s;
+        const hM = (380 + rnd() * 620) * s;
+        const m = new THREE.Mesh(new THREE.ConeGeometry((300 + rnd() * 420) * s, hM, 5), mtnMat);
         m.position.set(dims.cx + Math.cos(a) * r, hM / 2 - 30, dims.cz + Math.sin(a) * r);
         m.rotation.y = rnd() * Math.PI;
         mapGroup.add(m);
@@ -577,7 +598,8 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
 
     function buildFloodlights(spots) {
       // Emissive heads + additive light cones — bloom sells it at zero
-      // real-light cost.
+      // real-light cost. Towers scale (capped) with the world.
+      const f = Math.min(2.4, Math.max(1, dims.w / 2600));
       const poleMat = new THREE.MeshStandardMaterial({ color: 0x1f2937 });
       const lampMat = new THREE.MeshStandardMaterial({ color: 0xfff7d6, emissive: 0xfff7d6, emissiveIntensity: 2.6 });
       const coneMat = new THREE.MeshBasicMaterial({
@@ -585,26 +607,27 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
       });
       for (const [x, z] of spots) {
-        const pole = new THREE.Mesh(new THREE.CylinderGeometry(9, 11, 420, 8), poleMat);
-        pole.position.set(x, 210, z);
-        const lamp = new THREE.Mesh(new THREE.BoxGeometry(84, 26, 34), lampMat);
-        lamp.position.set(x, 430, z);
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(9 * f, 11 * f, 420 * f, 8), poleMat);
+        pole.position.set(x, 210 * f, z);
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(84 * f, 26 * f, 34 * f), lampMat);
+        lamp.position.set(x, 430 * f, z);
         lamp.lookAt(dims.cx, 0, dims.cz);
-        const cone = new THREE.Mesh(new THREE.ConeGeometry(340, 760, 20, 1, true), coneMat);
-        cone.position.set(x, 430, z);
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(340 * f, 760 * f, 20, 1, true), coneMat);
+        cone.position.set(x, 430 * f, z);
         cone.lookAt(dims.cx, 0, dims.cz);
         cone.rotateX(-Math.PI / 2);
-        cone.translateY(-380);
+        cone.translateY(-380 * f);
         mapGroup.add(pole, lamp, cone);
       }
     }
 
     function buildBillboards(spots, texts, y) {
+      const f = Math.min(2.4, Math.max(1, dims.w / 2600));
       spots.forEach(([x, z], i) => {
         const tex = billboardTexture(texts[i % texts.length]);
         mapDisposables.push(tex);
         const panel = new THREE.Mesh(
-          new THREE.PlaneGeometry(340, 84),
+          new THREE.PlaneGeometry(340 * f, 84 * f),
           new THREE.MeshBasicMaterial({ map: tex, toneMapped: false, side: THREE.DoubleSide })
         );
         panel.position.set(x, y, z);
@@ -616,6 +639,8 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     // One ambient particle system per map: rising embers, falling leaves, or
     // drifting dust motes.
     function buildMotes({ color, size, count, mode, additive = false, opacity = 0.9, map = null }) {
+      // Density scales with arena area (capped) so big maps don't feel empty.
+      count = Math.min(420, Math.round(count * (dims.w * dims.h) / (1600 * 900)));
       const pos = new Float32Array(count * 3);
       const vel = [];
       for (let i = 0; i < count; i++) {
@@ -638,44 +663,46 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     }
 
     // ── Background scenes ──
-    function buildStand(cx, cz, len, axis, facing, crowdTex) {
+    function buildStand(cx, cz, len, axis, facing, crowdTex, s) {
       const standMat = new THREE.MeshStandardMaterial({ color: 0x2b3648, roughness: 0.9 });
       const box = new THREE.Mesh(
-        axis === "x" ? new THREE.BoxGeometry(len, 120, 120) : new THREE.BoxGeometry(120, 120, len),
+        axis === "x" ? new THREE.BoxGeometry(len, 120 * s, 120 * s) : new THREE.BoxGeometry(120 * s, 120 * s, len),
         standMat
       );
-      box.position.set(cx, 60, cz);
+      box.position.set(cx, 60 * s, cz);
       mapGroup.add(box);
 
       // Crowd plane sits on the stand's field-facing edge; lookAt aims it at
       // the field center with a natural downward tilt, whatever the side.
       const crowd = new THREE.Mesh(
-        new THREE.PlaneGeometry(len, 130),
+        new THREE.PlaneGeometry(len, 130 * s),
         new THREE.MeshBasicMaterial({ map: crowdTex })
       );
       crowd.position.set(
-        axis === "x" ? cx : cx + facing * 62,
-        130,
-        axis === "x" ? cz + facing * 62 : cz
+        axis === "x" ? cx : cx + facing * 62 * s,
+        130 * s,
+        axis === "x" ? cz + facing * 62 * s : cz
       );
       crowd.lookAt(dims.cx, 20, dims.cz);
       mapGroup.add(crowd);
     }
 
     function buildStadium() {
+      const s = Math.min(2.4, Math.max(1, dims.w / 2600));
+      const off = 260 * s;
       const crowdTex = crowdTexture();
-      crowdTex.repeat.set(10, 2);
+      crowdTex.repeat.set(Math.round(10 * Math.max(1, dims.w / 1600)), 2);
       mapDisposables.push(crowdTex);
 
-      buildStand(dims.cx, -260, dims.w + 400, "x", 1, crowdTex);
-      buildStand(dims.cx, dims.h + 260, dims.w + 400, "x", -1, crowdTex);
-      buildStand(-260, dims.cz, dims.h + 400, "z", 1, crowdTex);
-      buildStand(dims.w + 260, dims.cz, dims.h + 400, "z", -1, crowdTex);
+      buildStand(dims.cx, -off, dims.w + 400, "x", 1, crowdTex, s);
+      buildStand(dims.cx, dims.h + off, dims.w + 400, "x", -1, crowdTex, s);
+      buildStand(-off, dims.cz, dims.h + 400, "z", 1, crowdTex, s);
+      buildStand(dims.w + off, dims.cz, dims.h + 400, "z", -1, crowdTex, s);
 
       buildBillboards(
-        [[dims.cx, -235], [dims.cx, dims.h + 235], [-235, dims.cz], [dims.w + 235, dims.cz]],
+        [[dims.cx, -off + 25], [dims.cx, dims.h + off - 25], [-off + 25, dims.cz], [dims.w + off - 25, dims.cz]],
         ["GROOT GP", "SMASH!", "TURBO", "GROOT ARENA"],
-        210
+        210 * s
       );
       buildFloodlights([
         [-220, -220], [dims.w + 220, -220], [-220, dims.h + 220], [dims.w + 220, dims.h + 220],
@@ -711,21 +738,26 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 1 })
       );
 
-      const placeRing = (count, rMin, rMax, place) => {
+      // Scatter along the arena PERIMETER (offset outward) — radius-based
+      // rings would land inside a 5200-wide arena.
+      const perimeter = (count, minOff, maxOff, place) => {
         for (let i = 0; i < count; i++) {
-          const a = (i / count) * Math.PI * 2 + rnd() * 0.3;
-          const r = rMin + rnd() * (rMax - rMin);
-          const x = dims.cx + Math.cos(a) * r;
-          const z = dims.cz + Math.sin(a) * r * 0.8;
-          // Keep decor strictly outside the arena walls.
-          if (x > -60 && x < dims.w + 60 && z > -60 && z < dims.h + 60) continue;
+          const side = i % 4;
+          const t = rnd();
+          const off = minOff + rnd() * (maxOff - minOff);
+          let x, z;
+          if (side === 0) { x = -off; z = t * dims.h; }
+          else if (side === 1) { x = dims.w + off; z = t * dims.h; }
+          else if (side === 2) { x = t * dims.w; z = -off; }
+          else { x = t * dims.w; z = dims.h + off; }
           place(x, z);
         }
       };
 
+      const treeScale = Math.min(2.2, Math.max(1, dims.w / 2600));
       const tree = (x, z) => {
         const conifer = rnd() > 0.45;
-        const s = 0.8 + rnd() * 0.7;
+        const s = (0.8 + rnd() * 0.7) * treeScale;
         if (conifer) {
           const trunk = new THREE.Mesh(new THREE.CylinderGeometry(9 * s, 13 * s, 55 * s, 7), trunkMat);
           trunk.position.set(x, 27 * s, z);
@@ -751,71 +783,79 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           mapGroup.add(side);
         }
       };
-      placeRing(26, 820, 1000, tree);
-      placeRing(16, 1120, 1380, tree);
+      perimeter(48, 80, 500, tree);
+      perimeter(24, 550, 1100, tree);
 
       const bushMat = new THREE.MeshStandardMaterial({ color: 0x2c6b35, roughness: 1 });
-      placeRing(20, 780, 820, (x, z) => {
-        const b = new THREE.Mesh(new THREE.SphereGeometry(16 + rnd() * 14, 8, 6), bushMat);
+      perimeter(30, 20, 120, (x, z) => {
+        const b = new THREE.Mesh(new THREE.SphereGeometry((16 + rnd() * 14) * treeScale, 8, 6), bushMat);
         b.position.set(x, 12, z);
         b.scale.y = 0.7;
         mapGroup.add(b);
       });
 
       buildMountains(0x51707f);
-      buildSunSprite(0xfff0b0, 520);
-      buildClouds(7, 0xffffff, 0.45);
+      buildSunSprite(0xfff0b0);
+      buildClouds(8, 0xffffff, 0.45);
     }
 
     function buildVolcano() {
       const rnd = mulberry32(83);
-      const VX = dims.cx, VZ = -1150;
+      // The volcano scales with the world so it stays a looming landmark.
+      const VX = dims.cx, VZ = -dims.h * 0.5;
+      const coneR = dims.w * 0.28;
+      const coneH = dims.w * 0.24;
+      const topR = coneR * 0.19;
 
       const rockMat = new THREE.MeshStandardMaterial({ color: 0x241d22, roughness: 1, flatShading: true });
-      const cone = new THREE.Mesh(new THREE.CylinderGeometry(150, 780, 620, 24, 3), rockMat);
-      cone.position.set(VX, 310, VZ);
+      const cone = new THREE.Mesh(new THREE.CylinderGeometry(topR, coneR, coneH, 24, 3), rockMat);
+      cone.position.set(VX, coneH / 2, VZ);
       mapGroup.add(cone);
 
       const craterMat = new THREE.MeshBasicMaterial({ color: 0xff5a1f, toneMapped: false });
-      const crater = new THREE.Mesh(new THREE.CircleGeometry(132, 24), craterMat);
+      const crater = new THREE.Mesh(new THREE.CircleGeometry(topR * 0.88, 24), craterMat);
       crater.rotation.x = -Math.PI / 2;
-      crater.position.set(VX, 622, VZ);
+      crater.position.set(VX, coneH + 2, VZ);
       mapGroup.add(crater);
       mapFx.lavaMats = [craterMat];
 
       const streakMat = new THREE.MeshBasicMaterial({ color: 0xff4a1a, toneMapped: false });
       for (const a of [0.5, 1.8, 3.4, 5.0]) {
-        const streak = new THREE.Mesh(new THREE.BoxGeometry(11, 300, 11), streakMat);
-        streak.position.set(VX + Math.cos(a) * 430, 340, VZ + Math.sin(a) * 430);
-        streak.lookAt(VX, 760, VZ);
+        const streak = new THREE.Mesh(new THREE.BoxGeometry(coneR * 0.014, coneH * 0.5, coneR * 0.014), streakMat);
+        streak.position.set(VX + Math.cos(a) * coneR * 0.55, coneH * 0.55, VZ + Math.sin(a) * coneR * 0.55);
+        streak.lookAt(VX, coneH * 1.22, VZ);
         streak.rotateX(Math.PI / 2);
         mapGroup.add(streak);
       }
 
       // Smoke plume looping out of the crater.
       const smoke = [];
+      const plumeH = coneH * 0.7;
       for (let i = 0; i < 12; i++) {
         const s = new THREE.Sprite(new THREE.SpriteMaterial({
           map: glowTex, color: 0x554a48, transparent: true, opacity: 0.4,
           depthWrite: false, fog: false,
         }));
-        s.position.set(VX + (rnd() - 0.5) * 80, 640 + (i / 12) * 420, VZ + (rnd() - 0.5) * 80);
-        s.userData.vy = 46 + rnd() * 40;
+        s.position.set(VX + (rnd() - 0.5) * topR, coneH + (i / 12) * plumeH, VZ + (rnd() - 0.5) * topR);
+        s.userData.vy = (46 + rnd() * 40) * Math.max(1, dims.w / 2600);
         mapGroup.add(s);
         smoke.push(s);
       }
-      mapFx.smoke = { sprites: smoke, baseY: 640, vx: VX, vz: VZ };
+      mapFx.smoke = { sprites: smoke, baseY: coneH, riseH: plumeH, baseScale: topR * 0.9, vx: VX, vz: VZ, spread: topR };
 
-      // Lava pools bubbling outside the walls.
+      // Lava pools bubbling just outside the walls.
       const pools = [];
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2 + rnd() * 0.5;
-        const r = 950 + rnd() * 320;
-        const x = dims.cx + Math.cos(a) * r;
-        const z = dims.cz + Math.sin(a) * r * 0.8;
-        if (x > -60 && x < dims.w + 60 && z > -60 && z < dims.h + 60) continue;
+      for (let i = 0; i < 10; i++) {
+        const side = i % 4;
+        const t = rnd();
+        const off = 120 + rnd() * 600;
+        let x, z;
+        if (side === 0) { x = -off; z = t * dims.h; }
+        else if (side === 1) { x = dims.w + off; z = t * dims.h; }
+        else if (side === 2) { x = t * dims.w; z = -off; }
+        else { x = t * dims.w; z = dims.h + off; }
         const mat = new THREE.MeshBasicMaterial({ color: 0xff5a1f, transparent: true, opacity: 0.9, toneMapped: false });
-        const pool = new THREE.Mesh(new THREE.CircleGeometry(60 + rnd() * 80, 18), mat);
+        const pool = new THREE.Mesh(new THREE.CircleGeometry(80 + rnd() * 140, 18), mat);
         pool.rotation.x = -Math.PI / 2;
         pool.position.set(x, 0.4, z);
         mapGroup.add(pool);
@@ -823,15 +863,14 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       }
       mapFx.lavaMats.push(...pools);
 
-      // Basalt column clusters.
+      // Basalt column clusters at the corners.
       const colMat = new THREE.MeshStandardMaterial({ color: 0x2a2530, roughness: 0.9 });
-      for (const a of [0.8, 2.4, 4.0, 5.5]) {
-        const cxp = dims.cx + Math.cos(a) * 1050;
-        const czp = dims.cz + Math.sin(a) * 850;
-        for (let i = 0; i < 6; i++) {
-          const hgt = 50 + rnd() * 120;
-          const col = new THREE.Mesh(new THREE.CylinderGeometry(24, 27, hgt, 6), colMat);
-          col.position.set(cxp + (rnd() - 0.5) * 160, hgt / 2, czp + (rnd() - 0.5) * 160);
+      const cs = Math.max(1, dims.w / 2600);
+      for (const [ox, oz] of [[-350, -350], [dims.w + 350, -350], [-350, dims.h + 350], [dims.w + 350, dims.h + 350]]) {
+        for (let i = 0; i < 7; i++) {
+          const hgt = (50 + rnd() * 140) * cs;
+          const col = new THREE.Mesh(new THREE.CylinderGeometry(24 * cs, 27 * cs, hgt, 6), colMat);
+          col.position.set(ox + (rnd() - 0.5) * 300 * cs, hgt / 2, oz + (rnd() - 0.5) * 300 * cs);
           col.rotation.y = rnd() * Math.PI;
           mapGroup.add(col);
         }
@@ -840,44 +879,48 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
 
     function buildCircuitDeco() {
       buildMountains(0x3a2c4a);
-      buildClouds(6, 0xd8a8c0, 0.35);
-      buildFloodlights([
-        [dims.cx - 1150, dims.cz - 780], [dims.cx + 1150, dims.cz - 780],
-        [dims.cx - 1150, dims.cz + 780], [dims.cx + 1150, dims.cz + 780],
-      ]);
+      buildClouds(7, 0xd8a8c0, 0.35);
+      const f = Math.min(2.4, Math.max(1, dims.w / 2600));
+      buildFloodlights([0.55, 1.6, 2.6, 3.7, 4.7, 5.75].map((a) => [
+        dims.cx + Math.cos(a) * dims.w * 0.36,
+        dims.cz + Math.sin(a) * dims.h * 0.36,
+      ]));
       // Billboard posts around the outside of the track.
       const texts = ["GROOT GP", "TURBO", "LAP KING", "SMASH!"];
       const spots = [0.45, 2.0, 3.6, 5.2].map((a) => [
-        dims.cx + Math.cos(a) * 1000,
-        dims.cz + Math.sin(a) * 760,
+        dims.cx + Math.cos(a) * dims.w * 0.33,
+        dims.cz + Math.sin(a) * dims.h * 0.33,
       ]);
       const poleMat = new THREE.MeshStandardMaterial({ color: 0x39424f, roughness: 0.7 });
       for (const [x, z] of spots) {
-        const pole = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 120, 8), poleMat);
-        pole.position.set(x, 60, z);
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(6 * f, 6 * f, 120 * f, 8), poleMat);
+        pole.position.set(x, 60 * f, z);
         mapGroup.add(pole);
       }
-      buildBillboards(spots, texts, 150);
+      buildBillboards(spots, texts, 150 * f);
     }
 
     function buildCanyonDeco() {
       const rnd = mulberry32(59);
+      const ms = Math.min(2.6, Math.max(1, dims.w / 2000));
+      // The blob boundary never exceeds this radius (unstretched) — anything
+      // farther out is safely outside the playable bowl.
+      const insideR = Math.max(dims.w, dims.h) * 0.38;
       const sandstone = [0xb98a5e, 0xa87850, 0x8f6644].map(
         (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 1, flatShading: true })
       );
       // Mesas — stacked truncated cones outside the boundary blob.
-      for (let i = 0; i < 14; i++) {
-        const a = (i / 14) * Math.PI * 2 + rnd() * 0.4;
-        const r = 1000 + rnd() * 550;
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2 + rnd() * 0.4;
+        const r = insideR * 1.18 + rnd() * insideR * 0.6;
         const x = dims.cx + Math.cos(a) * r;
         const z = dims.cz + Math.sin(a) * r * 0.8;
-        // Skip anything that would land inside the arena bowl.
-        if (Math.hypot(x - dims.cx, (z - dims.cz) / 0.75) < 820) continue;
+        if (Math.hypot(x - dims.cx, (z - dims.cz) / 0.75) < insideR * 1.08) continue;
         let y = 0;
-        let rad = 90 + rnd() * 110;
+        let rad = (90 + rnd() * 110) * ms;
         const tiers = 2 + Math.floor(rnd() * 2);
         for (let tier = 0; tier < tiers; tier++) {
-          const hgt = 60 + rnd() * 90;
+          const hgt = (60 + rnd() * 90) * ms;
           const m = new THREE.Mesh(
             new THREE.CylinderGeometry(rad * 0.82, rad, hgt, 9),
             sandstone[Math.floor(rnd() * sandstone.length)]
@@ -890,20 +933,20 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       }
       // Scattered desert rocks.
       const rockMat = new THREE.MeshStandardMaterial({ color: 0x9a7a56, roughness: 1, flatShading: true });
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 14; i++) {
         const a = rnd() * Math.PI * 2;
-        const r = 880 + rnd() * 500;
+        const r = insideR * 1.1 + rnd() * insideR * 0.5;
         const x = dims.cx + Math.cos(a) * r;
         const z = dims.cz + Math.sin(a) * r * 0.8;
-        if (Math.hypot(x - dims.cx, (z - dims.cz) / 0.75) < 820) continue;
-        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(14 + rnd() * 26, 0), rockMat);
-        rock.position.set(x, 10, z);
+        if (Math.hypot(x - dims.cx, (z - dims.cz) / 0.75) < insideR * 1.05) continue;
+        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry((14 + rnd() * 26) * ms, 0), rockMat);
+        rock.position.set(x, 10 * ms, z);
         rock.scale.y = 0.7;
         mapGroup.add(rock);
       }
       buildMountains(0x8a5a40);
-      buildSunSprite(0xffe8c0, 600);
-      buildClouds(5, 0xfff0d8, 0.4);
+      buildSunSprite(0xffe8c0);
+      buildClouds(6, 0xfff0d8, 0.4);
     }
 
     function buildMap(mapId) {
@@ -927,6 +970,7 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       if (scene.background?.dispose) scene.background.dispose();
       scene.background = gradientTexture(theme.sky);
       scene.fog.color.setHex(theme.fog);
+      scene.fog.near = Math.max(1600, Math.max(dims.w, dims.h) * 0.45);
       scene.fog.far = theme.fogFar ?? 3400;
       renderer.toneMappingExposure = theme.exposure ?? 1.15;
       bloomPass.strength = theme.bloom ?? 0.55;
@@ -946,8 +990,9 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       hemi.intensity = theme.hemi.intensity;
 
       // A huge outer ground so the world doesn't float in a void.
+      const outerSize = Math.max(dims.w, dims.h) * 4;
       const outer = new THREE.Mesh(
-        new THREE.PlaneGeometry(9000, 9000),
+        new THREE.PlaneGeometry(outerSize, outerSize),
         new THREE.MeshStandardMaterial({ color: theme.outer, roughness: 1 })
       );
       outer.rotation.x = -Math.PI / 2;
@@ -959,14 +1004,14 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         buildShapedFloor(map.shape, theme);
         buildBarrierLoop(map.shape.outer, theme);
         if (map.shape.inner) buildBarrierLoop(map.shape.inner, theme);
-        if (map.shape.start) buildStartLine(map.shape.start);
+        if (map.shape.start) buildStartLine(map.shape.start, map.shape.width);
       } else {
         // Rectangular arena: textured floor + boxed walls with neon trim.
         let floorMat;
         if (theme.floorTex === "basalt") {
           const { map: alb, emissiveMap } = basaltTextures();
-          alb.repeat.set(5, 3);
-          emissiveMap.repeat.set(5, 3);
+          alb.repeat.set(dims.w / 300, dims.h / 300);
+          emissiveMap.repeat.set(dims.w / 300, dims.h / 300);
           mapDisposables.push(alb, emissiveMap);
           floorMat = new THREE.MeshStandardMaterial({
             color: 0xffffff, map: alb, roughness: 0.95,
@@ -975,7 +1020,7 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           mapFx.floorMat = floorMat;
         } else {
           const tex = theme.floorTex === "grass" ? grassTexture() : asphaltTexture();
-          tex.repeat.set(5.3, 3);
+          tex.repeat.set(dims.w / 300, dims.h / 300);
           mapDisposables.push(tex);
           floorMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: tex, roughness: 0.95, metalness: 0.05 });
         }
@@ -986,7 +1031,7 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         mapGroup.add(floor);
 
         if (theme.grid) {
-          const grid = new THREE.GridHelper(Math.max(dims.w, dims.h), 32, theme.neon, 0x243350);
+          const grid = new THREE.GridHelper(Math.max(dims.w, dims.h), Math.round(Math.max(dims.w, dims.h) / 160), theme.neon, 0x243350);
           grid.position.set(dims.cx, 0.6, dims.cz);
           grid.material.opacity = 0.3;
           grid.material.transparent = true;
@@ -999,12 +1044,15 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           );
           ring.rotation.x = -Math.PI / 2;
           ring.position.set(dims.cx, 1, dims.cz);
+          ring.scale.setScalar(Math.max(1, dims.w / 1600));
           mapGroup.add(ring);
         }
 
         const wallMat = new THREE.MeshStandardMaterial({ color: theme.wall, roughness: 0.7, metalness: 0.2 });
         const neonMat = new THREE.MeshStandardMaterial({ color: theme.neon, emissive: theme.neon, emissiveIntensity: 2.2 });
-        const WALL_H = 50, WALL_T = 16;
+        // Taller/chunkier walls on big arenas so the edge still reads.
+        const WALL_H = dims.w > 3000 ? 110 : 50;
+        const WALL_T = dims.w > 3000 ? 30 : 16;
         const walls = [
           [dims.cx, WALL_H / 2, 0, dims.w, WALL_H, WALL_T],
           [dims.cx, WALL_H / 2, dims.h, dims.w, WALL_H, WALL_T],
@@ -1091,10 +1139,25 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       const cannon = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.8, 24, 10),
         new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.7, roughness: 0.25 }));
       cannon.rotation.z = Math.PI / 2; cannon.position.set(32, 15, 0); chassis.add(cannon);
+      // Nitro flames — additive blue cones out of the exhausts, visible while
+      // the speed powerup is active (flicker + trail driven per-frame).
+      const flames = [];
       for (const side of [-1, 1]) {
         const pipe = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.4, 10, 8), darkMat);
         pipe.rotation.z = Math.PI / 2; pipe.position.set(-30, 10, side * 8);
         chassis.add(pipe);
+        const flame = new THREE.Mesh(
+          new THREE.ConeGeometry(3.6, 18, 8),
+          new THREE.MeshBasicMaterial({
+            color: 0x66d9ff, transparent: true, opacity: 0.9,
+            blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+          })
+        );
+        flame.rotation.z = Math.PI / 2; // cone tip trails behind the kart
+        flame.position.set(-43, 10, side * 8);
+        flame.visible = false;
+        chassis.add(flame);
+        flames.push(flame);
       }
 
       // Head/tail lights (lens brightness retuned by night themes each frame).
@@ -1157,7 +1220,7 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       );
       teamRing.rotation.x = -Math.PI / 2; teamRing.position.y = 2; teamRing.visible = false; g.add(teamRing);
 
-      return { group: g, chassis, bodyMat, lampMats, wheels, frontPivots, aura, shield, teamRing, spin: 0, steerVis: 0, dustAt: 0 };
+      return { group: g, chassis, bodyMat, lampMats, wheels, frontPivots, flames, aura, shield, teamRing, spin: 0, steerVis: 0, dustAt: 0, nitroAt: 0 };
     }
 
     function makeSprite(w2, h2, scaleX, scaleY, y) {
@@ -1409,6 +1472,20 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           if (k.wasAlive && !p.alive) spawnExplosion(x, z, COLOR_INT[p.color] ?? 0xffa533, false);
           k.wasAlive = p.alive;
 
+          // Nitro boost FX: flickering exhaust flames + cyan trail.
+          const boosted = p.alive && p.speed;
+          for (const fl of k.flames) {
+            fl.visible = boosted;
+            if (boosted) {
+              fl.scale.set(1, 1 + 0.5 * Math.abs(Math.sin(now * 0.045 + fl.position.z)), 1);
+              fl.material.opacity = 0.65 + 0.3 * Math.sin(now * 0.06 + fl.position.z * 2);
+            }
+          }
+          if (boosted && now - k.nitroAt > 28) {
+            k.nitroAt = now;
+            spawnDust(x - Math.cos(angle) * 32, z - Math.sin(angle) * 32, 0x55ccff);
+          }
+
           // Aura color by powerup priority: bomb > speed > rapid.
           let auraHex = null;
           if (p.bomb > 0) auraHex = 0xff3b30;
@@ -1471,7 +1548,8 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           const mq = prevById[myId];
           let sp = 0;
           if (mc && mq) sp = Math.hypot(mc.x - mq.x, mc.y - mq.y) / (SNAP_INTERVAL / 1000);
-          const fovTarget = 60 + Math.min(1, sp / 620) * 12;
+          // Extra FOV punch while the nitro boost is active.
+          const fovTarget = 60 + Math.min(1, sp / 800) * 12 + (mc?.speed ? 7 : 0);
           camera.fov += (fovTarget - camera.fov) * 0.08;
           camera.updateProjectionMatrix();
         }
@@ -1509,21 +1587,22 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         }
       }
       if (mapFx.clouds) {
+        const spread = mapFx.cloudSpread || 2600;
         for (const c of mapFx.clouds) {
           c.position.x += 13 * fdt;
-          if (c.position.x > dims.cx + 2600) c.position.x = dims.cx - 2600;
+          if (c.position.x > dims.cx + spread) c.position.x = dims.cx - spread;
         }
       }
       if (mapFx.smoke) {
-        const { sprites, baseY, vx, vz } = mapFx.smoke;
+        const { sprites, baseY, riseH, baseScale, vx, vz, spread } = mapFx.smoke;
         for (const s of sprites) {
           s.position.y += s.userData.vy * fdt;
           const rise = s.position.y - baseY;
-          const sc = 120 + rise * 0.55;
+          const sc = baseScale + rise * 0.55;
           s.scale.set(sc, sc, 1);
-          s.material.opacity = Math.max(0, 0.42 * (1 - rise / 460));
-          if (rise > 460) {
-            s.position.set(vx + (Math.random() - 0.5) * 80, baseY, vz + (Math.random() - 0.5) * 80);
+          s.material.opacity = Math.max(0, 0.42 * (1 - rise / riseH));
+          if (rise > riseH) {
+            s.position.set(vx + (Math.random() - 0.5) * spread, baseY, vz + (Math.random() - 0.5) * spread);
           }
         }
       }
