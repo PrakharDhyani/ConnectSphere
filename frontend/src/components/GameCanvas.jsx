@@ -16,7 +16,11 @@ import Button from "@/components/ui/Button.jsx";
 
 const W = 1000;
 const H = 600;
-const PALETTE = ["#111827", "#e03131", "#2f9e44", "#1971c2", "#f08c00", "#ae3ec9", "#ffffff"];
+const PALETTE = [
+  "#111827", "#6b7280", "#e03131", "#f76707", "#f08c00", "#f59f00",
+  "#2f9e44", "#099268", "#1971c2", "#1098ad", "#ae3ec9", "#d6336c",
+  "#a0522d", "#ffffff",
+];
 
 export default function GameCanvas({ roomId, isDrawer }) {
   const canvasRef = useRef(null);
@@ -100,30 +104,45 @@ export default function GameCanvas({ roomId, isDrawer }) {
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerLeave={onUp}
-        style={{ aspectRatio: `${W} / ${H}` }}
-        className={`w-full bg-white rounded-xl touch-none ${isDrawer ? "cursor-crosshair" : "cursor-default"}`}
+        style={{ aspectRatio: `${W} / ${H}`, boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.08)" }}
+        className={`w-full bg-white rounded-xl touch-none shadow-lg ${isDrawer ? "cursor-crosshair" : "cursor-default"}`}
       />
       {isDrawer && (
-        <div className="flex items-center gap-2 mt-2 flex-wrap">
-          {PALETTE.map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => setColor(c)}
-              style={{ background: c }}
-              className={`w-7 h-7 rounded-full border ${color === c ? "ring-2 ring-brand-500" : "border-gray-600"}`}
-              title={c === "#ffffff" ? "Eraser" : c}
+        <div className="flex items-center gap-3 mt-3 flex-wrap bg-gray-900/60 border border-gray-800 rounded-xl p-2.5">
+          {/* live brush preview */}
+          <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center shrink-0 shadow-inner">
+            <span
+              className="rounded-full border border-black/10"
+              style={{ width: size, height: size, background: color === "#ffffff" ? "#e5e7eb" : color }}
             />
-          ))}
-          <input
-            type="range"
-            min="2"
-            max="24"
-            value={size}
-            onChange={(e) => setSize(Number(e.target.value))}
-            className="accent-brand-500"
-          />
-          <Button variant="secondary" onClick={clear}>Clear</Button>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {PALETTE.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setColor(c)}
+                style={{ background: c }}
+                className={`w-6 h-6 rounded-full border transition-transform hover:scale-110
+                  ${color === c ? "ring-2 ring-brand-400 ring-offset-1 ring-offset-gray-900 scale-110" : "border-gray-600"}`}
+                title={c === "#ffffff" ? "Eraser" : c}
+              />
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min="2"
+              max="28"
+              value={size}
+              onChange={(e) => setSize(Number(e.target.value))}
+              className="accent-brand-500 w-24"
+              title={`Brush size: ${size}px`}
+            />
+            <Button variant="secondary" onClick={clear}>Clear</Button>
+          </div>
         </div>
       )}
     </div>

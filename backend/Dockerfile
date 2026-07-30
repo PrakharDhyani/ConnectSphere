@@ -1,50 +1,31 @@
 # ============================================================
-# ConnectSphere Backend — Dockerfile
+# Groot Backend — production image
 #
-# Multi-stage build:
-#   Stage 1 (builder) — install ALL deps including devDeps
-#   Stage 2 (runner)  — copy only production deps + built code
+# Multi-stage: deps are installed (and mediasoup's C++ worker is
+# COMPILED) in a stage with a toolchain; the runtime stage is the
+# same slim base without it.
 #
-# Why multi-stage?
-#   The final image is ~200MB smaller because devDependencies
-#   (nodemon, eslint, jest, etc.) are NOT included.
+# Why bookworm-slim and not alpine: mediasoup's worker targets
+# glibc — on musl (alpine) there are no prebuilts and source
+# builds are unsupported. On ARM VMs (Oracle Ampere) it compiles
+# from source, which is why python3/make/g++ are here.
 # ============================================================
 
-# ── Stage 1: Builder ──────────────────────────────────────
-FROM node:20-alpine AS builder
-
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
-
-# Copy package files first (Docker layer caching trick:
-# if package.json doesn't change, npm install layer is reused)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
-# ── Stage 2: Runner ───────────────────────────────────────
-FROM node:20-alpine AS runner
-
-# Create non-root user for security
-# Running as root in a container is a security risk
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
-
-# Copy production node_modules from builder
-COPY --from=builder /app/node_modules ./node_modules
-
-# Copy source code
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
 COPY src/ ./src/
 COPY package*.json ./
-
-# Switch to non-root user
-USER appuser
-
-# Document which port the app listens on
+# The base image ships a non-root "node" user — never run as root.
+USER node
 EXPOSE 5000
-
-# Health check for Docker / k8s
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD wget -qO- http://localhost:5000/api/health || exit 1
-
 CMD ["node", "src/index.js"]
-

@@ -42,17 +42,24 @@ export function useRoomChat(roomId) {
     socket.on("presence:update", onPresence);
     socket.on("typing", onTyping);
 
+    // Socket.io reconnects with a BRAND-NEW server-side socket whose `rooms`
+    // set is empty — so the room must be re-joined on EVERY connect, not just
+    // the first. (With `once`, a backend restart or network blip silently left
+    // the client outside the room: chat, games and presence all stopped working
+    // while the UI still looked connected.)
     const join = () =>
       socket.emit("room:join", roomId, (ack) => {
-        if (ack?.ok) setReady(true);
+        if (!active) return;
+        if (ack?.ok) { setReady(true); setError(null); }
         else setError(ack?.error || "Could not join room");
       });
+    socket.on("connect", join);
     if (socket.connected) join();
-    else socket.once("connect", join);
 
     return () => {
       active = false;
       socket.emit("room:leave", roomId, () => {});
+      socket.off("connect", join);
       socket.off("message:new", onNew);
       socket.off("presence:update", onPresence);
       socket.off("typing", onTyping);

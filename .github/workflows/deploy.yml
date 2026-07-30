@@ -1,0 +1,38 @@
+# Continuous deployment: every push to main SSHes into the VM, pulls the
+# new code and rebuilds the stack. Requires three repository secrets
+# (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST     — the VM's public IP or hostname
+#   DEPLOY_USER     — the SSH user (ubuntu on Oracle images)
+#   DEPLOY_SSH_KEY  — a PRIVATE key generated ONLY for deploys; its public
+#                     half goes in the VM's ~/.ssh/authorized_keys
+#
+# If the deploy fails, the previous containers keep running — a red X here
+# never takes the site down.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull & rebuild on the VM
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          command_timeout: 20m
+          script: |
+            set -e
+            cd ~/connectsphere
+            git fetch origin main
+            git reset --hard origin/main
+            docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+            docker image prune -f

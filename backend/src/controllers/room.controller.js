@@ -13,6 +13,19 @@ function toSafeRoom(room) {
     name: room.name,
     code: room.code,
     owner: room.owner,
+    visibility: room.visibility || "private",
+    memberCount: room.members.length,
+    createdAt: room.createdAt,
+  };
+}
+
+// What a NON-member may see about a public room — note: no invite `code`
+// (discovery must not leak the private-style door key).
+function toPublicRoom(room) {
+  return {
+    id: room._id,
+    name: room.name,
+    visibility: "public",
     memberCount: room.members.length,
     createdAt: room.createdAt,
   };
@@ -63,17 +76,23 @@ async function loadRoom(id, { populateMembers = false } = {}) {
 
 export async function createRoom(req, res, next) {
   try {
-    const { name } = req.body;
+    const { name, visibility } = req.body;
 
     // The 6-char code has a ~1-in-16M collision chance; the unique index
     // catches it (E11000). Retry with a fresh code instead of failing the
-    // user's request over cosmic bad luck.
+    // user's request over cosmic bad luck. A duplicate NAME is also E11000 —
+    // but that one is the user's to fix, so it maps to a 409, not a retry.
     let room;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        room = await Room.create({ name, owner: req.user.id });
+        room = await Room.create({ name, visibility, owner: req.user.id });
         break;
       } catch (err) {
+        if (err.code === 11000 && err.keyPattern?.nameLower) {
+          const dup = new Error("A room with this name already exists — pick another");
+          dup.statusCode = 409;
+          throw dup;
+        }
         if (err.code !== 11000 || attempt === 2) throw err;
       }
     }
@@ -89,6 +108,35 @@ export async function listMyRooms(req, res, next) {
   try {
     const rooms = await Room.find({ members: req.user.id }).sort({ createdAt: -1 });
     res.json({ success: true, data: { rooms: rooms.map(toSafeRoom) } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Discovery: newest public rooms (capped), safe shape — no invite codes.
+export async function listPublicRooms(req, res, next) {
+  try {
+    const rooms = await Room.find({ visibility: "public" }).sort({ createdAt: -1 }).limit(30);
+    res.json({ success: true, data: { rooms: rooms.map(toPublicRoom) } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// POST /:id/join-public — walk into a PUBLIC room without a code. Private
+// rooms 404 here (not 403): don't confirm a hidden room exists.
+export async function joinPublicRoom(req, res, next) {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) throw notFound();
+    const room = await Room.findOneAndUpdate(
+      { _id: req.params.id, visibility: "public" },
+      { $addToSet: { members: req.user.id } },
+      { new: true }
+    );
+    if (!room) throw notFound();
+
+    io?.to(roomKey(room._id)).emit("room:members-changed", { roomId: room._id.toString() });
+    res.json({ success: true, data: { room: toSafeRoom(room) } });
   } catch (error) {
     next(error);
   }
@@ -141,7 +189,16 @@ export async function renameRoom(req, res, next) {
     }
 
     room.name = req.body.name;
-    await room.save();
+    try {
+      await room.save();
+    } catch (err) {
+      if (err.code === 11000 && err.keyPattern?.nameLower) {
+        const dup = new Error("A room with this name already exists — pick another");
+        dup.statusCode = 409;
+        throw dup;
+      }
+      throw err;
+    }
 
     io?.to(roomKey(room._id)).emit("room:updated", {
       roomId: room._id.toString(),

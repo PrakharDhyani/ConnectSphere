@@ -20,7 +20,7 @@ import { canAccessRoom } from "../utils/roomAccess.js";
 import { allow } from "../utils/socketRate.js";
 import { logger } from "../utils/logger.js";
 
-const ANNOUNCE_ACTIVITIES = new Set(["call", "board", "skribbl", "ludo"]);
+const ANNOUNCE_ACTIVITIES = new Set(["call", "board", "skribbl", "ludo", "kart"]);
 
 // The Socket.io room name for an app room. Exported so REST controllers can
 // broadcast to the same group (e.g. "room:closed" when a room is deleted).

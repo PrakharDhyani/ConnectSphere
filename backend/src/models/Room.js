@@ -20,6 +20,26 @@ const roomSchema = new Schema(
       minlength: 2,
       maxlength: 100,
     },
+    // Shadow of `name` lowercased, unique-indexed. This is how "no duplicate
+    // room names" survives a race: two simultaneous creates both pass any
+    // find() pre-check, but only one can win the index. (A collated unique
+    // index on `name` would also work, but an explicit field is easier to
+    // reason about and query.)
+    nameLower: {
+      type: String,
+      unique: true,
+      // sparse: legacy rooms created before this field exist without it —
+      // a non-sparse unique index would refuse to build over N missing values.
+      sparse: true,
+      index: true,
+    },
+    // public rooms are discoverable and joinable without an invite code;
+    // private rooms are invite-code only (the original behavior).
+    visibility: {
+      type: String,
+      enum: ["public", "private"],
+      default: "private",
+    },
     code: {
       type: String,
       unique: true,
@@ -58,6 +78,9 @@ roomSchema.pre("validate", function ensureOwnerIsMember(next) {
       this.members.push(this.owner);
     }
   }
+  // Keep the uniqueness shadow in lockstep with the display name (covers
+  // renames too, not just creation).
+  if (this.isModified("name")) this.nameLower = this.name.toLowerCase();
   next();
 });
 

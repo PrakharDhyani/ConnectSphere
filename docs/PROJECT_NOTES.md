@@ -1297,6 +1297,525 @@ notifications anywhere in the app.
 
 ---
 
+## 25. Feature: Smash Karts — real-time 2D deathmatch
+
+*(Third mini-game — the first CONTINUOUS/real-time one, not turn-based)*
+
+### The Feature
+A top-down car-battle arena in a room: up to 6 players drive around a 1600×900
+arena, shoot each other, respawn on death, grab health / rapid-fire pickups.
+Most kills in a 3-minute match wins. Inspired by SmashKarts, built from scratch.
+
+### Options Considered
+- **3D (Three.js + a physics engine) vs. 2D top-down canvas.** Chose **2D**: it
+  reuses the existing socket/room/GamesHub stack, ships an MVP in days not weeks,
+  runs smooth on any device, and keeps the *same* "drive + shoot + respawn" loop.
+  3D would reuse almost none of the current architecture.
+- **Win condition:** deathmatch (most kills) vs. last-kart-standing vs. race+combat.
+  Chose **deathmatch** — closest to the reference and simplest to make fun.
+
+### What We Did
+- **The one new architectural muscle: a server tick loop.** Ludo/Skribbl are
+  event-driven (react to a roll/guess). A shooter can't be — the server runs a
+  fixed **30 Hz `setInterval`** per active arena that integrates physics and
+  broadcasts a world snapshot at **~15 Hz** (`SNAPSHOT_EVERY = 2` ticks).
+- **Server-authoritative everything.** Clients send only compact input
+  (`throttle`/`steer`/`shoot`, each clamped to [-1,1]); the server owns every
+  position, bullet, hit, score, and respawn. A client can lie about its input,
+  never about the outcome — the only way a shooter stays fair.
+- **Pure physics core** (`games/kartArena.js`): arcade car model (one speed
+  scalar along the heading; steering effectiveness scales with speed and flips
+  in reverse), wall clamping, bullets with TTL + circle-hit detection, respawn
+  timers, and health / rapid-fire pickup pads. Kept socket-free so it's unit-testable.
+- **Client is a dumb renderer** (`hooks/useKart.js` + `components/KartPanel.jsx`):
+  snapshots land in a **ref** (not React state — 15 re-renders/sec would thrash),
+  and a `requestAnimationFrame` loop draws the world on a `<canvas>`,
+  **interpolating** each kart between the last two snapshots for smoothness.
+  Keyboard (WASD/arrows/Space) → input, streamed only when it changes.
+- **Three games** now share the 🎮 tab (Draw&Guess | Ludo | Smash Karts), plus a
+  `kart` activity announcement ("X started Smash Karts 🏎️").
+
+### Challenges / Design Notes
+- **Re-render vs. render.** The hard part of a real-time UI in React is *not*
+  rendering through React. Snapshots go to a ref; React state only flips on
+  coarse lobby↔playing↔ended changes. The canvas is the render target.
+- **Client interpolation hides the 15 Hz wire rate.** Rendering the newest
+  snapshot raw looks choppy; lerping position + shortest-path angle between the
+  previous and current snapshot makes 15 Hz feel like 60.
+- **Input as a signature.** The client only emits `kart:input` when the
+  throttle/steer/shoot tuple actually changes (`"1|0|true"` string compare),
+  plus a `window.blur` reset so a dropped keyup doesn't leave a car stuck at
+  full throttle. Server keeps the last input between messages.
+- **Lifecycle cleanup.** The tick loop is a live `setInterval` — it's cleared on
+  match end, host reset, and when the last player disconnects (mirrors the
+  state-cleanup pattern from the socket-hardening pass, so an empty arena never
+  leaks a timer).
+
+### Verification
+101 backend tests green; backend + frontend lint clean; `vite build` succeeds.
+Manual playtest: 2 browser tabs → join, host start, drive/shoot/respawn,
+pickups, kill feed, 3-min timer → scoreboard.
+
+### Interview Q&A
+- *How is a real-time multiplayer game different from your turn-based ones?*
+  Turn-based games react to discrete events; a shooter needs a continuous
+  server-side simulation. I added a 30 Hz authoritative tick loop that steps
+  physics and broadcasts snapshots at 15 Hz — clients only send input.
+- *Why send snapshots at 15 Hz but render at 60?* Bandwidth. The client
+  interpolates between the two most recent snapshots (position + shortest-path
+  angle), so it looks smooth without 60 messages/sec per player.
+- *How do you keep it fair / cheat-resistant?* The server is authoritative over
+  all state; the client's only input is clamped throttle/steer/shoot. It can't
+  place itself, fake a hit, or award itself a kill.
+- *Why a ref instead of React state for the game state?* 15 snapshots/sec through
+  `setState` would re-render the whole tree 15×/sec. The canvas reads a mutable
+  ref in its rAF loop; React only re-renders on lobby/playing/ended transitions.
+
+### Update — went 3D (Three.js), server untouched
+Playtesting the 2D top-down build, it felt flat / not fun. Pivoted to a **3D
+chase-cam** renderer — and the payoff of the authoritative client/server split
+showed up here: **zero backend changes were needed**. The server already
+simulates karts on a flat plane (x, y, heading, speed); in 3D that's just the
+ground plane (x → x, y → z, heading → yaw). So:
+- Kept **all** netcode, physics, hit detection, scoring, the 30 Hz tick loop.
+- Swapped **only the client renderer**: 2D `<canvas>` → a Three.js scene
+  (`KartArena3D.jsx`) with ground/grid/walls, box-model karts, sphere bullets,
+  spinning pickups, floating name+HP sprite labels, and a **chase camera** that
+  lerps behind the local kart. Same snapshot interpolation as before.
+- HUD moved from canvas-drawn to a **DOM overlay** (timer/leaderboard/kill-feed/
+  HP), refreshed at 5 Hz — never per frame.
+- `KartArena3D` is **lazy-loaded** so Three.js (~530 kB) only downloads when the
+  game is opened, keeping it out of the main bundle.
+- Tuned the physics constants (faster top speed, snappier steering, faster
+  bullets) for a punchier arcade feel.
+
+**Interview takeaway:** because the client was always a "dumb renderer" over
+server snapshots, changing the *entire* visual dimension (2D→3D) was a
+renderer-only swap. That's the whole argument for server-authoritative design in
+one commit.
+
+### Graphics polish pass (all three games)
+A dedicated visual upgrade — again, **no game logic touched**, purely renderers:
+- **Smash Karts 3D:** soft shadow maps (`PCFSoftShadowMap`), ACES filmic tone
+  mapping, a gradient sky, neon-strip walls, a richer kart model (spoiler,
+  driver head, metallic body), glowing bullets, **kill explosions** (additive
+  particle bursts triggered on an alive→dead transition), **hit flashes**
+  (emissive pulse when HP drops), a **rapid-fire aura** ring, and point-lit
+  spinning pickups.
+- **Ludo:** glossy radial-gradient tokens with depth shadows, gradient base
+  quadrants, smooth CSS move-transitions, styled safe-star/start cells, a
+  trophy center, and a framed board.
+- **Draw & Guess:** expanded 14-swatch palette, a toolbar card with a **live
+  brush preview** and sized slider, and a shadowed canvas surface.
+- Kept `KartArena3D` **lazy-loaded** so Three.js stays out of the main bundle.
+
+### Maps, powerups, and game modes
+A big content expansion for Smash Karts — new data + physics on the server, new
+rendering on the client:
+- **Two maps** (`kartMaps.js`, mirrored server + client): **Speedway** (stadium,
+  neon walls, tyre chicane) and **Forest** (trees, fallen logs, rocks). Each has
+  its own theme (sky gradient, floor/wall colors) and obstacle layout. Obstacles
+  are real colliders — **circles** (tyres) and **capsules** (logs) — that push
+  karts out and block bullets. Host picks the map in the lobby.
+- **Powerups (5):** ❤️ health, 🔥 rapid-fire, ⚡ speed-burst (1.6× top speed +
+  accel), 🛡️ shield (5 s invulnerability), and 💀 **bomb** — a "suicide" pickup
+  that detonates after a 5 s fuse, dealing area damage to nearby enemies (the
+  carrier gets a red pulsing aura + a floating countdown, then a big blast).
+- **Two modes:** **FFA** (free-for-all, most kills) and **TDM** (team deathmatch
+  — auto-split teams, friendly fire off, team-summed scores, team-colored rings +
+  leaderboard). Host picks the mode in the lobby.
+- **Leave-with-confirmation:** an in-match "← Leave game" opens a modal; confirm
+  drops you from the arena and back to the games menu.
+- **Bandwidth note:** obstacle layouts are static, so the wire only carries the
+  `mapId` — the client renders obstacles from its mirrored `kartMaps.js` (same
+  pattern as `ludoBoard.js`). Kept snapshots tiny.
+
+### Ludo UX fix
+The always-on **VoiceBar** (mic/video) was centered at the bottom, overlapping
+the Ludo board (and kart HUD). Moved it to a vertical pill anchored on the
+**right edge, vertically centered** — clear of every centered board and the
+bottom touch controls.
+
+### Cinematic graphics pass — bloom, living backgrounds, Volcano map
+A renderer-only upgrade (zero game-logic changes) that moved the game from
+"bright pixels" to actual glow and living scenery:
+- **Post-processing chain:** `EffectComposer` → `UnrealBloomPass` → `OutputPass`
+  (ACES tone map + sRGB). Bloom is what makes neon wall trim, lava cracks,
+  headlights, bullets, and explosions genuinely *glow*; strength is tuned
+  per-map via the theme.
+- **Procedural canvas textures:** asphalt (speckle + tyre scuffs), grass,
+  basalt with **synced albedo/emissive crack maps** (the same crack polylines
+  stroked dark on one canvas and hot orange on the other, so the glow sits
+  exactly in the cracks), stadium crowds, sponsor billboards.
+- **Living backgrounds:** Speedway became a *night race* (star field, moon,
+  crowd camera flashes, floodlight cones, emissive billboards); Forest got
+  two tree species, bushes, a fog-blended mountain-ring horizon, drifting
+  clouds, a sun flare, and falling leaves. Every map gained a huge outer
+  ground plane so the world no longer floats in a void.
+- **New map — Volcano 🌋:** erupting cone (glowing crater, lava streaks,
+  looping smoke-plume sprites), pulsing lava pools, basalt columns, rising
+  embers, and the glowing-crack basalt floor. Server-side it's pure DATA
+  (rock + basalt-ridge colliders, its own pickup layout) — the physics core
+  needed no changes and the host's map picker lists it automatically.
+- **Kart juice:** spinning wheels + steering front-wheel pivots, body lean in
+  corners (inferred client-side from snapshot deltas — no wire changes), skid
+  dust, head/taillight lenses (bright at night) + a real `SpotLight` headlight
+  beam on the local kart, glowing bullet tracers, and explosions upgraded with
+  shockwave rings, flash sprites, and brief dynamic lights.
+
+### Shaped arenas — curvy tracks (Grand Circuit + Canyon)
+The arena stopped being "always one 1600×900 rectangle":
+- **The trick: curvy walls are just more capsules.** A closed Catmull-Rom
+  spline is sampled into a polyline and every segment becomes a `barrier`
+  capsule — the *existing* capsule collider (used for logs) handles karts and
+  bullets against any curve. The physics core's only change was reading a
+  per-map world size (`g.w`/`g.h`) instead of fixed constants.
+- **Generator mirrored server + client:** `sampleClosedSpline` / `offsetLoop`
+  / `loopCapsules` live byte-identical in both `kartMaps.js` files, so the
+  server's colliders and the client's rendered track can never drift apart.
+- **Grand Circuit (2400×1500):** a closed curvy ring track — the centerline
+  spline (varied radii → sweepers, pinches, S-curves) offset ±115 gives outer
+  and inner boundaries. Rendered as a `THREE.Shape` asphalt ribbon with a
+  grass infield island, **continuous armco rails** (posts + rail tube + neon
+  top tube via `TubeGeometry` along the spline), a checkered start line, and
+  sunset-dusk scenery (mountains, floodlights, billboards). Spawns sit ON the
+  centerline facing the racing direction (tangent angle).
+- **Canyon (2000×1300):** an open curvy blob arena — one winding boundary
+  rendered as a rough rock rim, sand floor with wind ripples, mesas + desert
+  rocks outside, and drifting dust motes. Rocks and ridges inside for cover.
+- **Renderer sizing:** all scenery builders read a `dims` object the map
+  rebuild updates (world size, center), and the shadow camera re-fits to the
+  map — so bigger arenas "just work".
+
+**Interview takeaway:** the shaped-arena feature cost the server ~6 lines
+because the collision primitives were already general. Choosing capsules as
+the wall primitive early meant "any curve" was a data problem, not an engine
+problem.
+
+### Playtest round 1 → the 10x scale-up
+First real playtest feedback drove a big balance/visual pass:
+- **All maps ~10x the area** (rects 5200×2900, Canyon 6400×4200, Circuit
+  7600×4800 with the track width **doubled** to 460 + a 12-tyre slalom
+  alternating sides of the racing line). Physics retuned to match (max speed
+  520→660, faster bullets with longer TTL) — and barrier capsule radii were
+  bumped WITH the speed so the contact band still exceeds max
+  distance-per-tick (the anti-tunneling invariant).
+- **Spawn clearance rule:** playtest showed karts boxed in by rocks at spawn
+  ("can't move forward"). Every layout now guarantees ≥300 units of clear
+  space around each spawn and nothing in the facing line.
+- **Readability:** volcano rocks blended into the dark basalt — rock color is
+  now theme-driven (`rockColor`/`rockEmissive`): obsidian with lava-lit
+  emissive edges on volcano, dark sandstone on canyon. Lesson: contrast is a
+  gameplay feature, not an aesthetic one.
+- **Scale-aware scenery:** every decoration formula that used fixed distances
+  (tree rings, mesas, lava pools, moon/sun/clouds/mountains, floodlights,
+  stands, fog near) broke at 3x linear scale — all now derive from a `dims`
+  object (perimeter scatter instead of center-radius rings, capped scale
+  factors). Shadow map bumped to 4096 to cover the bigger sun frustum.
+- **Nitro boost VFX:** the speed pickup now shows flickering additive blue
+  exhaust flames, a cyan trail, and an extra chase-cam FOV kick.
+
+### The "Join arena button does nothing" bug — two real defects
+Reported after the scale-up; the button looked dead. Debugged by driving the
+**real server with a socket script** rather than reading code: `kart:join`
+returned `{ok:true}` on a fresh connection, which cleared the server and
+pointed at the client. The Vite log then showed the actual trigger —
+`ECONNREFUSED` on `/socket.io` when nodemon restarted the backend.
+
+1. **Room membership was never restored after a reconnect.** `useRoomChat`
+   did `socket.once("connect", join)`. Socket.io auto-reconnects with a
+   **brand-new server-side socket whose `rooms` set is empty**, but `once`
+   (already consumed, or never registered when the socket was connected at
+   mount) meant `room:join` never fired again. Every guarded event — kart
+   join/start, chat send, ludo, skribbl — then failed `socket.rooms.has(...)`
+   and returned `{error:"Not allowed"}`, while the UI still looked connected.
+   Fix: `socket.on("connect", join)` (+ `off` on cleanup) so membership is
+   re-established on *every* connect; `useKart` re-`sync`s on connect too.
+   **This would have hit real users on any network blip or redeploy — not
+   just dev restarts.**
+2. **A map swap didn't update the world size.** `kart:config`/`kart:start`
+   refreshed `obstacles`/`spawns` but left `g.w`/`g.h` at the previous map's
+   values, so picking Circuit (7600×4800) kept Speedway's 5200×2900 clamp:
+   karts spawned outside the bounds, got clamped back *inside a barrier
+   capsule*, and genuinely could not move. Fix: one `applyMap(g, mapId)`
+   helper that sets every map-derived field, used by both handlers — the
+   classic "parallel assignments drift apart" bug, cured by centralising them.
+
+**Also:** the panel now renders the ack's `error` instead of swallowing it —
+a silent `{error}` ack is indistinguishable from a dead button.
+
+### More powerups, and bots with difficulty levels (both games)
+
+**Three new Smash Karts powerups** (8 total), all added to the pure core:
+- **🔱 Triple shot** — each shot becomes a 3-way spread for 8s.
+- **❄️ Freeze (EMP)** — detonates on pickup; every enemy within 340u is locked
+  for ~2s (inputs zeroed, kart coasts to a stop).
+- **🧨 Mines** — lays a trail of 3 proximity mines behind you; they arm after
+  700ms and blast anyone who drives over them. Introduced a new world entity
+  (`g.mines`) + snapshot field.
+
+**Shield is now the universal counter** — and it already was for bombs. The
+existing `detonate()` skipped shielded victims, so "a shield saves you from the
+suicide bomb" was working before this pass; the change was *proving* it and
+extending the same rule to mines and freezes. Bomb/mine damage were also
+unified into one `areaDamage()` helper so the immunity rules (owner, teammate,
+shield) can't drift apart between the two.
+
+**Bots — the payoff of server-authoritative design, again.** A bot is an
+ordinary entry in `g.players` carrying `isBot: true`. The *only* difference is
+where its input comes from:
+
+```js
+for (const p of game.players.values())
+  if (p.isBot && p.alive) p.input = botInput(game, p, now);   // vs. arriving by socket
+const { kills, booms } = stepWorld(game, dt, now);            // simulation is unchanged
+```
+
+The simulation literally cannot tell bots from humans, so **no physics, scoring,
+powerup or snapshot code changed at all**. Same story in Ludo: the roll/move
+rules were extracted out of the socket handlers into socket-free `doRoll()` /
+`doMove()`, and a bot's timer calls exactly the functions a human's socket event
+calls. A bot can only pick from `g.movable` — the server-computed legal list —
+so **a bot can no more cheat than a client can**.
+
+**Difficulty is a table of knobs, not a different algorithm:**
+
+| | Kart bot | Ludo bot |
+|---|---|---|
+| **Easy** | 420ms reaction, ±0.30 rad aim wobble, 62% throttle, 620u range, no target leading | picks at random (takes an obvious capture ~half the time) |
+| **Medium** | 220ms, ±0.14 rad, 85% throttle, 900u, partial leading | greedy: ranks moves by immediate payoff (capture > home > leave yard > progress) |
+| **Hard** | 90ms, ±0.045 rad, full throttle, 1250u, full predictive leading | scores payoff **minus risk** — counts how many enemies could reach the landing square next roll, and prefers relocating threatened tokens |
+
+Kart bots also seek pickups (health when hurt), avoid obstacles via whisker
+probes, refuse to shoot through walls (sampled line-of-sight), and back off from
+a bomb carrier.
+
+**Lifecycle detail worth keeping:** bots must never keep a game alive. Both
+cleanup paths now count *humans* only — otherwise a lobby of bots would hold a
+30 Hz tick loop (or a Ludo turn timer) open forever after the last person left.
+A bot also can't become host.
+
+**Tests: 37 new unit tests** (backend suite 101 → **138**) — the first real
+coverage of the kart core, which was possible only because it's socket-free.
+They pin the shield rules (bomb / bullet / mine / freeze / friendly-fire), each
+new powerup, and bot *behaviour* rather than config: easy is measurably slower,
+wobblier and shorter-ranged; medium takes a greedy move that hard rejects as too
+exposed.
+
+**A bug the tests caught:** kart bots reversed for the first half-second of
+every life. The stuck-detector compared the bot's position against a baseline
+that defaulted to *its own current position*, so the first sample always read
+"hasn't moved". Fixed by treating the first sample as baseline-only — a good
+reminder that `?? self` defaults can silently fabricate a false measurement.
+
+### "The kart can't move forward" — finally root-caused (twice)
+Reported three times. The first two fixes (spawn crowding, per-map world size)
+were real but weren't the whole story. This time I stopped reading layouts and
+wrote a **headless drive test**: put a kart at every spawn of every map, hold
+full throttle for 3s, measure distance. Two spawns moved 356u out of a possible
+~1980u. Two genuine defects:
+
+1. **Karts were being PINNED to walls.** Collision did `p.speed *= 0.35` on
+   every contact, every tick. Since steering authority scales with speed, a kart
+   that touched a wall lost its speed → couldn't turn → stayed touching the wall.
+   Worse, a curvy track edge is ~80 barrier capsules and the penalty applied
+   once *per capsule*, compounding to 0.35ⁿ — instant paralysis. Replaced with
+   proper **sliding collision**: push out along the surface normal, then scale
+   speed by how head-on the contact was (`1 - 0.85 × alignment`), applied **once
+   per tick** using the worst contact. Head-on still hurts; a glancing scrape
+   now barely slows you and you slide along the wall like a real racing game.
+2. **Two spawns faced directly into a barrier log** 400u away. My earlier
+   "clearance" check only measured *radial* distance — it never checked what was
+   in the direction the kart was pointing, even though the notes claimed it did.
+   Mid-arena spawns now face along the open axis.
+
+The durable fix is `tests/kart.maps.test.js`: **every spawn on every map is
+driven for 3 seconds** and must cover >700u, plus wall-behaviour tests (head-on
+bleeds speed, glancing keeps it, a pinned kart can reverse out, a capsule chain
+doesn't compound, a kart spawned inside geometry is pushed out rather than
+flung). Layout edits can no longer reintroduce this class of bug silently.
+
+### Weapons overhaul — 14 powerups
+Six new pickups, all table-driven so adding a weapon never touches collision or
+damage code. Weapons **replace** your blaster until their ammo runs out, which
+makes picking one up a real trade-off.
+
+| Powerup | Effect |
+|---|---|
+| 🔫 **Shotgun** | 5-pellet cone, 8 shells — devastating in a brawl, useless at range |
+| 🔺 **Laser** | Hypersonic **piercing** railgun, 4 shots — skewers a whole line of karts |
+| 🚀 **Homing** | 3 missiles that curve toward the nearest enemy |
+| ⚙️ **Spike armour** | Ring of spikes; ramming deals 34 damage + knockback (per-victim cooldown) |
+| 🛢️ **Oil slick** | Drops 3 puddles; victims lose grip and spin out |
+| 👻 **Ghost** | Near-invisible *and* drives through scenery for 6.5s |
+
+Joining 🔱 triple, ❄️ freeze, 🧨 mines and the original ❤️⚡🔥🛡️💀. Oil slicks
+reuse the mine entity list (same lifecycle, different payload). **Shield now
+counters everything** — bullets, bombs, mines, spikes and freezes.
+
+**A bug the tests caught: bullet tunnelling.** The laser travels 2300 u/s = ~77u
+per 30 Hz tick, but a kart is only ~54u across — it flew straight through
+targets without ever registering a hit. Fixed with **swept collision**: bullets
+advance in sub-steps no larger than a car radius. A weapon fast enough to be
+exciting was fast enough to be broken, and only an integration-level test
+("does the laser damage two karts in a line?") would have shown it.
+
+### Kart model rebuilt
+Replaced the box-primitive kart with proper bodywork: a tapered ellipsoid tub,
+sculpted nose cone, side pods with chrome intakes, roll-cage hoop, rear wing on
+twin pylons, a real cockpit (recessed tub, seated driver, helmet with a curved
+visor, steering wheel) and a roof-mounted cannon with a muzzle. Wheels are now
+groups — fat rears, spoked chrome hubs — which also fixed their rotation axis
+(they were being yawed around Y instead of rolled about the axle).
+
+### Performance pass — why Smash Karts "lagged in between"
+Player-reported stutter. Profiling the renderer surfaced four compounding
+GPU costs (no single bug — a budget problem):
+1. **Shadow pass dominated.** A 4096² PCFSoft shadow map re-rendered EVERY
+   frame, with a shadow camera stretched over the decorative ring — so ~200+
+   perimeter trees/mesas/posts were re-drawn into the shadow map per frame.
+   Fixes: 2048² PCF (soft-PCF is the priciest filter) and the shadow camera
+   fit to the ARENA only, which both doubles texel density and lets three.js
+   frustum-cull all perimeter decor out of the shadow pass.
+2. **DPR up to 2 + full-res bloom.** Devices report DPR 2/3; shaded pixels
+   scale with DPR² and UnrealBloomPass's blur chain scales with its input size.
+   Fixes: DPR capped at 1.5, bloom fed a half-resolution vector.
+3. **Wasted MSAA.** `antialias:true` only affects the default framebuffer, but
+   with an EffectComposer the scene renders into an offscreen target — the
+   MSAA never touched the 3D image. Turned off; pure bandwidth win.
+4. **No adaptation.** Added a quality governor: an exponential moving average
+   of frame time steps through 3 tiers (DPR 1.5/shadows 2048/bloom →
+   DPR 1.25/1024/bloom → DPR 1/no shadows/no bloom) with 2s hysteresis, so a
+   weak iGPU degrades gracefully instead of stuttering.
+**Lesson:** "sometimes lags" usually means the frame budget is exceeded only
+when everything peaks at once (shadow refresh + bloom + many casters). Fix the
+budget, not a bug.
+
+### The performance fix that made it WORSE (playtest round 2)
+The first pass shipped two clever-sounding ideas that backfired, and the
+player immediately felt it ("lagging even more now"):
+1. **Half-rate shadows caused judder.** Refreshing the shadow map every OTHER
+   frame halves the *average* cost but makes frames alternate cheap/expensive.
+   Under vsync that becomes a 16/33/16/33 ms cadence — motion advances
+   unevenly, which *feels* worse than a steady lower frame rate. Reverted:
+   shadows now update every frame; **even per-frame cost beats lower average
+   cost**. Smoothness is about variance, not the mean.
+2. **The governor measured the wrong clock and could oscillate.** It timed the
+   JS inside the frame — but GPU-bound lag shows up as *late rAF callbacks*
+   (back-pressure), not slow JS, so the number looked fine while the game
+   crawled. It now uses frame-to-frame delivery time. And since every tier
+   change reallocates render targets (composer chain + shadow map = a visible
+   hitch), stepping down→up→down every few seconds was itself a stutter
+   generator. Fixed with a failure latch: a tier that ever failed is never
+   re-entered, and the average resets after each change (old samples describe
+   the old tier). Added an on-screen `fps · quality` readout so lag reports are
+   measurable instead of vibes.
+3. Bonus find: the engine-hum updater called `ctx.resume()` 60×/s before the
+   first user gesture — a rejected promise + console warning per frame.
+**Lesson:** performance work needs the same regression discipline as
+correctness work — measure the thing the player feels (frame *pacing*), not
+the thing that's easy to measure (average cost).
+
+### Audio — synthesized SFX + generative music for all three games
+No audio files at all: every effect is a WebAudio recipe (oscillator sweeps,
+filtered noise bursts through gain envelopes), and background music is a tiny
+16-step generative sequencer (bass/lead/hat patterns per game) using the
+standard lookahead-scheduling pattern. Why synthesis: zero assets to license,
+host, or download (free-tier friendly), retro fit, and sample-accurate timing.
+- **Autoplay policy:** an AudioContext starts suspended; a one-time
+  pointerdown/keydown listener resumes it, so audio "just works" at first
+  interaction with no permission UI.
+- **Wiring principle: sounds come from STATE DIFFS, not extra events.** The
+  kart engine hum follows my snapshot speed; pickups/nitro/shield/freeze/death
+  are transitions of my player's flags between snapshots; Ludo captures/homes
+  are board diffs — which means BOT moves are audible exactly like human
+  moves, and the server needed zero new events for any of this.
+- Muzzle sounds are inferred: a bullet that appears within ~90u of my kart is
+  mine; its snapshot `kind` picks the recipe (blaster/shotgun/laser/homing).
+- One mute toggle (localStorage) in the GamesHub header covers everything.
+
+### Rooms: public/private + unique names; games: spectate-only mid-match
+- **Visibility**: rooms are `private` (invite-code only, the old behavior) or
+  `public` (listed on a Discover section, joinable by id without a code — and
+  the public shape deliberately omits the invite `code`, so discovery can't
+  leak the private-style door key).
+- **Unique names, race-safe**: a `nameLower` shadow field with a unique index
+  (sparse — legacy rooms lack it). Two simultaneous creates both pass any
+  pre-check; only one wins the index; E11000 on `keyPattern.nameLower` maps to
+  a 409. The same catch guards renames. Lesson: uniqueness lives in the
+  database, not in a find-then-insert.
+- **Spectate lock**: joining a kart match or skribbl round in progress now
+  returns `{spectate:true}` instead of a seat (ludo already refused). Clients
+  show a "👀 spectating" banner; skribbl auto-claims a seat the moment the
+  round ends. Rationale: fresh full-health players dropping into a live match
+  was unfair, and skribbl scoring assumes you were there for the round.
+
+### Ludo round 2 — reactions, chat, AFK enforcement, real pieces
+- **Emoji reactions** (`ludo:emoji`, rate-limited 6/4s): 😡🔥😘❤️🔫 float up
+  over the board, big (text-6xl) with per-emoji CSS animations (angry wiggles,
+  love pulses, gunshot recoils…) + a matching synth sound. Broadcast to the
+  whole room so spectators see them too.
+- **In-game chat** rides the EXISTING `message:send`/`message:new` events — a
+  compact panel that just listens and sends. No new server code, and messages
+  land in the room's persistent history like any other chat line. (Careful
+  detail: it must NOT reuse `useRoomChat`, whose cleanup emits `room:leave`.)
+- **AFK enforcement, server-side**: every state change flows through
+  `broadcast()`, which doubles as the arming point for a turn deadline
+  (30s to roll / 15s to move, `turnDeadline` in the payload so clients render
+  a countdown). Timeout → server rolls, waits 1.5s so the dice is visible,
+  moves a random legal token. Only turns where the ROLL was auto count as
+  strikes; 3 consecutive → seat ejected (tokens cleared, turn order respliced,
+  host reassigned if needed, last player standing wins). Manual action resets
+  strikes. Verified live end-to-end: 2 warnings → kick → win.
+- **Visuals**: big clickable 3D-look dice (pip grid, spin animation, glow on
+  your turn) on the LEFT rail with the countdown bar; tokens are now SVG pawns
+  (radial-gradient head, tapered body, ground shadow) instead of flat circles.
+
+### Kart round 3 — 10-player arenas, host match controls, perf pass 3
+- **10 karts** (was 6): 4 new seat colors, MAX_KARTS bump — and 10 spawns per
+  map. The interesting part: circuit grid slots are now **picked by
+  simulation** — hand-choosing evenly-spaced spline indices put two slots
+  facing into hairpins (the drive-test caught it), so a script drives every
+  track sample at full throttle and selects 10 well-spread ones that clear
+  850u. Layout data chosen by the same test that guards it.
+- **Host controls** (host = first human to join, already the hostId rule):
+  match length (60–600s, clamped server-side), TDM team RENAMES (16-char cap,
+  whitespace-normalized), and manual team pinning via `kart:setTeam` — the
+  balancer now respects pins and only distributes the unassigned. Team names
+  flow through snapshots into the lobby, live HUD and podium.
+- **Perf pass 3** (draw-call/CPU round, after the pacing round):
+  - `matrixAutoUpdate=false` for the whole map group — hundreds of static
+    scenery objects were having their local matrices recomputed EVERY frame;
+    only the genuinely animated sprites (clouds, smoke plume) stay dynamic.
+  - Wheels were 6 meshes each (tyre+hub+4 spokes) = 24/kart = ~240 objects at
+    full capacity. Baked the metalwork into ONE shared merged geometry
+    (transforms applied through a scratch Object3D so euler order matches),
+    shared materials across all karts → 2 meshes/wheel, 8/kart.
+  **Lesson:** object COUNT is its own budget — matrix updates, frustum tests
+  and draw calls all scale with it, and merging static sub-meshes is the
+  cheapest big win.
+
+### The arcade gets its own identity
+The platform chrome is violet (`brand`); the Games tab now has its own
+`arcade` palette — neon cyan/teal with amber as the secondary accent. The two
+sit opposite-adjacent on the wheel (the classic synthwave cyan↔violet
+pairing), so the arcade **complements** the platform without repeating it.
+Implementation: a second Tailwind color family + an `arcade` Button variant,
+a themed shell around the whole Games tab (teal gradient wash, faint CRT
+scanlines via a repeating-linear-gradient, neon borders/glows), and accent
+swaps inside the game panels only — the rest of the app stays violet.
+**Lesson:** a sub-brand is a design-token change, not a redesign: because all
+accents flowed through `brand-*` utility classes, re-theming a whole section
+was one palette + ~30 class swaps.
+
+**Interview takeaway:** "the button does nothing" was never a button problem.
+Reproducing against the live server split client from server in one step, and
+the dev-server log held the trigger. The deeper lesson is that *reconnect is a
+state transition your app must handle* — anything the server stores per-socket
+(room membership, subscriptions) has to be re-established on every connect.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -1378,4 +1897,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 
-*Last updated: 2026-07-26 (Friends system — requests, list, invite to a room; + all games/whiteboard/video merged to develop)*
+*Last updated: 2026-07-29 (Smash Karts: cinematic graphics pass — bloom pipeline, living backgrounds, Volcano map; shaped arenas with curvy spline tracks — Grand Circuit ring + Canyon blob; 5 maps total)*

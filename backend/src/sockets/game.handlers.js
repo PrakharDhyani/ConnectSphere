@@ -188,6 +188,12 @@ export function registerGameHandlers(io, socket) {
     if (!(await canAccessRoom(socket.user, roomId)) || !socket.rooms.has(roomKey(roomId))) return cb?.({ error: "Not allowed" });
     let g = games.get(roomId);
     if (!g) { g = newGame(uid); games.set(roomId, g); }
+    // A round in progress is closed to newcomers — they spectate (they still
+    // receive state broadcasts and see the canvas; they just aren't scored or
+    // allowed to guess) and take a seat when the game returns to the lobby.
+    if (!g.lobby.has(uid) && g.status !== "lobby" && g.status !== "ended") {
+      return cb?.({ ok: true, spectate: true });
+    }
     if (!g.lobby.has(uid)) g.lobby.set(uid, { id: uid, name: socket.user.name, ready: false });
     if (!g.hostId || ![...g.lobby.keys()].includes(g.hostId)) g.hostId = [...g.lobby.keys()][0];
     broadcast(io, roomId);
