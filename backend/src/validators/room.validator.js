@@ -2,6 +2,7 @@ import Joi from "joi";
 
 export const createRoomSchema = Joi.object({
   name: Joi.string().trim().min(2).max(100).required(),
+  visibility: Joi.string().valid("public", "private").default("private"),
 });
 
 // Rename is the same single-field rule as create — kept separate so the two

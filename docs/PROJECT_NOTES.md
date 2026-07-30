@@ -1734,6 +1734,43 @@ host, or download (free-tier friendly), retro fit, and sample-accurate timing.
   mine; its snapshot `kind` picks the recipe (blaster/shotgun/laser/homing).
 - One mute toggle (localStorage) in the GamesHub header covers everything.
 
+### Rooms: public/private + unique names; games: spectate-only mid-match
+- **Visibility**: rooms are `private` (invite-code only, the old behavior) or
+  `public` (listed on a Discover section, joinable by id without a code — and
+  the public shape deliberately omits the invite `code`, so discovery can't
+  leak the private-style door key).
+- **Unique names, race-safe**: a `nameLower` shadow field with a unique index
+  (sparse — legacy rooms lack it). Two simultaneous creates both pass any
+  pre-check; only one wins the index; E11000 on `keyPattern.nameLower` maps to
+  a 409. The same catch guards renames. Lesson: uniqueness lives in the
+  database, not in a find-then-insert.
+- **Spectate lock**: joining a kart match or skribbl round in progress now
+  returns `{spectate:true}` instead of a seat (ludo already refused). Clients
+  show a "👀 spectating" banner; skribbl auto-claims a seat the moment the
+  round ends. Rationale: fresh full-health players dropping into a live match
+  was unfair, and skribbl scoring assumes you were there for the round.
+
+### Ludo round 2 — reactions, chat, AFK enforcement, real pieces
+- **Emoji reactions** (`ludo:emoji`, rate-limited 6/4s): 😡🔥😘❤️🔫 float up
+  over the board, big (text-6xl) with per-emoji CSS animations (angry wiggles,
+  love pulses, gunshot recoils…) + a matching synth sound. Broadcast to the
+  whole room so spectators see them too.
+- **In-game chat** rides the EXISTING `message:send`/`message:new` events — a
+  compact panel that just listens and sends. No new server code, and messages
+  land in the room's persistent history like any other chat line. (Careful
+  detail: it must NOT reuse `useRoomChat`, whose cleanup emits `room:leave`.)
+- **AFK enforcement, server-side**: every state change flows through
+  `broadcast()`, which doubles as the arming point for a turn deadline
+  (30s to roll / 15s to move, `turnDeadline` in the payload so clients render
+  a countdown). Timeout → server rolls, waits 1.5s so the dice is visible,
+  moves a random legal token. Only turns where the ROLL was auto count as
+  strikes; 3 consecutive → seat ejected (tokens cleared, turn order respliced,
+  host reassigned if needed, last player standing wins). Manual action resets
+  strikes. Verified live end-to-end: 2 warnings → kick → win.
+- **Visuals**: big clickable 3D-look dice (pip grid, spin animation, glow on
+  your turn) on the LEFT rail with the countdown bar; tokens are now SVG pawns
+  (radial-gradient head, tapered body, ground shadow) instead of flat circles.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

@@ -18,9 +18,21 @@
 import { COLORS, SAFE, trackIndex } from "../games/ludoBoard.js";
 import { chooseMove, botSeat, delaysFor, DIFFICULTIES, DEFAULT_DIFFICULTY } from "../games/ludoBot.js";
 import { canAccessRoom } from "../utils/roomAccess.js";
+import { allow } from "../utils/socketRate.js";
 import { roomKey } from "./chat.handlers.js";
 
 const games = new Map(); // roomId -> game
+
+// ── AFK rules ──
+// A human has TURN_MS to roll; if they don't, the server rolls for them and
+// (1.5s later, so the dice is visible) moves a random legal token. A manual
+// roll grants MOVE_MS to pick a token before the server picks one. Only turns
+// where the ROLL was automatic count as "missed" — 3 in a row ejects the seat.
+const TURN_MS = 30_000;
+const MOVE_MS = 15_000;
+const AFK_LIMIT = 3;
+
+const EMOJIS = new Set(["angry", "fire", "kiss", "love", "gunshot"]);
 
 const isBotSeat = (seat) => Boolean(seat?.isBot);
 const humanSeatIds = (g) => COLORS.map((c) => g.seats[c]).filter((s) => s && !s.isBot).map((s) => s.id);
@@ -40,6 +52,10 @@ function freshGame(hostId) {
     hostId,
     timer: null,
     botTimer: null,
+    afkTimer: null,
+    autoMoveTimer: null,
+    afk: {}, // color -> consecutive fully-auto turns
+    turnDeadline: null, // epoch ms the current human must act by (null for bots)
   };
 }
 
@@ -73,20 +89,138 @@ function publicState(g) {
     tokens: g.tokens,
     winner: g.winner,
     hostId: g.hostId,
+    turnDeadline: g.turnDeadline,
   };
 }
 
+// Broadcast doubles as the AFK-timer arming point: every state change flows
+// through here, so the "current human must act by X" clock can never drift
+// from what clients were told.
 function broadcast(io, roomId) {
   const g = games.get(roomId);
-  if (g) io.to(roomKey(roomId)).emit("ludo:state", publicState(g));
+  if (!g) return;
+  armAfkTimer(io, roomId);
+  io.to(roomKey(roomId)).emit("ludo:state", publicState(g));
+}
+
+function notice(io, roomId, text) {
+  io.to(roomKey(roomId)).emit("ludo:notice", { text });
 }
 
 function clearTimers(g) {
   if (!g) return;
   clearTimeout(g.timer);
   clearTimeout(g.botTimer);
+  clearTimeout(g.afkTimer);
+  clearTimeout(g.autoMoveTimer);
   g.timer = null;
   g.botTimer = null;
+  g.afkTimer = null;
+  g.autoMoveTimer = null;
+}
+
+// ── AFK enforcement ──────────────────────────────────────────────────────────
+
+function armAfkTimer(io, roomId) {
+  const g = games.get(roomId);
+  if (!g) return;
+  clearTimeout(g.afkTimer);
+  g.afkTimer = null;
+  g.turnDeadline = null;
+  if (g.status !== "playing" || g.winner) return;
+  const color = currentColor(g);
+  const seat = g.seats[color];
+  if (!seat || seat.isBot) return; // bots have their own pacing
+
+  // Which decision is pending? No decision (e.g. the 1.2s dead-dice window
+  // before an automatic turn advance) → no timer.
+  let wait = null;
+  if (!g.rolled) wait = TURN_MS;
+  else if (g.movable?.length) wait = MOVE_MS;
+  if (wait === null) return;
+
+  g.turnDeadline = Date.now() + wait;
+  g.afkTimer = setTimeout(() => onAfkTimeout(io, roomId, color), wait);
+}
+
+function onAfkTimeout(io, roomId, color) {
+  const g = games.get(roomId);
+  if (!g || g.status !== "playing" || currentColor(g) !== color) return;
+  const seat = g.seats[color];
+  if (!seat || seat.isBot) return;
+
+  if (!g.rolled) {
+    // Whole turn missed — the strike that counts toward ejection.
+    g.afk[color] = (g.afk[color] || 0) + 1;
+    if (g.afk[color] >= AFK_LIMIT) {
+      kickSeat(io, roomId, color, "inactive for 3 turns");
+      return;
+    }
+    notice(io, roomId, `⏰ Auto-rolling for ${seat.name} (${g.afk[color]}/${AFK_LIMIT} missed turns)`);
+    doRoll(io, roomId);
+    // Give the dice a beat on screen, then move a random legal token — the
+    // player is absent, waiting the full move window would stall the table.
+    clearTimeout(g.autoMoveTimer);
+    g.autoMoveTimer = setTimeout(() => {
+      const cur = games.get(roomId);
+      if (!cur || cur.status !== "playing" || currentColor(cur) !== color || !cur.rolled) return;
+      if (cur.movable?.length) {
+        doMove(io, roomId, cur.movable[Math.floor(Math.random() * cur.movable.length)]);
+      }
+    }, 1500);
+  } else if (g.movable?.length) {
+    // They rolled but never picked a token — play a random one. Doesn't count
+    // as a missed turn (they were present for the roll).
+    notice(io, roomId, `⏰ ${seat.name} ran out of time — moving a random token`);
+    doMove(io, roomId, g.movable[Math.floor(Math.random() * g.movable.length)]);
+  }
+}
+
+// Remove a seat mid-game (AFK ejection). Their tokens leave the board; the
+// game continues — or ends immediately when only one player remains.
+function kickSeat(io, roomId, color, reason) {
+  const g = games.get(roomId);
+  if (!g) return;
+  const seat = g.seats[color];
+  if (!seat) return;
+
+  notice(io, roomId, `🚪 ${seat.name} was removed — ${reason}`);
+  const wasTurn = currentColor(g) === color;
+  const idx = g.order.indexOf(color);
+
+  g.seats[color] = null;
+  g.tokens[color] = [0, 0, 0, 0];
+  delete g.afk[color];
+  if (idx !== -1) {
+    g.order.splice(idx, 1);
+    if (idx < g.turnIdx) g.turnIdx -= 1;
+    if (g.turnIdx >= g.order.length) g.turnIdx = 0;
+  }
+
+  // The game host must stay a real, seated human (bots never host).
+  if (g.hostId === seat.id) {
+    const human = COLORS.map((c) => g.seats[c]).find((s) => s && !s.isBot);
+    g.hostId = human?.id || g.hostId;
+  }
+
+  if (g.order.length <= 1) {
+    g.status = "ended";
+    g.winner = g.order[0] || null;
+    g.rolled = false;
+    g.movable = [];
+    clearTimers(g);
+    broadcast(io, roomId);
+    return;
+  }
+
+  if (wasTurn) {
+    g.dice = null;
+    g.rolled = false;
+    g.movable = [];
+    g.sixCount = 0;
+  }
+  broadcast(io, roomId);
+  maybeBotTurn(io, roomId);
 }
 
 function movableTokens(g, color) {
@@ -316,6 +450,7 @@ export function registerLudoHandlers(io, socket) {
     g.rolled = false;
     g.winner = null;
     g.sixCount = 0;
+    g.afk = {};
     for (const c of COLORS) g.tokens[c] = [0, 0, 0, 0];
     broadcast(io, roomId);
     maybeBotTurn(io, roomId); // the first seat may itself be a bot
@@ -327,6 +462,7 @@ export function registerLudoHandlers(io, socket) {
     if (!g || g.status !== "playing" || g.rolled) return;
     const color = currentColor(g);
     if (g.seats[color]?.id !== socket.user.id) return; // not your turn (or it's a bot's)
+    g.afk[color] = 0; // acting manually clears the inactivity strikes
     doRoll(io, roomId);
   });
 
@@ -335,7 +471,22 @@ export function registerLudoHandlers(io, socket) {
     if (!g || g.status !== "playing" || !g.rolled) return;
     const color = currentColor(g);
     if (g.seats[color]?.id !== socket.user.id) return;
+    g.afk[color] = 0;
     doMove(io, roomId, token);
+  });
+
+  // Emoji reactions — visible to everyone in the room, animated client-side.
+  // Rate-limited so nobody wallpapers the board.
+  socket.on("ludo:emoji", async ({ roomId, emoji } = {}) => {
+    if (!EMOJIS.has(emoji)) return;
+    if (!(await guard(roomId))) return;
+    if (!allow(socket, "ludoEmoji", 6, 4000)) return;
+    io.to(roomKey(roomId)).emit("ludo:emoji", {
+      emoji,
+      name: socket.user.name,
+      // Unique-enough id for React keys across senders and rapid taps.
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    });
   });
 
   socket.on("ludo:reset", ({ roomId } = {}) => {

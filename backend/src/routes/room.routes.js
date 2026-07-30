@@ -10,8 +10,10 @@ import {
 import {
   createRoom,
   listMyRooms,
+  listPublicRooms,
   getRoom,
   joinRoom,
+  joinPublicRoom,
   renameRoom,
   leaveRoom,
   deleteRoom,
@@ -27,6 +29,9 @@ router.use(authenticate);
 router.post("/", requireFullUser, validate(createRoomSchema), createRoom);
 router.get("/", requireFullUser, listMyRooms);
 router.post("/join", requireFullUser, validate(joinRoomSchema), joinRoom);
+// NOTE: "/public" must be declared before "/:id" or Express matches it as an id.
+router.get("/public", requireFullUser, listPublicRooms);
+router.post("/:id/join-public", requireFullUser, joinPublicRoom);
 router.patch("/:id", requireFullUser, validate(renameRoomSchema), renameRoom);
 router.delete("/:id", requireFullUser, deleteRoom);
 

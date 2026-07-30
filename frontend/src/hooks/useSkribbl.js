@@ -14,12 +14,19 @@ export function useSkribbl(roomId) {
   const [choices, setChoices] = useState(null); // drawer: 3 words to pick from
   const [myWord, setMyWord] = useState(null); // drawer: the chosen word
   const [feed, setFeed] = useState([]);
+  const [spectating, setSpectating] = useState(false); // joined mid-round
 
   useEffect(() => {
     if (!roomId) return;
     const socket = connectSocket();
 
     let lastStatus = null;
+    let amSpectating = false;
+    const joinLobby = () =>
+      socket.emit("game:join", { roomId }, (res) => {
+        amSpectating = Boolean(res?.spectate);
+        setSpectating(amSpectating);
+      });
     const onState = (s) => {
       // Round-start blip on the choosing→drawing transition; fanfare at the end.
       if (lastStatus !== null && lastStatus !== s.status) {
@@ -27,6 +34,8 @@ export function useSkribbl(roomId) {
         if (s.status === "ended") sfx.play("win");
       }
       lastStatus = s.status;
+      // Spectators claim a seat the moment the round closes out.
+      if (amSpectating && (s.status === "lobby" || s.status === "ended")) joinLobby();
       setState(s);
       if (s.drawerId !== me?.id) {
         setChoices(null);
@@ -55,7 +64,7 @@ export function useSkribbl(roomId) {
     socket.on("game:guessMessage", onGuessMessage);
     socket.on("game:turnEnd", onTurnEnd);
 
-    socket.emit("game:join", { roomId }); // opening the game = you're in the lobby
+    joinLobby(); // opening the game = you're in the lobby (or spectating a live round)
     socket.emit("game:sync", { roomId }, (s) => s && setState(s));
 
     return () => {
@@ -86,5 +95,5 @@ export function useSkribbl(roomId) {
   const isDrawer = Boolean(state && state.drawerId === me?.id);
   const iGuessed = Boolean(state?.guessed?.includes(me?.id));
 
-  return { state, choices, myWord, feed, isDrawer, iGuessed, me, start, setReady, chooseWord, guess };
+  return { state, choices, myWord, feed, isDrawer, iGuessed, me, spectating, start, setReady, chooseWord, guess };
 }

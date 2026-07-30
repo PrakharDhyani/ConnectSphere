@@ -299,6 +299,11 @@ export default function KartPanel({ roomId, onExit }) {
       </div>
 
       <div className="relative mx-auto max-w-4xl">
+        {!joined && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 bg-amber-500/15 border border-amber-500/40 text-amber-300 rounded-full px-4 py-1 text-xs backdrop-blur">
+            👀 Spectating — you&apos;ll be able to join when this match ends
+          </div>
+        )}
         <Suspense fallback={<div className="text-center py-16 text-gray-500">Loading arena…</div>}>
           <KartArena3D snapRef={snapRef} killFeedRef={killFeedRef} boomsRef={boomsRef} myId={me?.id} />
         </Suspense>

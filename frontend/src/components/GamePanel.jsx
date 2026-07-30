@@ -10,7 +10,7 @@ import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
 
 export default function GamePanel({ roomId }) {
-  const { state, choices, myWord, feed, isDrawer, iGuessed, me, start, setReady, chooseWord, guess } =
+  const { state, choices, myWord, feed, isDrawer, iGuessed, me, spectating, start, setReady, chooseWord, guess } =
     useSkribbl(roomId);
   const [rounds, setRounds] = useState(3);
   const [draft, setDraft] = useState("");
@@ -52,6 +52,19 @@ export default function GamePanel({ roomId }) {
   const isHost = state?.hostId === me?.id;
   const allReady = lobby.length >= 2 && lobby.every((p) => p.ready);
   const inLobby = status === "lobby" || status === "ended";
+
+  if (spectating && !inLobby) {
+    // Mid-round arrivals watch the drawing live but can't guess or score;
+    // the hook auto-claims a seat the moment the round finishes.
+    return (
+      <div className="space-y-3">
+        <div className="bg-amber-500/10 border border-amber-500/40 text-amber-300 rounded-xl px-4 py-2 text-sm text-center">
+          👀 Round in progress — you&apos;re spectating and will join automatically when it ends.
+        </div>
+        <GameCanvas roomId={roomId} isDrawer={false} />
+      </div>
+    );
+  }
 
   return (
     <div className="grid lg:grid-cols-[1fr_280px] gap-4">

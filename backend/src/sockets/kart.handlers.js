@@ -249,13 +249,15 @@ export function registerKartHandlers(io, socket) {
     if (!g) { g = newGame(uid); games.set(roomId, g); }
 
     if (!g.players.has(uid)) {
+      // No hot-joining a live match — latecomers spectate until it ends.
+      // (Being mid-match with fresh full-health opponents dropping in was
+      // unfair to everyone already fighting.)
+      if (g.status === "playing") {
+        return cb?.({ error: "Match in progress — you're spectating. Join when it ends!", spectate: true });
+      }
       const seat = freeSeat(g);
       if (!seat) return cb?.({ error: `Arena is full (${MAX_KARTS} karts)` });
       const p = newPlayer(uid, socket.user.name, seat.color, seat.seatIndex, g.spawns);
-      if (g.status === "playing") {
-        if (g.mode === "tdm") p.team = smallerTeam(g);
-        respawnPlayer(p, Date.now(), p.seatIndex, g.spawns);
-      }
       g.players.set(uid, p);
     }
     // A bot must never end up hosting — the host drives start/config.

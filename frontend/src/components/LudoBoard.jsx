@@ -56,13 +56,16 @@ export default function LudoBoard({ state, myColor, isMyTurn, onMove }) {
           })}
         </div>
 
-        {/* tokens */}
+        {/* tokens — SVG pawns (glossy head, tapered body, base + ground shadow)
+            instead of flat circles, so the pieces read like real board pieces. */}
         {seated.map((color) =>
           (state.tokens[color] || []).map((step, i) => {
             const [r, c] = coord(color, step, i);
             const clickable = color === myColor && movable.has(i);
             const dx = (i % 2) * 6 - 3;
             const dy = Math.floor(i / 2) * 6 - 3;
+            const hex = COLOR_HEX[color];
+            const gradId = `pawn-${color}-${i}`;
             return (
               <button
                 key={`${color}-${i}`}
@@ -72,17 +75,42 @@ export default function LudoBoard({ state, myColor, isMyTurn, onMove }) {
                 title={`${color} token ${i + 1}`}
                 style={{
                   left: `calc(${((c + 0.5) / N) * 100}% + ${dx}px)`,
-                  top: `calc(${((r + 0.5) / N) * 100}% + ${dy}px)`,
-                  background: `radial-gradient(circle at 32% 28%, ${shade(COLOR_HEX[color], 70)}, ${COLOR_HEX[color]} 60%, ${shade(COLOR_HEX[color], -40)})`,
-                  transform: "translate(-50%,-50%)",
-                  transition: "left 0.28s ease, top 0.28s ease, box-shadow 0.15s",
-                  boxShadow: clickable
-                    ? `0 0 0 2px #fff, 0 0 10px 3px ${COLOR_HEX[color]}, 0 2px 4px rgba(0,0,0,0.5)`
-                    : "0 2px 4px rgba(0,0,0,0.55), inset 0 1px 2px rgba(255,255,255,0.4)",
+                  top: `calc(${((r + 0.42) / N) * 100}% + ${dy}px)`,
+                  transform: "translate(-50%,-58%)",
+                  transition: "left 0.28s ease, top 0.28s ease, filter 0.15s",
+                  filter: clickable ? `drop-shadow(0 0 7px ${hex}) drop-shadow(0 0 2px #fff)` : "none",
                 }}
-                className={`absolute w-[4.8%] h-[4.8%] min-w-[15px] min-h-[15px] rounded-full border border-white/70
+                className={`absolute w-[6.4%] h-[7.6%] min-w-[20px] min-h-[24px]
                   ${clickable ? "cursor-pointer animate-bounce z-20 hover:scale-110" : "z-10 cursor-default"}`}
-              />
+              >
+                <svg viewBox="0 0 40 50" className="w-full h-full">
+                  <defs>
+                    <radialGradient id={`${gradId}-head`} cx="35%" cy="28%" r="75%">
+                      <stop offset="0%" stopColor={shade(hex, 90)} />
+                      <stop offset="55%" stopColor={hex} />
+                      <stop offset="100%" stopColor={shade(hex, -55)} />
+                    </radialGradient>
+                    <linearGradient id={`${gradId}-body`} x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor={shade(hex, -45)} />
+                      <stop offset="35%" stopColor={shade(hex, 45)} />
+                      <stop offset="65%" stopColor={hex} />
+                      <stop offset="100%" stopColor={shade(hex, -60)} />
+                    </linearGradient>
+                  </defs>
+                  {/* ground shadow */}
+                  <ellipse cx="20" cy="46.5" rx="13" ry="3.4" fill="rgba(0,0,0,0.4)" />
+                  {/* base */}
+                  <ellipse cx="20" cy="42" rx="12.5" ry="5.5" fill={`url(#${gradId}-body)`} stroke="rgba(0,0,0,0.35)" strokeWidth="0.6" />
+                  {/* tapered body */}
+                  <path d="M12.5 42 C13.5 30, 16.5 25.5, 20 24 C23.5 25.5, 26.5 30, 27.5 42 Z" fill={`url(#${gradId}-body)`} />
+                  {/* collar ring */}
+                  <ellipse cx="20" cy="24.5" rx="6.2" ry="2.4" fill={shade(hex, -35)} />
+                  {/* head */}
+                  <circle cx="20" cy="15.5" r="8.6" fill={`url(#${gradId}-head)`} stroke="rgba(0,0,0,0.25)" strokeWidth="0.5" />
+                  {/* specular highlight */}
+                  <ellipse cx="16.5" cy="11.5" rx="3" ry="2" fill="rgba(255,255,255,0.75)" transform="rotate(-25 16.5 11.5)" />
+                </svg>
+              </button>
             );
           })
         )}
