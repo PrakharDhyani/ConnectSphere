@@ -26,6 +26,9 @@ export function useKart(roomId) {
     const socket = connectSocket();
 
     const onState = (s) => {
+      // The 15Hz stream omits `pickups` when nothing changed (bandwidth) —
+      // carry the last known list forward so the renderer always has one.
+      if (!s.pickups && snapRef.current.cur?.pickups) s.pickups = snapRef.current.cur.pickups;
       snapRef.current = { prev: snapRef.current.cur, cur: s, at: performance.now() };
       setStatus((prev) => (prev !== s.status ? s.status : prev));
       // Only re-render the React tree when NOT mid-match (lobby/ended need the

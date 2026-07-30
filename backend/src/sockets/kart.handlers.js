@@ -197,6 +197,28 @@ function broadcast(io, roomId) {
   if (g) io.to(roomKey(roomId)).emit("kart:state", snapshot(g));
 }
 
+// The 15Hz in-match stream. Two optimizations over plain broadcast():
+//  - volatile: a client whose socket buffer is congested (bad wifi, tab
+//    hiccup) DROPS stale frames instead of queueing them — the alternative is
+//    a growing backlog where the game drifts seconds behind real time.
+//  - pickup deltas: the pickup list only ships when something was grabbed or
+//    respawned (g.pickupsDirty); clients keep their last copy otherwise.
+//    Lobby/end broadcasts stay reliable and complete — only the high-rate
+//    stream is lossy, and every field in it is superseded 66ms later.
+function streamSnapshot(io, roomId) {
+  const g = games.get(roomId);
+  if (!g) return;
+  const snap = snapshot(g);
+  // Keyframe once per second: volatile drops are per-client and invisible to
+  // us, so a client that missed the dirty frame would otherwise render stale
+  // pickups until the next change. 1s of staleness max, in the worst case.
+  g.snapSeq = (g.snapSeq || 0) + 1;
+  const keyframe = g.snapSeq % 15 === 0;
+  if (!g.pickupsDirty && !keyframe) delete snap.pickups;
+  g.pickupsDirty = false;
+  io.to(roomKey(roomId)).volatile.emit("kart:state", snap);
+}
+
 function stopLoop(g) {
   if (g?.loop) { clearInterval(g.loop); g.loop = null; }
 }
@@ -246,7 +268,7 @@ function startLoop(io, roomId) {
     if (now >= game.endsAt) return endMatch(io, roomId);
 
     game.tick += 1;
-    if (game.tick % SNAPSHOT_EVERY === 0) broadcast(io, roomId);
+    if (game.tick % SNAPSHOT_EVERY === 0) streamSnapshot(io, roomId);
   }, 1000 / TICK_HZ);
 }
 
