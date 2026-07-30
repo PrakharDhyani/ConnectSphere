@@ -68,7 +68,7 @@ function Dice({ value, canRoll, onRoll, turnColor }) {
         <span className="absolute inset-0 flex items-center justify-center text-3xl font-black text-gray-500">?</span>
       )}
       {canRoll && (
-        <span className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[11px] font-semibold text-brand-300 whitespace-nowrap">
+        <span className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[11px] font-semibold text-arcade-300 whitespace-nowrap">
           tap to roll!
         </span>
       )}
@@ -137,7 +137,7 @@ function GameChat({ roomId }) {
         {msgs.length === 0 && <p className="text-xs text-gray-600">Say something…</p>}
         {msgs.map((m) => (
           <p key={m.id || m._id} className="leading-snug break-words">
-            <span className={m.sender?.id === meId || m.sender === meId ? "text-brand-300" : "text-gray-400"}>
+            <span className={m.sender?.id === meId || m.sender === meId ? "text-arcade-300" : "text-gray-400"}>
               {m.sender?.name || m.senderName || "?"}:
             </span>{" "}
             <span className="text-gray-200">{m.text}</span>
@@ -153,7 +153,7 @@ function GameChat({ roomId }) {
           placeholder="Message…"
           className="flex-1 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-gray-600"
         />
-        <button type="submit" className="px-3 text-brand-400 hover:text-brand-300 text-sm font-medium">Send</button>
+        <button type="submit" className="px-3 text-arcade-400 hover:text-arcade-300 text-sm font-medium">Send</button>
       </form>
     </div>
   );
@@ -273,7 +273,7 @@ export default function LudoPanel({ roomId }) {
                   <button
                     key={d.id}
                     onClick={() => setBotDiff(d.id)}
-                    className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-brand-600 border-brand-500" : "bg-gray-800 border-gray-700 hover:border-brand-500"}`}
+                    className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700 hover:border-arcade-400"}`}
                   >
                     {d.name}
                   </button>
@@ -282,7 +282,7 @@ export default function LudoPanel({ roomId }) {
               <button
                 onClick={doAddBot}
                 disabled={seated.length >= 4}
-                className="ml-auto px-3 py-1 rounded-md text-sm bg-gray-800 border border-gray-700 hover:border-brand-500 disabled:opacity-40"
+                className="ml-auto px-3 py-1 rounded-md text-sm bg-gray-800 border border-gray-700 hover:border-arcade-400 disabled:opacity-40"
               >
                 + Bot
               </button>
@@ -296,9 +296,9 @@ export default function LudoPanel({ roomId }) {
           {amSeated ? (
             <Button variant="secondary" onClick={leave}>Leave seat</Button>
           ) : (
-            <Button onClick={doJoin} disabled={seated.length >= 4}>Take a seat</Button>
+            <Button variant="arcade" onClick={doJoin} disabled={seated.length >= 4}>Take a seat</Button>
           )}
-          {isHost && <Button onClick={doStart} disabled={seated.length < 2}>Start game</Button>}
+          {isHost && <Button variant="arcade" onClick={doStart} disabled={seated.length < 2}>Start game</Button>}
         </div>
         {!isHost && <p className="text-xs text-gray-600 mt-3">Waiting for the host to start…</p>}
       </div>
@@ -326,7 +326,7 @@ export default function LudoPanel({ roomId }) {
         .ludo-anim-fire span { display:inline-block; animation: ludo-flick .45s ease-in-out infinite; }
         @keyframes ludo-spin { 0% { transform: rotate(0) scale(1) } 40% { transform: rotate(200deg) scale(1.15) } 100% { transform: rotate(360deg) scale(1) } }
         .ludo-dice-spin { animation: ludo-spin .6s ease-out; }
-        @keyframes ludo-glow { 0%,100% { filter: drop-shadow(0 0 4px rgba(96,165,250,.55)) } 50% { filter: drop-shadow(0 0 14px rgba(96,165,250,.95)) } }
+        @keyframes ludo-glow { 0%,100% { filter: drop-shadow(0 0 4px rgba(34,211,238,.55)) } 50% { filter: drop-shadow(0 0 14px rgba(34,211,238,.95)) } }
         .ludo-dice-glow { animation: ludo-glow 1.4s ease-in-out infinite; }
       `}</style>
 
@@ -350,7 +350,7 @@ export default function LudoPanel({ roomId }) {
             <TurnTimer deadline={state.turnDeadline} />
             <div className="text-sm text-center min-h-[2.2rem]">
               {state.winner ? (
-                <span className="font-semibold text-brand-300 flex items-center gap-1.5 justify-center">
+                <span className="font-semibold text-arcade-300 flex items-center gap-1.5 justify-center">
                   <Dot color={state.winner} /> {state.seats[state.winner]?.name} wins! 🎉
                 </span>
               ) : isMyTurn ? (
@@ -363,7 +363,7 @@ export default function LudoPanel({ roomId }) {
                 </span>
               )}
             </div>
-            {state.winner && isHost && <Button onClick={reset}>Play again</Button>}
+            {state.winner && isHost && <Button variant="arcade" onClick={reset}>Play again</Button>}
           </div>
 
           <div className="flex-1 w-full space-y-3">

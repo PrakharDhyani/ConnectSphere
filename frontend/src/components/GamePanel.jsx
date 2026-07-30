@@ -75,7 +75,7 @@ export default function GamePanel({ roomId }) {
             {inLobby && <span className="text-gray-400">Draw &amp; Guess — lobby</span>}
             {status === "choosing" &&
               (isDrawer ? (
-                <span className="text-brand-300">Pick a word to draw</span>
+                <span className="text-arcade-300">Pick a word to draw</span>
               ) : (
                 <span className="text-gray-400"><b className="text-gray-200">{state.drawerName}</b> is choosing…</span>
               ))}
@@ -83,7 +83,7 @@ export default function GamePanel({ roomId }) {
               <span className="font-mono tracking-[0.3em] text-lg">{isDrawer ? myWord : state.masked}</span>
             )}
             {status === "reveal" && (
-              <span className="text-gray-300">The word was <b className="text-brand-300">{state.word}</b></span>
+              <span className="text-gray-300">The word was <b className="text-arcade-300">{state.word}</b></span>
             )}
           </div>
           <div className="flex items-center gap-3 text-sm text-gray-400 shrink-0">
@@ -96,7 +96,7 @@ export default function GamePanel({ roomId }) {
 
         {status === "choosing" && isDrawer && choices && (
           <div className="flex flex-wrap gap-2">
-            {choices.map((w) => <Button key={w} onClick={() => chooseWord(w)}>{w}</Button>)}
+            {choices.map((w) => <Button variant="arcade" key={w} onClick={() => chooseWord(w)}>{w}</Button>)}
           </div>
         )}
 
@@ -110,7 +110,7 @@ export default function GamePanel({ roomId }) {
                 {players.map((p, i) => (
                   <li key={p.id} className="flex justify-between">
                     <span>{i === 0 ? "🏆 " : `${i + 1}. `}{p.name}</span>
-                    <span className="text-brand-300 font-semibold">{p.score}</span>
+                    <span className="text-arcade-300 font-semibold">{p.score}</span>
                   </li>
                 ))}
               </ol>
@@ -121,7 +121,7 @@ export default function GamePanel({ roomId }) {
               <ul className="space-y-1">
                 {lobby.map((p) => (
                   <li key={p.id} className="flex items-center justify-between text-sm">
-                    <span className={p.id === me?.id ? "text-brand-300" : "text-gray-300"}>
+                    <span className={p.id === me?.id ? "text-arcade-300" : "text-gray-300"}>
                       {p.name}{p.id === state.hostId ? " 👑" : ""}{p.id === me?.id ? " (you)" : ""}
                     </span>
                     {p.id === me?.id ? (
@@ -161,7 +161,7 @@ export default function GamePanel({ roomId }) {
                   >
                     {[1, 2, 3, 5].map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
-                  <Button onClick={handleStart} disabled={!allReady}>{status === "ended" ? "Play again" : "Start"}</Button>
+                  <Button variant="arcade" onClick={handleStart} disabled={!allReady}>{status === "ended" ? "Play again" : "Start"}</Button>
                 </div>
               )}
               <p className="text-xs text-gray-600">
@@ -188,7 +188,7 @@ export default function GamePanel({ roomId }) {
                 <span className="flex items-center gap-1 truncate">
                   {state?.drawerId === p.id && <span title="Drawing">✏️</span>}
                   {guessedSet.has(p.id) && <span className="text-green-400" title="Guessed">✓</span>}
-                  <span className={p.id === me?.id ? "text-brand-300" : "text-gray-300"}>{p.name}</span>
+                  <span className={p.id === me?.id ? "text-arcade-300" : "text-gray-300"}>{p.name}</span>
                 </span>
                 <span className="text-gray-400 font-medium">{"score" in p ? p.score : ""}</span>
               </li>

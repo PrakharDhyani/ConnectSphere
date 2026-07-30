@@ -15,7 +15,7 @@ export default function SoundToggle() {
       onClick={toggle}
       aria-label={muted ? "Unmute game sound" : "Mute game sound"}
       title={muted ? "Unmute game sound" : "Mute game sound"}
-      className="text-lg px-2 py-1 rounded-lg bg-gray-900 border border-gray-800 hover:border-brand-600"
+      className="text-lg px-2 py-1 rounded-lg bg-gray-900 border border-gray-800 hover:border-arcade-400"
     >
       {muted ? "🔇" : "🔊"}
     </button>

@@ -159,7 +159,7 @@ export default function KartPanel({ roomId, onExit }) {
                   key={m.id}
                   disabled={!isHost}
                   onClick={() => setConfig({ mapId: m.id })}
-                  className={`px-3 py-1.5 rounded-lg text-sm border ${selMap === m.id ? "bg-brand-600 border-brand-500" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-brand-500" : "opacity-70 cursor-default"}`}
+                  className={`px-3 py-1.5 rounded-lg text-sm border ${selMap === m.id ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-arcade-400" : "opacity-70 cursor-default"}`}
                 >
                   {m.name}
                 </button>
@@ -174,7 +174,7 @@ export default function KartPanel({ roomId, onExit }) {
                   key={m.id}
                   disabled={!isHost}
                   onClick={() => setConfig({ mode: m.id })}
-                  className={`px-3 py-1.5 rounded-lg text-sm border ${selMode === m.id ? "bg-brand-600 border-brand-500" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-brand-500" : "opacity-70 cursor-default"}`}
+                  className={`px-3 py-1.5 rounded-lg text-sm border ${selMode === m.id ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-arcade-400" : "opacity-70 cursor-default"}`}
                 >
                   {m.name}
                 </button>
@@ -189,7 +189,7 @@ export default function KartPanel({ roomId, onExit }) {
                   key={d.s}
                   disabled={!isHost}
                   onClick={() => setConfig({ duration: d.s })}
-                  className={`px-3 py-1.5 rounded-lg text-sm border ${(view?.matchMs ?? 180000) === d.s * 1000 ? "bg-brand-600 border-brand-500" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-brand-500" : "opacity-70 cursor-default"}`}
+                  className={`px-3 py-1.5 rounded-lg text-sm border ${(view?.matchMs ?? 180000) === d.s * 1000 ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-arcade-400" : "opacity-70 cursor-default"}`}
                 >
                   {d.label}
                 </button>
@@ -212,7 +212,7 @@ export default function KartPanel({ roomId, onExit }) {
                       if (name && name !== view?.teamNames?.[t]) setConfig({ teamName: { team: t, name } });
                       setNameDrafts((d) => ({ ...d, [t]: undefined }));
                     }}
-                    className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-center focus:border-brand-500 outline-none disabled:opacity-70"
+                    className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-center focus:border-arcade-400 outline-none disabled:opacity-70"
                     style={{ color: TEAM_HEX[t] }}
                   />
                 ))}
@@ -273,7 +273,7 @@ export default function KartPanel({ roomId, onExit }) {
                     <button
                       key={d.id}
                       onClick={() => setBotDiff(d.id)}
-                      className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-brand-600 border-brand-500" : "bg-gray-800 border-gray-700 hover:border-brand-500"}`}
+                      className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700 hover:border-arcade-400"}`}
                     >
                       {d.name}
                     </button>
@@ -282,7 +282,7 @@ export default function KartPanel({ roomId, onExit }) {
                 <button
                   onClick={() => addBot(botDiff)}
                   disabled={players.length >= 10}
-                  className="ml-auto px-3 py-1 rounded-md text-sm bg-gray-800 border border-gray-700 hover:border-brand-500 disabled:opacity-40"
+                  className="ml-auto px-3 py-1 rounded-md text-sm bg-gray-800 border border-gray-700 hover:border-arcade-400 disabled:opacity-40"
                 >
                   + Bot
                 </button>
@@ -293,7 +293,7 @@ export default function KartPanel({ roomId, onExit }) {
 
         <div className="flex gap-2 justify-center">
           {!joined ? (
-            <button onClick={() => join()} className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 font-medium">Join arena</button>
+            <button onClick={() => join()} className="px-4 py-2 rounded-lg bg-arcade-500 text-gray-950 hover:bg-arcade-400 text-gray-950 font-medium">Join arena</button>
           ) : (
             <button onClick={() => leave()} className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700">Leave seat</button>
           )}
@@ -336,7 +336,7 @@ export default function KartPanel({ roomId, onExit }) {
           </p>
         ) : (
           winnerP && (
-            <p className="text-brand-400 font-medium mb-4">🏆 {winnerP.name}{winnerP.id === me?.id && " (you)"} wins with {winnerP.kills} kills!</p>
+            <p className="text-arcade-400 font-medium mb-4">🏆 {winnerP.name}{winnerP.id === me?.id && " (you)"} wins with {winnerP.kills} kills!</p>
           )
         )}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 mb-4 text-left">
@@ -352,7 +352,7 @@ export default function KartPanel({ roomId, onExit }) {
           ))}
         </div>
         <div className="flex gap-2 justify-center">
-          {isHost && <button onClick={() => reset()} className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 font-medium">Back to lobby</button>}
+          {isHost && <button onClick={() => reset()} className="px-4 py-2 rounded-lg bg-arcade-500 text-gray-950 hover:bg-arcade-400 text-gray-950 font-medium">Back to lobby</button>}
           <button onClick={() => onExit?.()} className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700">Exit</button>
         </div>
       </div>
@@ -360,7 +360,7 @@ export default function KartPanel({ roomId, onExit }) {
   }
 
   // ── Playing ──
-  const padBtn = "w-14 h-14 rounded-full bg-white/15 border border-white/25 text-2xl active:bg-brand-600/70";
+  const padBtn = "w-14 h-14 rounded-full bg-white/15 border border-white/25 text-2xl active:bg-arcade-500/70";
   return (
     <div>
       <div className="flex items-center justify-between mb-2">

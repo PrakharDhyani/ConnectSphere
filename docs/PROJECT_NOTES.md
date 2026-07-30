@@ -1795,6 +1795,19 @@ host, or download (free-tier friendly), retro fit, and sample-accurate timing.
   and draw calls all scale with it, and merging static sub-meshes is the
   cheapest big win.
 
+### The arcade gets its own identity
+The platform chrome is violet (`brand`); the Games tab now has its own
+`arcade` palette — neon cyan/teal with amber as the secondary accent. The two
+sit opposite-adjacent on the wheel (the classic synthwave cyan↔violet
+pairing), so the arcade **complements** the platform without repeating it.
+Implementation: a second Tailwind color family + an `arcade` Button variant,
+a themed shell around the whole Games tab (teal gradient wash, faint CRT
+scanlines via a repeating-linear-gradient, neon borders/glows), and accent
+swaps inside the game panels only — the rest of the app stays violet.
+**Lesson:** a sub-brand is a design-token change, not a redesign: because all
+accents flowed through `brand-*` utility classes, re-theming a whole section
+was one palette + ~30 class swaps.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

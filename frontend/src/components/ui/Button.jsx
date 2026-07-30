@@ -3,6 +3,9 @@ export default function Button({ children, loading, variant = "primary", classNa
     primary: "bg-brand-600 hover:bg-brand-500 text-white",
     secondary: "bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700",
     danger: "bg-red-600 hover:bg-red-500 text-white",
+    // The games' neon-cyan identity (dark text — cyan is bright enough to
+    // carry it, and it reads more "arcade cabinet" than white-on-cyan).
+    arcade: "bg-arcade-500 hover:bg-arcade-400 text-gray-950 font-semibold shadow-[0_0_12px_rgba(6,182,212,0.4)]",
   };
   return (
     <button
