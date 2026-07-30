@@ -322,15 +322,15 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     //    only cost memory bandwidth.
     //  - DPR is capped at 1.5 and managed by the adaptive governor below. DPR 2
     //    quadruples shaded pixels vs 1, and the bloom blur chain scales with it.
-    //  - Shadows: 2048 PCF (not 4096 PCFSoft) and refreshed every OTHER frame —
-    //    at 60fps a 30Hz shadow refresh is invisible but halves the shadow-pass
-    //    cost, which dominates on integrated GPUs (every tree/rail/post is
-    //    re-rendered into the shadow map whenever it updates).
+    //  - Shadows: 2048 PCF (not 4096 PCFSoft), updated EVERY frame. A previous
+    //    attempt refreshed them every other frame — average cost dropped but
+    //    frames alternated cheap/expensive, which reads as JUDDER (16/33ms
+    //    cadence) and feels worse than a steady frame rate. Even per-frame cost
+    //    beats lower average cost.
     const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
-    renderer.shadowMap.autoUpdate = false; // we trigger updates ourselves
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.15;
     let w = mount.clientWidth || 800;
@@ -371,15 +371,24 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     //   tier 1: DPR ≤1.25, shadows 1024, bloom on
     //   tier 2: DPR 1, shadows off, bloom off
     const TIERS = [
-      { dpr: 1.5, shadow: 2048, bloom: true },
-      { dpr: 1.25, shadow: 1024, bloom: true },
-      { dpr: 1, shadow: 0, bloom: false },
+      { label: "high", dpr: 1.5, shadow: 2048, bloom: true },
+      { label: "med", dpr: 1.25, shadow: 1024, bloom: true },
+      { label: "low", dpr: 1, shadow: 0, bloom: false },
     ];
-    const gov = { tier: 0, avgMs: 16, lastChange: performance.now() };
+    // Governor rules learned the hard way:
+    //  - Measure frame-to-frame DELIVERY time (rAF pacing). Measuring CPU time
+    //    inside the frame misses GPU-bound lag entirely — the GPU back-pressure
+    //    shows up as late rAF callbacks, not slow JS.
+    //  - Every tier change reallocates render targets (composer + shadow map),
+    //    which itself hitches. So: settle 3s after each change, and NEVER step
+    //    back up into a tier that already failed once (the latch kills the
+    //    down-up-down oscillation that made things feel worse, not better).
+    const gov = { tier: 0, avgMs: 16.7, holdUntil: performance.now() + 3000, failed: [false, false, false] };
     function applyTier(t) {
       const q = TIERS[t];
       gov.tier = t;
-      gov.lastChange = performance.now();
+      gov.avgMs = 16.7; // reset the average — old samples describe the old tier
+      gov.holdUntil = performance.now() + 3000;
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.dpr));
       renderer.setSize(w, h);
       composer.setPixelRatio(Math.min(window.devicePixelRatio, q.dpr));
@@ -393,12 +402,15 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       }
     }
     function governFrame(frameMs, now) {
-      // Exponential moving average keeps one slow frame (GC, tab switch) from
-      // flapping the tier; the 2s cooldown stops oscillation.
-      gov.avgMs = gov.avgMs * 0.95 + frameMs * 0.05;
-      if (now - gov.lastChange < 2000) return;
-      if (gov.avgMs > 24 && gov.tier < TIERS.length - 1) applyTier(gov.tier + 1);
-      else if (gov.avgMs < 12.5 && gov.tier > 0) applyTier(gov.tier - 1);
+      if (frameMs > 250) return; // tab switch / breakpoint — not a real frame
+      gov.avgMs = gov.avgMs * 0.96 + frameMs * 0.04;
+      if (now < gov.holdUntil) return;
+      if (gov.avgMs > 21 && gov.tier < TIERS.length - 1) {
+        gov.failed[gov.tier] = true;
+        applyTier(gov.tier + 1);
+      } else if (gov.avgMs < 11.5 && gov.tier > 0 && !gov.failed[gov.tier - 1]) {
+        applyTier(gov.tier - 1);
+      }
     }
 
     // ── Shared textures (created once, never disposed per-map) ──
@@ -1615,14 +1627,14 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     const tmp = new THREE.Vector3();
 
     let raf;
-    let shadowFlip = false;
     let lastT = performance.now();
     // Previous my-player audio state (diffed each frame → one-shot sounds).
     const audioPrev = { init: false, bullets: 0, lastSnap: null };
     sfx.engine.start();
     const render = () => {
       const now = performance.now();
-      const fdt = Math.min(0.05, (now - lastT) / 1000);
+      const frameMs = now - lastT; // frame-to-frame DELIVERY time, for the governor
+      const fdt = Math.min(0.05, frameMs / 1000);
       lastT = now;
 
       const { prev, cur, at } = snapRef.current;
@@ -2007,12 +2019,8 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         ex.light.intensity *= Math.max(0, 1 - fdt * 5);
       }
 
-      // Refresh shadows on alternate frames (30Hz at 60fps — imperceptible,
-      // halves the biggest GPU cost), and let the governor react to the pace.
-      shadowFlip = !shadowFlip;
-      if (shadowFlip && sun.castShadow) renderer.shadowMap.needsUpdate = true;
       composer.render();
-      governFrame(performance.now() - now, now);
+      governFrame(frameMs, now);
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);
@@ -2035,6 +2043,8 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       setHud({
         timeLeft: cur.timeLeft, board, me, feed,
         mode: cur.mode || "ffa", teamScores: cur.teamScores || null,
+        fps: Math.min(999, Math.round(1000 / Math.max(1, gov.avgMs))),
+        quality: TIERS[gov.tier].label,
       });
     }, 200);
 
@@ -2073,6 +2083,13 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
   return (
     <div className="relative w-full mx-auto max-w-4xl" style={{ aspectRatio: `${ARENA_W} / ${ARENA_H}` }}>
       <div ref={mountRef} className="absolute inset-0 rounded-xl overflow-hidden border border-gray-800 bg-gray-950" />
+
+      {/* Perf readout — makes "is it lagging?" measurable instead of vibes. */}
+      {hud.fps != null && (
+        <div className="absolute bottom-1.5 left-2 text-[10px] font-mono text-white/40 select-none">
+          {hud.fps} fps · {hud.quality}
+        </div>
+      )}
 
       {/* Timer + (TDM) team scores */}
       <div className="absolute top-2 left-1/2 -translate-x-1/2 flex flex-col items-center">

@@ -36,9 +36,14 @@ function ac() {
     musicBus.gain.value = 0.16;
     musicBus.connect(master);
   }
-  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  // NOTE: no resume() here. This is called from per-frame paths (engine hum),
+  // and resume() before a user gesture allocates a rejected promise + console
+  // warning EVERY call — 60/s of pure garbage. The unlock listener resumes.
   return ctx;
 }
+
+// True once the context is actually producing sound.
+const running = () => ctx && ctx.state === "running";
 
 // One shared noise buffer (2s of white noise) reused by every noisy effect.
 let noiseBuf = null;
@@ -66,7 +71,10 @@ export function setMuted(b) {
 
 // Register the autoplay unlock exactly once, at module load.
 if (typeof window !== "undefined") {
-  const unlock = () => ac();
+  const unlock = () => {
+    const c = ac();
+    if (c && c.state === "suspended") c.resume().catch(() => {});
+  };
   window.addEventListener("pointerdown", unlock, { passive: true });
   window.addEventListener("keydown", unlock);
 }
@@ -77,7 +85,7 @@ if (typeof window !== "undefined") {
 // the audio clock, so effects are sample-accurate regardless of frame rate.
 function tone({ type = "square", from = 440, to = from, dur = 0.15, vol = 0.3, delay = 0, curve = "exp" }) {
   const c = ac();
-  if (!c || muted) return;
+  if (!c || muted || !running()) return;
   const t0 = c.currentTime + delay;
   const o = c.createOscillator();
   const g = c.createGain();
@@ -97,7 +105,7 @@ function tone({ type = "square", from = 440, to = from, dur = 0.15, vol = 0.3, d
 // A burst of filtered noise — explosions, shotguns, skids.
 function noiseBurst({ dur = 0.3, vol = 0.4, delay = 0, filterFrom = 2000, filterTo = 200, q = 0.8 }) {
   const c = ac();
-  if (!c || muted) return;
+  if (!c || muted || !running()) return;
   const t0 = c.currentTime + delay;
   const src = noise();
   const f = c.createBiquadFilter();
@@ -214,8 +222,9 @@ export const sfx = {
       this.nodes = { g, f, o1, o2 };
     },
     update(speedNorm) {
-      // speedNorm 0..1 — idle putter to full snarl.
-      if (!this.nodes || muted) return;
+      // speedNorm 0..1 — idle putter to full snarl. Cheap param sets only, and
+      // a hard no-op until the context is actually running.
+      if (!this.nodes || muted || !running()) return;
       const s = Math.min(1, Math.max(0, speedNorm));
       const c = ac();
       const t = c.currentTime;
@@ -316,7 +325,9 @@ export const music = {
     seq.nextAt = c.currentTime + 0.1;
     const stepDur = 60 / tr.bpm / 4; // 16th notes
     seq.timer = setInterval(() => {
-      if (muted) return; // stay silent but keep time
+      // Silent while muted OR suspended — otherwise notes queue on the paused
+      // audio clock and burst out all at once when the context resumes.
+      if (muted || !running()) return;
       // Schedule everything due in the next 200ms (lookahead pattern).
       while (seq.nextAt < c.currentTime + 0.2) {
         scheduleStep(c, tr, seq.step, seq.nextAt);

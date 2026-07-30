@@ -1674,11 +1674,9 @@ GPU costs (no single bug — a budget problem):
 1. **Shadow pass dominated.** A 4096² PCFSoft shadow map re-rendered EVERY
    frame, with a shadow camera stretched over the decorative ring — so ~200+
    perimeter trees/mesas/posts were re-drawn into the shadow map per frame.
-   Fixes: 2048² PCF (soft-PCF is the priciest filter), shadow refresh every
-   OTHER frame (`shadowMap.autoUpdate=false` + manual `needsUpdate` at 30 Hz —
-   imperceptible at 60 fps), and the shadow camera fit to the ARENA only, which
-   both doubles texel density and lets three.js frustum-cull all perimeter
-   decor out of the shadow pass.
+   Fixes: 2048² PCF (soft-PCF is the priciest filter) and the shadow camera
+   fit to the ARENA only, which both doubles texel density and lets three.js
+   frustum-cull all perimeter decor out of the shadow pass.
 2. **DPR up to 2 + full-res bloom.** Devices report DPR 2/3; shaded pixels
    scale with DPR² and UnrealBloomPass's blur chain scales with its input size.
    Fixes: DPR capped at 1.5, bloom fed a half-resolution vector.
@@ -1692,6 +1690,31 @@ GPU costs (no single bug — a budget problem):
 **Lesson:** "sometimes lags" usually means the frame budget is exceeded only
 when everything peaks at once (shadow refresh + bloom + many casters). Fix the
 budget, not a bug.
+
+### The performance fix that made it WORSE (playtest round 2)
+The first pass shipped two clever-sounding ideas that backfired, and the
+player immediately felt it ("lagging even more now"):
+1. **Half-rate shadows caused judder.** Refreshing the shadow map every OTHER
+   frame halves the *average* cost but makes frames alternate cheap/expensive.
+   Under vsync that becomes a 16/33/16/33 ms cadence — motion advances
+   unevenly, which *feels* worse than a steady lower frame rate. Reverted:
+   shadows now update every frame; **even per-frame cost beats lower average
+   cost**. Smoothness is about variance, not the mean.
+2. **The governor measured the wrong clock and could oscillate.** It timed the
+   JS inside the frame — but GPU-bound lag shows up as *late rAF callbacks*
+   (back-pressure), not slow JS, so the number looked fine while the game
+   crawled. It now uses frame-to-frame delivery time. And since every tier
+   change reallocates render targets (composer chain + shadow map = a visible
+   hitch), stepping down→up→down every few seconds was itself a stutter
+   generator. Fixed with a failure latch: a tier that ever failed is never
+   re-entered, and the average resets after each change (old samples describe
+   the old tier). Added an on-screen `fps · quality` readout so lag reports are
+   measurable instead of vibes.
+3. Bonus find: the engine-hum updater called `ctx.resume()` 60×/s before the
+   first user gesture — a rejected promise + console warning per frame.
+**Lesson:** performance work needs the same regression discipline as
+correctness work — measure the thing the player feels (frame *pacing*), not
+the thing that's easy to measure (average cost).
 
 ### Audio — synthesized SFX + generative music for all three games
 No audio files at all: every effect is a WebAudio recipe (oscillator sweeps,
