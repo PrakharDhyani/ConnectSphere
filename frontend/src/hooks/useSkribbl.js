@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { connectSocket, getSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
+import { sfx } from "@/lib/sfx.js";
 
 export function useSkribbl(roomId) {
   const me = useAuthStore((s) => s.user);
@@ -18,7 +19,14 @@ export function useSkribbl(roomId) {
     if (!roomId) return;
     const socket = connectSocket();
 
+    let lastStatus = null;
     const onState = (s) => {
+      // Round-start blip on the choosing→drawing transition; fanfare at the end.
+      if (lastStatus !== null && lastStatus !== s.status) {
+        if (s.status === "drawing") sfx.play("roundStart");
+        if (s.status === "ended") sfx.play("win");
+      }
+      lastStatus = s.status;
       setState(s);
       if (s.drawerId !== me?.id) {
         setChoices(null);
@@ -32,8 +40,10 @@ export function useSkribbl(roomId) {
     };
     const onChoices = ({ choices: c }) => setChoices(c);
     const onDrawerWord = ({ word }) => setMyWord(word);
-    const onCorrect = ({ name, userId }) =>
+    const onCorrect = ({ name, userId }) => {
+      sfx.play(userId === me?.id ? "correct" : "tick");
       setFeed((f) => [...f, { type: "correct", name, mine: userId === me?.id }].slice(-60));
+    };
     const onGuessMessage = ({ name, text }) =>
       setFeed((f) => [...f, { type: "guess", name, text }].slice(-60));
     const onTurnEnd = ({ word }) => setFeed((f) => [...f, { type: "reveal", word }].slice(-60));

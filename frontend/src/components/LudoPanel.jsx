@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLudo } from "@/hooks/useLudo.js";
 import LudoBoard from "@/components/LudoBoard.jsx";
 import Button from "@/components/ui/Button.jsx";
 import { COLORS, COLOR_HEX } from "@/games/ludoBoard.js";
+import { sfx } from "@/lib/sfx.js";
 
 const Dot = ({ color, size = 12 }) => (
   <span style={{ background: COLOR_HEX[color], width: size, height: size }} className="inline-block rounded-full" />
@@ -18,6 +19,35 @@ export default function LudoPanel({ roomId }) {
   const { state, me, myColor, isMyTurn, join, leave, start, roll, move, reset, addBot, removeBot } = useLudo(roomId);
   const [error, setError] = useState(null);
   const [botDiff, setBotDiff] = useState("medium");
+
+  // Sounds come from STATE DIFFS, so bot moves are audible exactly like human
+  // ones (the server doesn't tell us who acted — the board changing does).
+  const prevRef = useRef(null);
+  useEffect(() => {
+    const prev = prevRef.current;
+    prevRef.current = state;
+    if (!prev || !state || state.status !== "playing") {
+      if (prev?.status === "playing" && state?.status === "ended" && state.winner) {
+        sfx.play(state.winner === myColor ? "win" : "lose");
+      }
+      return;
+    }
+    if (state.dice && state.dice !== prev.dice && state.rolled && !prev.rolled) sfx.play("dice");
+    if (state.turn !== prev.turn && state.turn === myColor) sfx.play("yourTurn");
+    // Board diffs: capture (token sent back to yard) beats move; home chimes.
+    let captured = false, homed = false, moved = false;
+    for (const c of COLORS) {
+      const a = prev.tokens?.[c] || [], b = state.tokens?.[c] || [];
+      for (let i = 0; i < 4; i++) {
+        if (a[i] > 0 && b[i] === 0) captured = true;
+        else if (a[i] !== 57 && b[i] === 57) homed = true;
+        else if (a[i] !== b[i]) moved = true;
+      }
+    }
+    if (captured) sfx.play("capture");
+    else if (homed) sfx.play("home");
+    else if (moved) sfx.play("move");
+  }, [state, myColor]);
 
   if (!state) {
     return <p className="text-center text-gray-500 py-8">Loading game…</p>;

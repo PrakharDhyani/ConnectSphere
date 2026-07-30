@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useKart } from "@/hooks/useKart.js";
 import { MAP_LIST, MODES } from "@/games/kartMaps.js";
+import { sfx } from "@/lib/sfx.js";
 
 // Lazy so Three.js (~600 kB) is only fetched when someone actually plays karts.
 const KartArena3D = lazy(() => import("@/components/KartArena3D.jsx"));
@@ -85,6 +86,20 @@ export default function KartPanel({ roomId, onExit }) {
       lastSentRef.current = "";
     };
   }, [status, pressKey, flush]);
+
+  // Round start / end jingles keyed off the match status transitions.
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (prev !== "playing" && status === "playing") sfx.play("roundStart");
+    if (prev === "playing" && status === "ended") {
+      const iWon = view?.mode === "tdm"
+        ? view?.winnerTeam && view.winnerTeam === view?.players?.find((p) => p.id === me?.id)?.team
+        : view?.winnerId === me?.id;
+      sfx.play(iWon ? "win" : "lose");
+    }
+  }, [status, view, me]);
 
   // Show on-screen controls on touch devices / small screens.
   const [showTouch, setShowTouch] = useState(false);

@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { sfx } from "@/lib/sfx.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { getMap } from "@/games/kartMaps.js";
 
@@ -315,10 +316,21 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     const dims = { w: ARENA_W, h: ARENA_H, cx: ARENA_W / 2, cz: ARENA_H / 2 };
 
     // ── Renderer + post-processing ──
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // PERF NOTES (this component was reported "lagging in between"):
+    //  - antialias:false — the scene renders into the composer's offscreen
+    //    target, so MSAA on the canvas never touched the 3D image anyway; it
+    //    only cost memory bandwidth.
+    //  - DPR is capped at 1.5 and managed by the adaptive governor below. DPR 2
+    //    quadruples shaded pixels vs 1, and the bloom blur chain scales with it.
+    //  - Shadows: 2048 PCF (not 4096 PCFSoft) and refreshed every OTHER frame —
+    //    at 60fps a 30Hz shadow refresh is invisible but halves the shadow-pass
+    //    cost, which dominates on integrated GPUs (every tree/rail/post is
+    //    re-rendered into the shadow map whenever it updates).
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.shadowMap.autoUpdate = false; // we trigger updates ourselves
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.15;
     let w = mount.clientWidth || 800;
@@ -335,7 +347,9 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
 
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.55, 0.65, 0.85);
+    // Half-resolution input: UnrealBloomPass blurs a mip chain derived from
+    // this size. Bloom is soft by definition — nobody can tell, GPUs can.
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(w / 2, h / 2), 0.55, 0.65, 0.85);
     composer.addPass(bloomPass);
     composer.addPass(new OutputPass());
 
@@ -344,11 +358,48 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xffffff, 1.5);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(4096, 4096);
+    sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.near = 200;
     sun.shadow.camera.far = 20000;
     sun.shadow.bias = -0.0005;
     scene.add(sun, sun.target);
+
+    // ── Adaptive quality governor ──
+    // Watches the smoothed frame time and steps quality down (then back up)
+    // so the game holds ~60fps on weak GPUs instead of stuttering:
+    //   tier 0: DPR ≤1.5, shadows 2048, bloom on
+    //   tier 1: DPR ≤1.25, shadows 1024, bloom on
+    //   tier 2: DPR 1, shadows off, bloom off
+    const TIERS = [
+      { dpr: 1.5, shadow: 2048, bloom: true },
+      { dpr: 1.25, shadow: 1024, bloom: true },
+      { dpr: 1, shadow: 0, bloom: false },
+    ];
+    const gov = { tier: 0, avgMs: 16, lastChange: performance.now() };
+    function applyTier(t) {
+      const q = TIERS[t];
+      gov.tier = t;
+      gov.lastChange = performance.now();
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.dpr));
+      renderer.setSize(w, h);
+      composer.setPixelRatio(Math.min(window.devicePixelRatio, q.dpr));
+      composer.setSize(w, h);
+      bloomPass.enabled = q.bloom;
+      sun.castShadow = q.shadow > 0;
+      if (q.shadow > 0 && sun.shadow.mapSize.x !== q.shadow) {
+        sun.shadow.mapSize.set(q.shadow, q.shadow);
+        // Force the shadow map texture to be reallocated at the new size.
+        if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+      }
+    }
+    function governFrame(frameMs, now) {
+      // Exponential moving average keeps one slow frame (GC, tab switch) from
+      // flapping the tier; the 2s cooldown stops oscillation.
+      gov.avgMs = gov.avgMs * 0.95 + frameMs * 0.05;
+      if (now - gov.lastChange < 2000) return;
+      if (gov.avgMs > 24 && gov.tier < TIERS.length - 1) applyTier(gov.tier + 1);
+      else if (gov.avgMs < 12.5 && gov.tier > 0) applyTier(gov.tier - 1);
+    }
 
     // ── Shared textures (created once, never disposed per-map) ──
     const glowTex = glowTexture();
@@ -998,7 +1049,11 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       sun.intensity = theme.sun.intensity;
       sun.position.set(dims.w * 0.35, 1500, dims.h * 0.15);
       sun.target.position.set(dims.cx, 0, dims.cz);
-      const half = Math.max(dims.w, dims.h) * 0.72 + 240;
+      // Fit the shadow camera to the ARENA only, not the decorative ring
+      // around it. Two wins: ~2x texel density for the shadows players see,
+      // and three.js frustum-culls the hundreds of perimeter trees/mesas out
+      // of the shadow pass entirely.
+      const half = Math.max(dims.w, dims.h) * 0.52 + 160;
       sun.shadow.camera.left = -half;
       sun.shadow.camera.right = half;
       sun.shadow.camera.top = half;
@@ -1560,7 +1615,11 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     const tmp = new THREE.Vector3();
 
     let raf;
+    let shadowFlip = false;
     let lastT = performance.now();
+    // Previous my-player audio state (diffed each frame → one-shot sounds).
+    const audioPrev = { init: false, bullets: 0, lastSnap: null };
+    sfx.engine.start();
     const render = () => {
       const now = performance.now();
       const fdt = Math.min(0.05, (now - lastT) / 1000);
@@ -1794,6 +1853,48 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
           const fovTarget = 60 + Math.min(1, sp / 800) * 12 + (mc?.speed ? 7 : 0);
           camera.fov += (fovTarget - camera.fov) * 0.08;
           camera.updateProjectionMatrix();
+
+          // ── Audio: engine follows my speed; state DIFFS become one-shots ──
+          sfx.engine.update(mc?.alive ? sp / 720 : 0);
+          if (mc) {
+            const a = audioPrev;
+            if (a.init) {
+              if (!a.weapon && mc.weapon) sfx.play("pickup");
+              if (!a.speed && mc.speed) sfx.play("nitro");
+              if (!a.shield && mc.shield) sfx.play("shieldUp");
+              if (!a.spikes && mc.spikes) sfx.play("spikes");
+              if (!a.ghost && mc.ghost) sfx.play("ghost");
+              if (!a.triple && mc.triple) sfx.play("pickup");
+              if (!a.rapid && mc.rapid) sfx.play("pickup");
+              if (!a.bomb && mc.bomb > 0) sfx.play("oil"); // ominous "you're the bomb"
+              if (!a.frozen && mc.frozen) sfx.play("freeze");
+              if (!a.slip && mc.slip) sfx.play("skid");
+              if (mc.alive && a.alive && mc.hp < a.hp) sfx.play("hit");
+              if (a.alive && !mc.alive) sfx.play("death");
+            }
+            Object.assign(a, {
+              init: true, weapon: mc.weapon, speed: mc.speed, shield: mc.shield,
+              spikes: mc.spikes, ghost: mc.ghost, triple: mc.triple, rapid: mc.rapid,
+              bomb: mc.bomb, frozen: mc.frozen, slip: mc.slip, hp: mc.hp, alive: mc.alive,
+            });
+
+            // Muzzle sound: any bullet that appeared this snapshot within ~90u
+            // of my kart was (almost certainly) mine — styled by its kind.
+            const bl = cur.bullets || [];
+            if (cur !== a.lastSnap) {
+              a.lastSnap = cur;
+              if (bl.length > (a.bullets ?? bl.length)) {
+                for (let i = a.bullets; i < bl.length; i++) {
+                  const dxB = bl[i].x - mc.x, dyB = bl[i].y - mc.y;
+                  if (dxB * dxB + dyB * dyB < 90 * 90) {
+                    sfx.play(bl[i].k === "blaster" ? "shoot" : bl[i].k);
+                    break; // one sound per volley (triple/shotgun spawn many)
+                  }
+                }
+              }
+              a.bullets = bl.length;
+            }
+          }
         }
       }
 
@@ -1906,15 +2007,27 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         ex.light.intensity *= Math.max(0, 1 - fdt * 5);
       }
 
+      // Refresh shadows on alternate frames (30Hz at 60fps — imperceptible,
+      // halves the biggest GPU cost), and let the governor react to the pace.
+      shadowFlip = !shadowFlip;
+      if (shadowFlip && sun.castShadow) renderer.shadowMap.needsUpdate = true;
       composer.render();
+      governFrame(performance.now() - now, now);
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);
 
     // ── HUD refresh (5 Hz) ──
+    let lastCountdownSec = null;
     const hudTimer = setInterval(() => {
       const cur = snapRef.current.cur;
       if (!cur) return;
+      // Beep on each of the final 5 seconds.
+      const sec = Math.ceil((cur.timeLeft || 0) / 1000);
+      if (sec !== lastCountdownSec && sec > 0 && sec <= 5 && cur.status === "playing") {
+        lastCountdownSec = sec;
+        sfx.play("countdown");
+      }
       const board = [...cur.players].sort((a, b) => b.kills - a.kills).slice(0, 6);
       const me = cur.players.find((p) => p.id === myId) || null;
       const now = performance.now();
@@ -1938,6 +2051,7 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
     ro.observe(mount);
 
     return () => {
+      sfx.engine.stop();
       cancelAnimationFrame(raf);
       clearInterval(hudTimer);
       ro.disconnect();

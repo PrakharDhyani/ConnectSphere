@@ -1668,6 +1668,49 @@ visor, steering wheel) and a roof-mounted cannon with a muzzle. Wheels are now
 groups — fat rears, spoked chrome hubs — which also fixed their rotation axis
 (they were being yawed around Y instead of rolled about the axle).
 
+### Performance pass — why Smash Karts "lagged in between"
+Player-reported stutter. Profiling the renderer surfaced four compounding
+GPU costs (no single bug — a budget problem):
+1. **Shadow pass dominated.** A 4096² PCFSoft shadow map re-rendered EVERY
+   frame, with a shadow camera stretched over the decorative ring — so ~200+
+   perimeter trees/mesas/posts were re-drawn into the shadow map per frame.
+   Fixes: 2048² PCF (soft-PCF is the priciest filter), shadow refresh every
+   OTHER frame (`shadowMap.autoUpdate=false` + manual `needsUpdate` at 30 Hz —
+   imperceptible at 60 fps), and the shadow camera fit to the ARENA only, which
+   both doubles texel density and lets three.js frustum-cull all perimeter
+   decor out of the shadow pass.
+2. **DPR up to 2 + full-res bloom.** Devices report DPR 2/3; shaded pixels
+   scale with DPR² and UnrealBloomPass's blur chain scales with its input size.
+   Fixes: DPR capped at 1.5, bloom fed a half-resolution vector.
+3. **Wasted MSAA.** `antialias:true` only affects the default framebuffer, but
+   with an EffectComposer the scene renders into an offscreen target — the
+   MSAA never touched the 3D image. Turned off; pure bandwidth win.
+4. **No adaptation.** Added a quality governor: an exponential moving average
+   of frame time steps through 3 tiers (DPR 1.5/shadows 2048/bloom →
+   DPR 1.25/1024/bloom → DPR 1/no shadows/no bloom) with 2s hysteresis, so a
+   weak iGPU degrades gracefully instead of stuttering.
+**Lesson:** "sometimes lags" usually means the frame budget is exceeded only
+when everything peaks at once (shadow refresh + bloom + many casters). Fix the
+budget, not a bug.
+
+### Audio — synthesized SFX + generative music for all three games
+No audio files at all: every effect is a WebAudio recipe (oscillator sweeps,
+filtered noise bursts through gain envelopes), and background music is a tiny
+16-step generative sequencer (bass/lead/hat patterns per game) using the
+standard lookahead-scheduling pattern. Why synthesis: zero assets to license,
+host, or download (free-tier friendly), retro fit, and sample-accurate timing.
+- **Autoplay policy:** an AudioContext starts suspended; a one-time
+  pointerdown/keydown listener resumes it, so audio "just works" at first
+  interaction with no permission UI.
+- **Wiring principle: sounds come from STATE DIFFS, not extra events.** The
+  kart engine hum follows my snapshot speed; pickups/nitro/shield/freeze/death
+  are transitions of my player's flags between snapshots; Ludo captures/homes
+  are board diffs — which means BOT moves are audible exactly like human
+  moves, and the server needed zero new events for any of this.
+- Muzzle sounds are inferred: a bullet that appears within ~90u of my kart is
+  mine; its snapshot `kind` picks the recipe (blaster/shotgun/laser/homing).
+- One mute toggle (localStorage) in the GamesHub header covers everything.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

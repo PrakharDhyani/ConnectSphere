@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { connectSocket, getSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
+import { sfx } from "@/lib/sfx.js";
 
 /**
  * Client side of Smash Karts. The server streams world snapshots at ~15 Hz —
@@ -34,10 +35,14 @@ export function useKart(roomId) {
     const onKill = ({ killerName, victimName }) => {
       killFeedRef.current.push({ text: `${killerName} 💥 ${victimName}`, at: performance.now() });
       if (killFeedRef.current.length > 5) killFeedRef.current.shift();
+      // My own death sound comes from the hp/alive diff in the renderer.
+      // (Read the store directly — no stale-closure dep on `me`.)
+      if (killerName === useAuthStore.getState().user?.name) sfx.play("kill");
     };
     const onBoom = ({ x, y, big, freeze }) => {
       boomsRef.current.push({ x, y, big, freeze, consumed: false });
       if (boomsRef.current.length > 8) boomsRef.current.shift();
+      sfx.play(freeze ? "freeze" : big === false ? "mineBlast" : "explosion");
     };
 
     const sync = () =>
