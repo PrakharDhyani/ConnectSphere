@@ -111,7 +111,8 @@ export const GHOST_MS = 6500;
 export const PICKUP_RESPAWN_MS = 8000;
 
 // Seat colors, in pick order.
-export const COLORS = ["red", "blue", "green", "yellow", "orange", "purple"];
+// 10 seat colors — the arena now takes up to 10 karts.
+export const COLORS = ["red", "blue", "green", "yellow", "orange", "purple", "cyan", "pink", "lime", "indigo"];
 
 // Fallback spawns if a game has no map attached (defensive).
 export const SPAWN_POINTS = [

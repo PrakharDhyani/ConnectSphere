@@ -72,13 +72,14 @@ function ringPoints(cx, cy, radii, yScale) {
   });
 }
 
-// Six spawns for a rectangular w×h arena: corners + top/bottom midpoints.
+// Ten spawns for a rectangular w×h arena: 4 corners + 6 along the top/bottom
+// edge strips (the strips are kept obstacle-free by every layout).
 //
 // FACING MATTERS as much as position. The mid spawns used to point straight at
 // the middle of the arena — directly into the horizontal barrier logs a few
 // hundred units away, so those two players drove into a wall on every respawn.
-// They now face ALONG the long axis, which is open. `kart.maps.test.js` drives
-// every spawn for 3s to keep this honest.
+// Edge spawns face ALONG the long axis, which is open. `kart.maps.test.js`
+// drives every spawn for 3s to keep this honest.
 function rectSpawns(w, h) {
   return [
     { x: 480, y: 450, angle: 0.4 },
@@ -87,6 +88,10 @@ function rectSpawns(w, h) {
     { x: w - 480, y: h - 450, angle: Math.PI + 0.4 },
     { x: w / 2, y: 320, angle: 0 },
     { x: w / 2, y: h - 320, angle: Math.PI },
+    { x: w * 0.25, y: 320, angle: 0 },
+    { x: w * 0.75, y: 320, angle: Math.PI },
+    { x: w * 0.25, y: h - 320, angle: 0 },
+    { x: w * 0.75, y: h - 320, angle: Math.PI },
   ];
 }
 
@@ -113,7 +118,11 @@ const CIRCUIT = (() => {
     if ((center[i].x - cx) * nx + (center[i].y - cy) * ny < 0) { nx = -nx; ny = -ny; }
     return { nx, ny };
   };
-  const spawns = [0, 13, 27, 40, 53, 67].map((i) => {
+  // 10 grid slots spread around the racing line, all facing along the track.
+  // These indices were picked by SIMULATION (drive every sample at full
+  // throttle for 3s, keep the well-spread ones that clear 850u) — hand-picked
+  // even spacing put two grid slots facing into hairpins.
+  const spawns = [0, 10, 16, 26, 34, 40, 50, 56, 64, 74].map((i) => {
     const p = center[i], q = center[(i + 1) % N];
     return { x: p.x, y: p.y, angle: Math.atan2(q.y - p.y, q.x - p.x) };
   });
@@ -143,8 +152,8 @@ const CANYON = (() => {
     8
   );
   const spawns = [];
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2 + 0.26;
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2 + 0.26;
     spawns.push({ x: cx + Math.cos(a) * 960, y: cy + Math.sin(a) * 960 * 0.75, angle: a + Math.PI / 2 });
   }
   const outerTypes = ["speed", "health", "shotgun", "shield", "health", "bomb", "laser", "spikes"];

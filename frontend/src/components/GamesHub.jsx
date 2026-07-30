@@ -47,7 +47,7 @@ export default function GamesHub({ roomId }) {
           >
             <div className="text-4xl">🏎️</div>
             <div className="mt-2 font-medium">Smash Karts 3D</div>
-            <div className="text-xs text-gray-500">3D deathmatch · up to 6</div>
+            <div className="text-xs text-gray-500">3D deathmatch · up to 10</div>
           </button>
         </div>
       </div>

@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { sfx } from "@/lib/sfx.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { getMap } from "@/games/kartMaps.js";
@@ -37,6 +38,7 @@ const COLOR_HEX = {
 const COLOR_INT = {
   red: 0xef4444, blue: 0x3b82f6, green: 0x22c55e,
   yellow: 0xeab308, orange: 0xf97316, purple: 0xa855f7,
+  cyan: 0x06b6d4, pink: 0xec4899, lime: 0x84cc16, indigo: 0x6366f1,
 };
 const TEAM_HEX = { A: "#3b82f6", B: "#ef4444" };
 const TEAM_INT = { A: 0x3b82f6, B: 0xef4444 };
@@ -1177,14 +1179,45 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       else if (theme.ambient === "leaves") buildMotes({ map: leafTex, color: 0xffffff, size: 15, count: 80, mode: "fall" });
       else if (theme.ambient === "dust") buildMotes({ color: 0xd8c2a0, size: 9, count: 110, mode: "drift", additive: true, opacity: 0.35 });
 
+      // PERF: the map is ~hundreds of objects and almost all of them never
+      // move — but with matrixAutoUpdate on, three recomputes every local
+      // matrix every frame. Freeze them once; re-enable only the few sprites
+      // the ambient loop actually animates (clouds drift, smoke rises).
+      mapGroup.traverse((o) => { o.matrixAutoUpdate = false; o.updateMatrix(); });
+      mapGroup.matrixAutoUpdate = false;
+      mapGroup.updateMatrix();
+      for (const c of mapFx.clouds || []) c.matrixAutoUpdate = true;
+      for (const s of mapFx.smoke?.sprites || []) s.matrixAutoUpdate = true;
+
       builtMapId = mapId;
     }
 
     // ── Reusable kart model ──
-    const sharedWheelGeo = new THREE.CylinderGeometry(10, 10, 9, 20);
-    const sharedRearTyreGeo = new THREE.CylinderGeometry(12, 12, 12, 20); // fat rears
-    const sharedHubGeo = new THREE.CylinderGeometry(5, 5, 12.4, 12);
+    const sharedWheelGeo = new THREE.CylinderGeometry(10, 10, 9, 14);
+    const sharedRearTyreGeo = new THREE.CylinderGeometry(12, 12, 12, 14); // fat rears
+    const sharedHubGeo = new THREE.CylinderGeometry(5, 5, 12.4, 10);
     const sharedSpokeGeo = new THREE.BoxGeometry(1.8, 12.6, 14);
+
+    // PERF: a wheel used to be six meshes (tyre + hub + 4 spokes) — 24 objects
+    // per kart, ~240 with a full 10-kart arena. Bake the metalwork into ONE
+    // geometry (transforms applied via a scratch Object3D so the euler order
+    // matches what the live meshes used), shared by every wheel. Result: 2
+    // meshes per wheel, and the shared materials mean fewer state changes too.
+    const bakeRot = (() => {
+      const scratch = new THREE.Object3D();
+      return (geo, rx, ry) => {
+        scratch.rotation.set(rx, ry, 0);
+        scratch.updateMatrix();
+        return geo.clone().applyMatrix4(scratch.matrix);
+      };
+    })();
+    const metalParts = [bakeRot(sharedHubGeo, Math.PI / 2, 0)];
+    for (let s = 0; s < 4; s++) metalParts.push(bakeRot(sharedSpokeGeo, Math.PI / 2, (s / 4) * Math.PI));
+    const sharedWheelMetalGeo = mergeGeometries(metalParts);
+    const sharedFrontTyreBaked = bakeRot(sharedWheelGeo, Math.PI / 2, 0);
+    const sharedRearTyreBaked = bakeRot(sharedRearTyreGeo, Math.PI / 2, 0);
+    const sharedTyreMat = new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.9 });
+    const sharedHubMat = new THREE.MeshStandardMaterial({ color: 0xa8b3c5, metalness: 0.85, roughness: 0.25 });
     function makeKart(colorInt) {
       const g = new THREE.Group();
       const chassis = new THREE.Group(); // everything that leans in corners
@@ -1331,29 +1364,18 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         chassis.add(tail);
       }
 
-      // Wheels — chunky treaded tyres with spoked hubs. The front pair sits in
+      // Wheels — chunky treaded tyres with spoked hubs (pre-baked shared
+      // geometry: 2 meshes per wheel, see above). The front pair sits in
       // pivot groups so it can visibly steer; all four spin with road speed.
-      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.9 });
-      const hubMat = new THREE.MeshStandardMaterial({ color: 0xa8b3c5, metalness: 0.85, roughness: 0.25 });
       const wheels = [];
       const frontPivots = [];
       for (const [x, z] of [[-20, -18], [20, -18], [-20, 18], [20, 18]]) {
         const rear = x < 0;
         const wh = new THREE.Group();
-        const tyre = new THREE.Mesh(rear ? sharedRearTyreGeo : sharedWheelGeo, wheelMat);
-        tyre.rotation.x = Math.PI / 2;
+        const tyre = new THREE.Mesh(rear ? sharedRearTyreBaked : sharedFrontTyreBaked, sharedTyreMat);
         tyre.castShadow = true;
-        wh.add(tyre);
-        const hub = new THREE.Mesh(sharedHubGeo, hubMat);
-        hub.rotation.x = Math.PI / 2;
-        wh.add(hub);
-        // Spokes give the wheels visible rotation instead of a smooth blur.
-        for (let s = 0; s < 4; s++) {
-          const spoke = new THREE.Mesh(sharedSpokeGeo, hubMat);
-          spoke.rotation.x = Math.PI / 2;
-          spoke.rotation.y = (s / 4) * Math.PI;
-          wh.add(spoke);
-        }
+        const metal = new THREE.Mesh(sharedWheelMetalGeo, sharedHubMat);
+        wh.add(tyre, metal);
         wheels.push(wh);
         if (x > 0) {
           const pivot = new THREE.Group();
@@ -2043,6 +2065,7 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       setHud({
         timeLeft: cur.timeLeft, board, me, feed,
         mode: cur.mode || "ffa", teamScores: cur.teamScores || null,
+        teamNames: cur.teamNames || null,
         fps: Math.min(999, Math.round(1000 / Math.max(1, gov.avgMs))),
         quality: TIERS[gov.tier].label,
       });
@@ -2095,10 +2118,16 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
       <div className="absolute top-2 left-1/2 -translate-x-1/2 flex flex-col items-center">
         <div className="text-3xl font-bold text-white drop-shadow-lg tabular-nums">{fmtTime(hud.timeLeft)}</div>
         {tdm && hud.teamScores && (
-          <div className="mt-1 flex items-center gap-3 text-lg font-bold bg-black/40 rounded-full px-3 py-0.5">
+          <div className="mt-1 flex items-center gap-2 text-lg font-bold bg-black/40 rounded-full px-3 py-0.5">
+            <span className="text-xs font-semibold max-w-[9rem] truncate" style={{ color: TEAM_HEX.A }}>
+              {hud.teamNames?.A || "Team A"}
+            </span>
             <span style={{ color: TEAM_HEX.A }}>{hud.teamScores.A}</span>
             <span className="text-gray-400 text-sm">vs</span>
             <span style={{ color: TEAM_HEX.B }}>{hud.teamScores.B}</span>
+            <span className="text-xs font-semibold max-w-[9rem] truncate" style={{ color: TEAM_HEX.B }}>
+              {hud.teamNames?.B || "Team B"}
+            </span>
           </div>
         )}
       </div>

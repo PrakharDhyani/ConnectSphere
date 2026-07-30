@@ -1771,6 +1771,30 @@ host, or download (free-tier friendly), retro fit, and sample-accurate timing.
   your turn) on the LEFT rail with the countdown bar; tokens are now SVG pawns
   (radial-gradient head, tapered body, ground shadow) instead of flat circles.
 
+### Kart round 3 — 10-player arenas, host match controls, perf pass 3
+- **10 karts** (was 6): 4 new seat colors, MAX_KARTS bump — and 10 spawns per
+  map. The interesting part: circuit grid slots are now **picked by
+  simulation** — hand-choosing evenly-spaced spline indices put two slots
+  facing into hairpins (the drive-test caught it), so a script drives every
+  track sample at full throttle and selects 10 well-spread ones that clear
+  850u. Layout data chosen by the same test that guards it.
+- **Host controls** (host = first human to join, already the hostId rule):
+  match length (60–600s, clamped server-side), TDM team RENAMES (16-char cap,
+  whitespace-normalized), and manual team pinning via `kart:setTeam` — the
+  balancer now respects pins and only distributes the unassigned. Team names
+  flow through snapshots into the lobby, live HUD and podium.
+- **Perf pass 3** (draw-call/CPU round, after the pacing round):
+  - `matrixAutoUpdate=false` for the whole map group — hundreds of static
+    scenery objects were having their local matrices recomputed EVERY frame;
+    only the genuinely animated sprites (clouds, smoke plume) stay dynamic.
+  - Wheels were 6 meshes each (tyre+hub+4 spokes) = 24/kart = ~240 objects at
+    full capacity. Baked the metalwork into ONE shared merged geometry
+    (transforms applied through a scratch Object3D so euler order matches),
+    shared materials across all karts → 2 meshes/wheel, 8/kart.
+  **Lesson:** object COUNT is its own budget — matrix updates, frustum tests
+  and draw calls all scale with it, and merging static sub-meshes is the
+  cheapest big win.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

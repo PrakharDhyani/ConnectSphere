@@ -9,7 +9,12 @@ const KartArena3D = lazy(() => import("@/components/KartArena3D.jsx"));
 const COLOR_HEX = {
   red: "#ef4444", blue: "#3b82f6", green: "#22c55e",
   yellow: "#eab308", orange: "#f97316", purple: "#a855f7",
+  cyan: "#06b6d4", pink: "#ec4899", lime: "#84cc16", indigo: "#6366f1",
 };
+const DURATIONS = [
+  { s: 60, label: "1 min" }, { s: 120, label: "2 min" }, { s: 180, label: "3 min" },
+  { s: 300, label: "5 min" }, { s: 480, label: "8 min" },
+];
 const TEAM_HEX = { A: "#3b82f6", B: "#ef4444" };
 const BOT_LEVELS = [
   { id: "easy", name: "Easy" },
@@ -39,9 +44,11 @@ function HoldButton({ onHold, className, children, label }) {
 }
 
 export default function KartPanel({ roomId, onExit }) {
-  const { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig, addBot, removeBot } =
+  const { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig, setTeam, addBot, removeBot } =
     useKart(roomId);
   const [botDiff, setBotDiff] = useState("medium");
+  // Team-name drafts live locally while typing; commit to the server on blur.
+  const [nameDrafts, setNameDrafts] = useState({});
 
   // ── Shared input pipeline (keyboard + touch) ──
   const keysRef = useRef(new Set());
@@ -174,11 +181,49 @@ export default function KartPanel({ roomId, onExit }) {
               ))}
             </div>
           </div>
-          {!isHost && <p className="text-xs text-gray-600">Only the host can change the map / mode.</p>}
+          <div>
+            <div className="text-xs uppercase text-gray-500 mb-1.5">Match length</div>
+            <div className="flex gap-2 justify-center">
+              {DURATIONS.map((d) => (
+                <button
+                  key={d.s}
+                  disabled={!isHost}
+                  onClick={() => setConfig({ duration: d.s })}
+                  className={`px-3 py-1.5 rounded-lg text-sm border ${(view?.matchMs ?? 180000) === d.s * 1000 ? "bg-brand-600 border-brand-500" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-brand-500" : "opacity-70 cursor-default"}`}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {selMode === "tdm" && (
+            <div>
+              <div className="text-xs uppercase text-gray-500 mb-1.5">Team names</div>
+              <div className="grid grid-cols-2 gap-2">
+                {["A", "B"].map((t) => (
+                  <input
+                    key={t}
+                    disabled={!isHost}
+                    value={nameDrafts[t] ?? view?.teamNames?.[t] ?? `Team ${t}`}
+                    maxLength={16}
+                    onChange={(e) => setNameDrafts((d) => ({ ...d, [t]: e.target.value }))}
+                    onBlur={(e) => {
+                      const name = e.target.value.trim();
+                      if (name && name !== view?.teamNames?.[t]) setConfig({ teamName: { team: t, name } });
+                      setNameDrafts((d) => ({ ...d, [t]: undefined }));
+                    }}
+                    className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-center focus:border-brand-500 outline-none disabled:opacity-70"
+                    style={{ color: TEAM_HEX[t] }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          {!isHost && <p className="text-xs text-gray-600">Only the host can change the map / mode / timer.</p>}
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 mb-4 text-left">
-          <div className="text-xs uppercase text-gray-500 mb-2">In the arena ({players.length}/6)</div>
+          <div className="text-xs uppercase text-gray-500 mb-2">In the arena ({players.length}/10)</div>
           {players.length === 0 && <div className="text-sm text-gray-600">No karts have joined yet.</div>}
           <ul className="space-y-1">
             {players.map((p) => (
@@ -187,8 +232,31 @@ export default function KartPanel({ roomId, onExit }) {
                 <span>{p.name}{p.id === me?.id && " (you)"}</span>
                 {p.isBot && <span className="text-xs px-1.5 rounded bg-gray-800 text-gray-400">bot</span>}
                 {p.id === view?.hostId && <span className="text-xs text-gray-500">host</span>}
+                {selMode === "tdm" && (
+                  isHost ? (
+                    <span className="ml-auto flex gap-1">
+                      {["A", "B"].map((t) => (
+                        <button
+                          key={t}
+                          onClick={() => setTeam(p.id, p.team === t ? null : t)}
+                          title={`Put ${p.name} on ${view?.teamNames?.[t] || `Team ${t}`}`}
+                          className={`w-6 h-6 rounded text-xs font-bold border ${p.team === t ? "text-white" : "text-gray-500 border-gray-700 hover:border-gray-500"}`}
+                          style={p.team === t ? { background: TEAM_HEX[t], borderColor: TEAM_HEX[t] } : {}}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                    </span>
+                  ) : (
+                    p.team && (
+                      <span className="ml-auto text-xs font-bold" style={{ color: TEAM_HEX[p.team] }}>
+                        {view?.teamNames?.[p.team] || `Team ${p.team}`}
+                      </span>
+                    )
+                  )
+                )}
                 {isHost && p.isBot && (
-                  <button onClick={() => removeBot(p.id)} className="ml-auto text-xs text-gray-500 hover:text-red-400" aria-label={`Remove ${p.name}`}>
+                  <button onClick={() => removeBot(p.id)} className={`${selMode === "tdm" ? "" : "ml-auto"} text-xs text-gray-500 hover:text-red-400`} aria-label={`Remove ${p.name}`}>
                     remove
                   </button>
                 )}
@@ -213,7 +281,7 @@ export default function KartPanel({ roomId, onExit }) {
                 </div>
                 <button
                   onClick={() => addBot(botDiff)}
-                  disabled={players.length >= 6}
+                  disabled={players.length >= 10}
                   className="ml-auto px-3 py-1 rounded-md text-sm bg-gray-800 border border-gray-700 hover:border-brand-500 disabled:opacity-40"
                 >
                   + Bot
@@ -256,7 +324,9 @@ export default function KartPanel({ roomId, onExit }) {
             {view?.winnerTeam === "tie" ? (
               <span className="text-gray-300">It&apos;s a tie! 🤝</span>
             ) : (
-              <span style={{ color: TEAM_HEX[view?.winnerTeam] }}>Team {view?.winnerTeam} wins! 🏆</span>
+              <span style={{ color: TEAM_HEX[view?.winnerTeam] }}>
+                {view?.teamNames?.[view?.winnerTeam] || `Team ${view?.winnerTeam}`} wins! 🏆
+              </span>
             )}
             {view?.teamScores && (
               <span className="block text-sm mt-1 text-gray-400">

@@ -115,9 +115,13 @@ export function useKart(roomId) {
     (cfg) => getSocket().emit("kart:config", { roomId, ...cfg }),
     [roomId]
   );
+  const setTeam = useCallback(
+    (playerId, team) => getSocket().emit("kart:setTeam", { roomId, playerId, team }),
+    [roomId]
+  );
 
   const joined = Boolean(view?.players?.some((p) => p.id === me?.id));
   const isHost = view?.hostId === me?.id;
 
-  return { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig, addBot, removeBot };
+  return { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig, setTeam, addBot, removeBot };
 }

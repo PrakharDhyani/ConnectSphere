@@ -27,7 +27,13 @@ import { roomKey } from "./chat.handlers.js";
 
 const games = new Map(); // roomId -> game
 const MODES = new Set(["ffa", "tdm"]);
-const MAX_KARTS = 6;
+const MAX_KARTS = 10;
+
+// Host-editable match length, clamped to something sane.
+const MIN_MATCH_S = 60;
+const MAX_MATCH_S = 600;
+const cleanTeamName = (s) =>
+  String(s ?? "").replace(/\s+/g, " ").trim().slice(0, 16);
 
 const isBotId = (id) => typeof id === "string" && id.startsWith("bot:");
 const humanPlayers = (g) => [...g.players.values()].filter((p) => !p.isBot);
@@ -54,6 +60,8 @@ function newGame(hostId) {
     hostId,
     mapId: map.id,
     mode: "ffa",
+    matchMs: MATCH_MS,
+    teamNames: { A: "Team A", B: "Team B" },
     map,
     obstacles: map.obstacles,
     spawns: map.spawns,
@@ -105,9 +113,15 @@ function smallerTeam(g) {
   return a <= b ? "A" : "B";
 }
 
+// Respect the host's manual picks; balance everyone else onto the smaller team.
 function assignTeams(g) {
   const players = [...g.players.values()];
-  players.forEach((p, i) => { p.team = i % 2 === 0 ? "A" : "B"; });
+  let a = players.filter((p) => p.team === "A").length;
+  let b = players.filter((p) => p.team === "B").length;
+  for (const p of players) {
+    if (p.team === "A" || p.team === "B") continue;
+    if (a <= b) { p.team = "A"; a += 1; } else { p.team = "B"; b += 1; }
+  }
 }
 
 function teamScores(g) {
@@ -122,6 +136,8 @@ function snapshot(g, now = Date.now()) {
     hostId: g.hostId,
     mapId: g.mapId,
     mode: g.mode,
+    matchMs: g.matchMs,
+    teamNames: g.teamNames,
     timeLeft: g.status === "playing" ? Math.max(0, g.endsAt - now) : 0,
     winnerId: g.winnerId,
     winnerTeam: g.winnerTeam,
@@ -172,6 +188,7 @@ function snapshot(g, now = Date.now()) {
 
 const emptyLobby = () => ({
   status: "lobby", hostId: null, mapId: DEFAULT_MAP, mode: "ffa",
+  matchMs: MATCH_MS, teamNames: { A: "Team A", B: "Team B" },
   players: [], bullets: [], pickups: [], timeLeft: 0, winnerId: null, winnerTeam: null, teamScores: null,
 });
 
@@ -320,11 +337,33 @@ export function registerKartHandlers(io, socket) {
   });
 
   // Host picks the map + mode before starting (only in lobby / ended).
-  socket.on("kart:config", ({ roomId, mapId, mode } = {}) => {
+  socket.on("kart:config", ({ roomId, mapId, mode, duration, teamName } = {}) => {
     const g = games.get(roomId);
     if (!g || g.hostId !== uid || g.status === "playing") return;
     if (mapId && MAPS[mapId]) applyMap(g, mapId);
     if (mode && MODES.has(mode)) g.mode = mode;
+    // Match length in seconds, clamped — the host picks the pace.
+    if (Number.isFinite(Number(duration))) {
+      const s = Math.round(Number(duration));
+      if (s >= MIN_MATCH_S && s <= MAX_MATCH_S) g.matchMs = s * 1000;
+    }
+    // Rename a team (TDM flavor): { team: "A"|"B", name }.
+    if (teamName && (teamName.team === "A" || teamName.team === "B")) {
+      const name = cleanTeamName(teamName.name);
+      if (name) g.teamNames[teamName.team] = name;
+    }
+    broadcast(io, roomId);
+  });
+
+  // Host drags players (and bots) onto a team before a TDM match. Anyone left
+  // unassigned gets balanced automatically at start.
+  socket.on("kart:setTeam", ({ roomId, playerId, team } = {}) => {
+    const g = games.get(roomId);
+    if (!g || g.hostId !== uid || g.status === "playing") return;
+    if (team !== "A" && team !== "B" && team !== null) return;
+    const p = g.players.get(playerId);
+    if (!p) return;
+    p.team = team;
     broadcast(io, roomId);
   });
 
@@ -351,7 +390,7 @@ export function registerKartHandlers(io, socket) {
     g.pickups = g.map.pickups.map((pad) => ({ ...pad, active: true, readyAt: 0 }));
     g.status = "playing";
     g.startedAt = now;
-    g.endsAt = now + MATCH_MS;
+    g.endsAt = now + (g.matchMs || MATCH_MS);
     g.winnerId = null;
     g.winnerTeam = null;
     g.tick = 0;
