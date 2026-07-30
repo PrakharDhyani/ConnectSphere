@@ -1,8 +1,8 @@
 # Deployment — free tier, full features (video calls included)
 
 **Architecture:** everything on one Oracle Cloud *Always Free* ARM VM
-(4 OCPU / 24 GB — the only free tier with a public IP + UDP, which
-mediasoup needs). One `docker compose` stack: Mongo, Redis, Kafka, MinIO,
+(2 OCPU / 12 GB — Oracle reduced the old 4/24 allowance; still the only
+free tier with a public IP + UDP, which mediasoup needs). One `docker compose` stack: Mongo, Redis, Kafka, MinIO,
 the backend, and Caddy serving the built frontend + terminating HTTPS +
 proxying `/api`, `/socket.io` and `/s3`. Same-origin end to end — no CORS.
 
@@ -38,8 +38,18 @@ Files involved (all in this repo):
    Always-Free shapes never bill). Region: pick one near you and STAY on
    Always Free eligible shapes.
 2. **VM**: Compute → Create instance → image *Ubuntu 22.04*, shape
-   *VM.Standard.A1.Flex* (4 OCPU, 24 GB — max free). Upload/generate an SSH
-   key. Note the **public IP**.
+   *VM.Standard.A1.Flex* (2 OCPU, 12 GB — the current Always-Free maximum;
+   the stack idles at ~4 GB, so this fits). Upload/generate an SSH key. Note
+   the **public IP**.
+
+   **Free-tier facts** (per Oracle's docs): the signup card is identity
+   verification only — a free account is HARD-CAPPED and cannot be charged;
+   exceeding a limit fails the request instead of billing. Charges are only
+   possible after an explicit Pay-As-You-Go upgrade. Egress allowance is
+   10 TB/month. Idle instances (<20% CPU/RAM/network for 7 days) can be
+   reclaimed — this stack's resting footprint stays above that line.
+   If RAM/CPU headroom is ever needed: dropping Kafka+Zookeeper frees
+   ~1.5 GB (it's an analytics side-channel behind one env flag).
 3. **Network** (VCN → the subnet's Security List → Ingress rules):
    - TCP 80, 443 from 0.0.0.0/0
    - UDP 443 from 0.0.0.0/0 (HTTP/3, optional)
