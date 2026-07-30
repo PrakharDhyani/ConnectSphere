@@ -142,7 +142,7 @@ export default function KartPanel({ roomId, onExit }) {
     return (
       <div className="max-w-md mx-auto text-center py-6">
         <div className="text-4xl">🏎️</div>
-        <h2 className="text-lg font-semibold mt-2">Smash Karts 3D</h2>
+        <h2 className="text-xl font-black tracking-wide text-arcade-300 drop-shadow-[0_0_10px_rgba(34,211,238,0.4)] mt-2">SMASH KARTS 3D</h2>
         <p className="text-gray-500 text-sm mb-4">Drive, shoot, grab powerups — most kills in 3 minutes wins.</p>
         <p className="text-xs text-gray-600 mb-4">
           14 powerups — guns (🔫🔺🚀), traps (🧨🛢️💀) and buffs (🛡️⚙️👻⚡).<br />
@@ -150,16 +150,16 @@ export default function KartPanel({ roomId, onExit }) {
         </p>
 
         {/* Map + mode selection */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 mb-4 space-y-3">
+        <div className="bg-gradient-to-b from-arcade-950/40 to-gray-900 border border-arcade-500/25 rounded-2xl p-4 mb-4 space-y-3">
           <div>
-            <div className="text-xs uppercase text-gray-500 mb-1.5">Map</div>
+            <div className="text-xs uppercase tracking-wider text-arcade-300/70 mb-1.5">Map</div>
             <div className="flex gap-2 justify-center">
               {MAP_LIST.map((m) => (
                 <button
                   key={m.id}
                   disabled={!isHost}
                   onClick={() => setConfig({ mapId: m.id })}
-                  className={`px-3 py-1.5 rounded-lg text-sm border ${selMap === m.id ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-arcade-400" : "opacity-70 cursor-default"}`}
+                  className={`px-3 py-1.5 rounded-lg text-sm border ${selMap === m.id ? "bg-arcade-400 text-gray-950 font-semibold border-arcade-300 shadow-[0_0_10px_rgba(34,211,238,0.45)]" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-arcade-400" : "opacity-70 cursor-default"}`}
                 >
                   {m.name}
                 </button>
@@ -167,14 +167,14 @@ export default function KartPanel({ roomId, onExit }) {
             </div>
           </div>
           <div>
-            <div className="text-xs uppercase text-gray-500 mb-1.5">Mode</div>
+            <div className="text-xs uppercase tracking-wider text-arcade-300/70 mb-1.5">Mode</div>
             <div className="flex gap-2 justify-center">
               {MODES.map((m) => (
                 <button
                   key={m.id}
                   disabled={!isHost}
                   onClick={() => setConfig({ mode: m.id })}
-                  className={`px-3 py-1.5 rounded-lg text-sm border ${selMode === m.id ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-arcade-400" : "opacity-70 cursor-default"}`}
+                  className={`px-3 py-1.5 rounded-lg text-sm border ${selMode === m.id ? "bg-arcade-400 text-gray-950 font-semibold border-arcade-300 shadow-[0_0_10px_rgba(34,211,238,0.45)]" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-arcade-400" : "opacity-70 cursor-default"}`}
                 >
                   {m.name}
                 </button>
@@ -182,14 +182,14 @@ export default function KartPanel({ roomId, onExit }) {
             </div>
           </div>
           <div>
-            <div className="text-xs uppercase text-gray-500 mb-1.5">Match length</div>
+            <div className="text-xs uppercase tracking-wider text-arcade-300/70 mb-1.5">Match length</div>
             <div className="flex gap-2 justify-center">
               {DURATIONS.map((d) => (
                 <button
                   key={d.s}
                   disabled={!isHost}
                   onClick={() => setConfig({ duration: d.s })}
-                  className={`px-3 py-1.5 rounded-lg text-sm border ${(view?.matchMs ?? 180000) === d.s * 1000 ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-arcade-400" : "opacity-70 cursor-default"}`}
+                  className={`px-3 py-1.5 rounded-lg text-sm border ${(view?.matchMs ?? 180000) === d.s * 1000 ? "bg-arcade-400 text-gray-950 font-semibold border-arcade-300 shadow-[0_0_10px_rgba(34,211,238,0.45)]" : "bg-gray-800 border-gray-700"} ${isHost ? "hover:border-arcade-400" : "opacity-70 cursor-default"}`}
                 >
                   {d.label}
                 </button>
@@ -198,7 +198,7 @@ export default function KartPanel({ roomId, onExit }) {
           </div>
           {selMode === "tdm" && (
             <div>
-              <div className="text-xs uppercase text-gray-500 mb-1.5">Team names</div>
+              <div className="text-xs uppercase tracking-wider text-arcade-300/70 mb-1.5">Team names</div>
               <div className="grid grid-cols-2 gap-2">
                 {["A", "B"].map((t) => (
                   <input
@@ -222,8 +222,8 @@ export default function KartPanel({ roomId, onExit }) {
           {!isHost && <p className="text-xs text-gray-600">Only the host can change the map / mode / timer.</p>}
         </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 mb-4 text-left">
-          <div className="text-xs uppercase text-gray-500 mb-2">In the arena ({players.length}/10)</div>
+        <div className="bg-gradient-to-b from-arcade-950/40 to-gray-900 border border-arcade-500/25 rounded-2xl p-4 mb-4 text-left">
+          <div className="text-xs uppercase tracking-wider text-arcade-300/70 mb-2">In the arena ({players.length}/10)</div>
           {players.length === 0 && <div className="text-sm text-gray-600">No karts have joined yet.</div>}
           <ul className="space-y-1">
             {players.map((p) => (
@@ -266,14 +266,14 @@ export default function KartPanel({ roomId, onExit }) {
 
           {isHost && (
             <div className="mt-3 pt-3 border-t border-gray-800">
-              <div className="text-xs uppercase text-gray-500 mb-1.5">Add a bot</div>
+              <div className="text-xs uppercase tracking-wider text-arcade-300/70 mb-1.5">Add a bot</div>
               <div className="flex items-center gap-2">
                 <div className="flex gap-1">
                   {BOT_LEVELS.map((d) => (
                     <button
                       key={d.id}
                       onClick={() => setBotDiff(d.id)}
-                      className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700 hover:border-arcade-400"}`}
+                      className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-arcade-400 text-gray-950 font-semibold border-arcade-300 shadow-[0_0_10px_rgba(34,211,238,0.45)]" : "bg-gray-800 border-gray-700 hover:border-arcade-400"}`}
                     >
                       {d.name}
                     </button>
@@ -293,7 +293,7 @@ export default function KartPanel({ roomId, onExit }) {
 
         <div className="flex gap-2 justify-center">
           {!joined ? (
-            <button onClick={() => join()} className="px-4 py-2 rounded-lg bg-arcade-500 text-gray-950 hover:bg-arcade-400 text-gray-950 font-medium">Join arena</button>
+            <button onClick={() => join()} className="px-4 py-2 rounded-lg bg-arcade-400 text-gray-950 font-semibold hover:bg-arcade-300 shadow-[0_0_12px_rgba(34,211,238,0.4)] font-medium">Join arena</button>
           ) : (
             <button onClick={() => leave()} className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700">Leave seat</button>
           )}
@@ -339,7 +339,7 @@ export default function KartPanel({ roomId, onExit }) {
             <p className="text-arcade-400 font-medium mb-4">🏆 {winnerP.name}{winnerP.id === me?.id && " (you)"} wins with {winnerP.kills} kills!</p>
           )
         )}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 mb-4 text-left">
+        <div className="bg-gradient-to-b from-arcade-950/40 to-gray-900 border border-arcade-500/25 rounded-2xl p-4 mb-4 text-left">
           {players.map((p, i) => (
             <div key={p.id} className="flex items-center justify-between text-sm py-1">
               <span className="flex items-center gap-2">
@@ -352,7 +352,7 @@ export default function KartPanel({ roomId, onExit }) {
           ))}
         </div>
         <div className="flex gap-2 justify-center">
-          {isHost && <button onClick={() => reset()} className="px-4 py-2 rounded-lg bg-arcade-500 text-gray-950 hover:bg-arcade-400 text-gray-950 font-medium">Back to lobby</button>}
+          {isHost && <button onClick={() => reset()} className="px-4 py-2 rounded-lg bg-arcade-400 text-gray-950 font-semibold hover:bg-arcade-300 shadow-[0_0_12px_rgba(34,211,238,0.4)] font-medium">Back to lobby</button>}
           <button onClick={() => onExit?.()} className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700">Exit</button>
         </div>
       </div>

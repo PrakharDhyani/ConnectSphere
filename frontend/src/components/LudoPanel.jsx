@@ -243,9 +243,9 @@ export default function LudoPanel({ roomId }) {
   // ── Lobby ──
   if (state.status === "lobby") {
     return (
-      <div className="max-w-md mx-auto bg-gray-900 border border-gray-800 rounded-2xl p-6 text-center">
+      <div className="max-w-md mx-auto bg-gradient-to-b from-arcade-950/40 to-gray-900 border border-arcade-500/25 rounded-2xl p-6 text-center">
         <p className="text-4xl mb-2">🎲</p>
-        <h2 className="text-lg font-semibold">Ludo</h2>
+        <h2 className="text-xl font-black tracking-wide text-arcade-300 drop-shadow-[0_0_10px_rgba(34,211,238,0.4)]">LUDO</h2>
         <p className="text-gray-500 text-sm mt-1">Take a seat — 2 to 4 players.</p>
 
         <ul className="mt-4 space-y-2 text-left">
@@ -266,14 +266,14 @@ export default function LudoPanel({ roomId }) {
 
         {isHost && (
           <div className="mt-4 pt-4 border-t border-gray-800 text-left">
-            <div className="text-xs uppercase text-gray-500 mb-1.5">Add a bot</div>
+            <div className="text-xs uppercase tracking-wider text-arcade-300/70 mb-1.5">Add a bot</div>
             <div className="flex items-center gap-2">
               <div className="flex gap-1">
                 {BOT_LEVELS.map((d) => (
                   <button
                     key={d.id}
                     onClick={() => setBotDiff(d.id)}
-                    className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-arcade-500 text-gray-950 border-arcade-400" : "bg-gray-800 border-gray-700 hover:border-arcade-400"}`}
+                    className={`px-2 py-1 rounded-md text-xs border ${botDiff === d.id ? "bg-arcade-400 text-gray-950 font-semibold border-arcade-300 shadow-[0_0_10px_rgba(34,211,238,0.45)]" : "bg-gray-800 border-gray-700 hover:border-arcade-400"}`}
                   >
                     {d.name}
                   </button>

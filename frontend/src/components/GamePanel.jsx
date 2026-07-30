@@ -70,7 +70,7 @@ export default function GamePanel({ roomId }) {
     <div className="grid lg:grid-cols-[1fr_280px] gap-4">
       <div className="space-y-3">
         {/* header */}
-        <div className="flex items-center justify-between gap-3 bg-gray-900 border border-gray-800 rounded-xl px-4 py-2">
+        <div className="flex items-center justify-between gap-3 bg-gray-900/80 border border-arcade-500/20 rounded-xl px-4 py-2">
           <div className="text-sm">
             {inLobby && <span className="text-gray-400">Draw &amp; Guess — lobby</span>}
             {status === "choosing" &&
@@ -101,7 +101,7 @@ export default function GamePanel({ roomId }) {
         )}
 
         {inLobby ? (
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 text-center">
+          <div className="bg-gradient-to-b from-arcade-950/40 to-gray-900 border border-arcade-500/25 rounded-2xl p-6 text-center">
             <p className="text-4xl mb-2">🎨</p>
             <h2 className="text-lg font-semibold">{status === "ended" ? "Game over 🎉" : "Draw & Guess"}</h2>
 
@@ -180,7 +180,7 @@ export default function GamePanel({ roomId }) {
 
       {/* scores + feed + guess */}
       <aside className="flex flex-col gap-3">
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-3">
+        <div className="bg-gradient-to-b from-arcade-950/40 to-gray-900 border border-arcade-500/25 rounded-2xl p-3">
           <h3 className="text-sm font-semibold text-gray-300 mb-2">Scores</h3>
           <ul className="space-y-1">
             {(inLobby ? lobby : players).map((p) => (
@@ -196,7 +196,7 @@ export default function GamePanel({ roomId }) {
           </ul>
         </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-3 flex-1 min-h-[160px]">
+        <div className="bg-gradient-to-b from-arcade-950/40 to-gray-900 border border-arcade-500/25 rounded-2xl p-3 flex-1 min-h-[160px]">
           <div ref={feedRef} className="h-40 lg:h-48 overflow-y-auto space-y-1 text-sm pr-1">
             {feed.map((f, i) => (
               <p key={i} className="break-words">
