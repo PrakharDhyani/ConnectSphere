@@ -1,9 +1,15 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import GamePanel from "@/components/GamePanel.jsx";
 import LudoPanel from "@/components/LudoPanel.jsx";
 import KartPanel from "@/components/KartPanel.jsx";
 import SoundToggle from "@/components/SoundToggle.jsx";
 import { music } from "@/lib/sfx.js";
+
+// Lazy: each new game is its own chunk (ChessPanel alone drags in chess.js).
+const ChessPanel = lazy(() => import("@/components/ChessPanel.jsx"));
+const UnoPanel = lazy(() => import("@/components/UnoPanel.jsx"));
+const TypingPanel = lazy(() => import("@/components/TypingPanel.jsx"));
+const BingoPanel = lazy(() => import("@/components/BingoPanel.jsx"));
 
 /**
  * The Game tab — visually its own place: the platform chrome is violet, the
@@ -23,6 +29,10 @@ const GAMES = [
   { id: "skribbl", emoji: "🎨", name: "Draw & Guess", hint: "Skribbl-style" },
   { id: "ludo", emoji: "🎲", name: "Ludo", hint: "2–4 players" },
   { id: "kart", emoji: "🏎️", name: "Smash Karts 3D", hint: "3D deathmatch · up to 10" },
+  { id: "chess", emoji: "♞", name: "Chess", hint: "1v1 · beatable bots" },
+  { id: "uno", emoji: "🃏", name: "UNO", hint: "2–6 players · card chaos" },
+  { id: "typing", emoji: "⌨️", name: "Typing Race", hint: "fastest fingers · up to 8" },
+  { id: "bingo", emoji: "🎱", name: "Bingo", hint: "daub & shout · up to 10" },
 ];
 
 export default function GamesHub({ roomId }) {
@@ -82,6 +92,12 @@ export default function GamesHub({ roomId }) {
         {game === "skribbl" && <GamePanel roomId={roomId} />}
         {game === "ludo" && <LudoPanel roomId={roomId} />}
         {game === "kart" && <KartPanel roomId={roomId} onExit={() => setGame(null)} />}
+        <Suspense fallback={<p className="text-center py-10 text-gray-500">Loading game…</p>}>
+          {game === "chess" && <ChessPanel roomId={roomId} />}
+          {game === "uno" && <UnoPanel roomId={roomId} />}
+          {game === "typing" && <TypingPanel roomId={roomId} />}
+          {game === "bingo" && <BingoPanel roomId={roomId} />}
+        </Suspense>
       </div>
     </div>
   );

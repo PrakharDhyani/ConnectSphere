@@ -185,6 +185,30 @@ const RECIPES = {
   correct: () => [659, 880, 1319].forEach((f, i) => tone({ type: "triangle", from: f, dur: 0.14, vol: 0.2, delay: i * 0.09 })),
   roundStart: () => tone({ type: "square", from: 440, to: 880, dur: 0.18, vol: 0.16 }),
   tick: () => tone({ type: "sine", from: 990, dur: 0.05, vol: 0.12 }),
+  // Chess — wooden thuds via short low triangles.
+  chessMove: () => tone({ type: "triangle", from: 220, to: 140, dur: 0.09, vol: 0.3 }),
+  chessCapture: () => {
+    tone({ type: "triangle", from: 200, to: 110, dur: 0.1, vol: 0.32 });
+    tone({ type: "square", from: 520, to: 240, dur: 0.12, vol: 0.12, delay: 0.03 });
+  },
+  check: () => [740, 988].forEach((f, i) => tone({ type: "square", from: f, dur: 0.11, vol: 0.16, delay: i * 0.1 })),
+  // UNO — card flicks are filtered noise snaps.
+  cardPlay: () => noiseBurst({ dur: 0.09, vol: 0.28, filterFrom: 4200, filterTo: 900, q: 1.4 }),
+  cardDraw: () => noiseBurst({ dur: 0.13, vol: 0.2, filterFrom: 2600, filterTo: 500, q: 1.2 }),
+  unoShout: () => [523, 659, 784].forEach((f, i) => tone({ type: "square", from: f, dur: 0.12, vol: 0.22, delay: i * 0.07 })),
+  reverse: () => tone({ type: "sine", from: 400, to: 900, dur: 0.25, vol: 0.18, curve: "lin" }),
+  plusCard: () => [330, 262].forEach((f, i) => tone({ type: "sawtooth", from: f, dur: 0.16, vol: 0.2, delay: i * 0.12 })),
+  // Typing race
+  keyError: () => tone({ type: "square", from: 160, to: 120, dur: 0.07, vol: 0.14 }),
+  wordDone: () => tone({ type: "sine", from: 880, dur: 0.05, vol: 0.1 }),
+  raceGo: () => tone({ type: "square", from: 880, to: 1760, dur: 0.3, vol: 0.22 }),
+  // Bingo
+  ballPop: () => {
+    tone({ type: "sine", from: 500, to: 900, dur: 0.09, vol: 0.2 });
+    noiseBurst({ dur: 0.06, vol: 0.12, filterFrom: 3000, filterTo: 1200, q: 2 });
+  },
+  daub: () => tone({ type: "sine", from: 340, to: 220, dur: 0.09, vol: 0.26 }),
+  falseCall: () => [220, 175].forEach((f, i) => tone({ type: "sawtooth", from: f, dur: 0.2, vol: 0.2, delay: i * 0.15 })),
 };
 
 export const sfx = {
@@ -267,6 +291,30 @@ const TRACKS = {
     bpm: 112, root: 131, // C3 — playful major bounce
     bass: [0, 0, 4, 0, 7, 0, 4, 0, 5, 0, 9, 0, 7, 0, 4, 0],
     lead: [12, 0, 16, 0, 0, 12, 19, 0, 17, 0, 12, 0, 16, 0, 0, 12],
+    hat: true,
+  },
+  chess: {
+    bpm: 72, root: 110, // A2 — slow, thoughtful minor arpeggios
+    bass: [0, 0, 0, 0, 7, 0, 0, 0, 3, 0, 0, 0, 10, 0, 0, 0],
+    lead: [0, 12, 15, 19, 0, 15, 12, 0, 0, 10, 14, 19, 0, 14, 10, 0],
+    hat: false,
+  },
+  uno: {
+    bpm: 122, root: 147, // D3 — upbeat latin-ish party groove
+    bass: [0, 0, 7, 0, 5, 0, 0, 5, 0, 0, 7, 0, 9, 0, 7, 5],
+    lead: [12, 0, 0, 16, 0, 14, 0, 0, 12, 0, 16, 0, 0, 17, 16, 14],
+    hat: true,
+  },
+  typing: {
+    bpm: 140, root: 123, // B2 — driving urgency
+    bass: [0, 0, 12, 0, 0, 0, 12, 0, 5, 0, 12, 0, 3, 0, 12, 0],
+    lead: [12, 15, 0, 12, 0, 15, 17, 0, 12, 15, 0, 19, 0, 17, 15, 12],
+    hat: true,
+  },
+  bingo: {
+    bpm: 104, root: 131, // C3 — bouncy bingo-hall swing
+    bass: [0, 0, 7, 0, 4, 0, 7, 0, 5, 0, 9, 0, 7, 0, 5, 4],
+    lead: [12, 0, 0, 16, 12, 0, 19, 0, 0, 17, 0, 16, 0, 12, 0, 0],
     hat: true,
   },
 };

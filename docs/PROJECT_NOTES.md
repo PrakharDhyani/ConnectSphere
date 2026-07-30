@@ -1808,6 +1808,42 @@ swaps inside the game panels only — the rest of the app stays violet.
 accents flowed through `brand-*` utility classes, re-theming a whole section
 was one palette + ~30 class swaps.
 
+### Four games in one pass — chess, UNO, typing race, bingo
+The platform's 4th–7th games, and the proof of a thesis: after three games
+built by hand, the common shape was obvious, so this batch started with a
+**shared lobby framework** (`sockets/lobbyGame.js` + `useLobbyGame` +
+`GameLobby.jsx`): seats, host powers, bots with difficulty, start/reset,
+spectate lock, AFK deadlines, private per-seat state, tickers, and
+last-human-leaves cleanup — written ONCE. Each game then shipped as a pure
+rules module + a config object + a UI panel.
+
+- **Chess** rides `chess.js` for legality (never hand-roll castling/en
+  passant when a battle-tested MIT lib exists) and adds a real bot: easy =
+  random-ish, medium = greedy 1-ply, hard = 2-ply minimax with alpha-beta
+  over material + piece-square tables. Tests prove hard takes hanging queens
+  and finds mate-in-one. UI: animated glyph pieces, legal-move dots,
+  promotion picker, per-move clock (timeout = loss).
+- **UNO**: full 108-card engine (skip/reverse/draw2/wilds, 2p reverse=skip,
+  discard reshuffle) as a pure module with ~10 rule tests. Hands are private
+  via the framework's per-seat channel; the server auto-announces "UNO!"
+  (fun without the gotcha penalty). Bots hoard wilds and punish low-card
+  opponents at hard. CSS-only card art (gradient faces, slanted oval).
+- **Typing race**: server validates progress (monotonic + a 250-WPM clamp —
+  never trust a client that claims 2,500 chars/sec) and simulates bots as
+  WPM profiles with micro-pauses. Racetrack lanes with cars, live WPM,
+  countdown beeps, podium.
+- **Bingo**: framework ticker IS the caller (a ball every 3.5s as its own
+  animated event). Daubs and BINGO claims are server-verified — false calls
+  get publicly shamed instead of trusted.
+
+All four verified live end-to-end (17 checks: FEN sync exact after 5 moves,
+bot replies, UNO bots finished a real match, race ranked both finishers,
+bingo rejected an uncalled daub and a false BINGO). Suite: 187 → **210**.
+
+**Interview takeaway:** the marginal cost of game #7 was a fraction of game
+#1 — that's what extracting the framework at the right moment (after three
+concrete examples, not before) buys you.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a
