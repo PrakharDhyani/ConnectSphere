@@ -1,0 +1,32 @@
+# Groot production front door.
+#
+# {$DOMAIN} comes from the environment (docker-compose.prod.yml). Caddy
+# obtains + renews the Let's Encrypt certificate for it automatically —
+# no certbot, no cron, nothing.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# REST API + websockets → backend (Socket.io upgrades work out of the box).
+	handle /api/* {
+		reverse_proxy backend:5000
+	}
+	handle /socket.io/* {
+		reverse_proxy backend:5000
+	}
+
+	# Public object storage (avatars). S3_PUBLIC_URL is https://<domain>/s3,
+	# so GET /s3/<bucket>/<key> maps to MinIO's path-style URL — served over
+	# the SAME https origin (no mixed-content blocking).
+	handle_path /s3/* {
+		reverse_proxy minio:9000
+	}
+
+	# Everything else: the built SPA. try_files → index.html keeps
+	# client-side routes (e.g. /room/abc123) working on hard refresh.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

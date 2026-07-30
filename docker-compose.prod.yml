@@ -1,0 +1,100 @@
+# ============================================================
+# Groot — production stack (single VM, e.g. Oracle Always-Free).
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Only Caddy (80/443) and mediasoup's UDP range are exposed to the
+# internet. Mongo/Redis/Kafka/MinIO stay on the internal network.
+# Secrets live in .env.production (never committed — see
+# .env.production.example).
+# ============================================================
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    networks: [groot]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks: [groot]
+
+  zookeeper:
+    image: bitnami/zookeeper:3.9
+    restart: unless-stopped
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    volumes:
+      - zookeeper_data:/bitnami/zookeeper
+    networks: [groot]
+
+  kafka:
+    image: bitnami/kafka:3.6
+    restart: unless-stopped
+    depends_on: [zookeeper]
+    environment:
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    volumes:
+      - kafka_data:/bitnami/kafka
+    networks: [groot]
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data
+    environment:
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    networks: [groot]
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on: [mongo, redis, kafka, minio]
+    env_file: .env.production
+    # mediasoup needs its RTC ports reachable DIRECTLY (UDP can't go
+    # through Caddy). host mode-like published range, matching the env's
+    # MEDIASOUP_RTC_MIN_PORT..MAX_PORT.
+    ports:
+      - "40000-40100:40000-40100/udp"
+    networks: [groot]
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on: [backend]
+    environment:
+      - DOMAIN=${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [groot]
+
+volumes:
+  mongo_data:
+  redis_data:
+  zookeeper_data:
+  kafka_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  groot:
+    driver: bridge
