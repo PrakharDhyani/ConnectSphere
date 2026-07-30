@@ -5,7 +5,7 @@
  * A single client instance is created here and exported
  * so all modules share the same connection pool.
  *
- * Use cases in ConnectSphere:
+ * Use cases in Groot:
  *  - redisClient.set / get  → cache room metadata
  *  - redisClient.setEx      → store refresh tokens with TTL
  *  - redisClient.del        → blacklist tokens on logout

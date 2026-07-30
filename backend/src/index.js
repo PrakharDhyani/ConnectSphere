@@ -1,5 +1,5 @@
 /**
- * ConnectSphere — Backend Entry Point
+ * Groot — Backend Entry Point
  *
  * Boot order:
  *  1. Load env vars
@@ -18,6 +18,7 @@ import { app } from "./app.js";
 import { connectMongo } from "./config/mongo.js";
 import { connectRedis } from "./config/redis.js";
 import { connectKafka } from "./config/kafka.js";
+import { createMediasoupWorker } from "./config/mediasoup.js";
 import { initSocket } from "./sockets/index.js";
 import { logger } from "./utils/logger.js";
 
@@ -27,8 +28,20 @@ async function bootstrap() {
   try {
     // Connect all external services before accepting traffic
     await connectMongo();
+
+    // Dev self-heal: reconcile indexes with the current schema (e.g. a changed
+    // unique/partial index). Guarded to non-production — syncIndexes can drop &
+    // rebuild indexes, which is unsafe to run automatically on a large prod DB.
+    if (process.env.NODE_ENV !== "production") {
+      const { User } = await import("./models/User.js");
+      const { Room } = await import("./models/Room.js");
+      await Promise.all([User.syncIndexes(), Room.syncIndexes()]);
+      logger.info("✅ Indexes synced (dev)");
+    }
+
     await connectRedis();
     await connectKafka();
+    await createMediasoupWorker(); // media server for video calls
 
     // HTTP server wraps Express so Socket.io can share the same port
     const httpServer = http.createServer(app);
@@ -37,7 +50,7 @@ async function bootstrap() {
     initSocket(httpServer);
 
     httpServer.listen(PORT, () => {
-      logger.info(`🚀 ConnectSphere backend running on port ${PORT}`);
+      logger.info(`🚀 Groot backend running on port ${PORT}`);
       logger.info(`📡 Environment: ${process.env.NODE_ENV}`);
     });
   } catch (error) {

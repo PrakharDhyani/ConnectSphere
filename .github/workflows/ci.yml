@@ -1,15 +1,14 @@
 # ============================================================
-# ConnectSphere — CI Pipeline
+# ConnectSphere/Groot — CI Pipeline
 #
-# Triggers on every push to feature/* and develop branches,
-# and on every PR targeting develop or main.
+# Runs on every PR (and pushes to feature/develop/main):
+#   backend  → lint + full test suite (187 tests; they need NO
+#              services — mongodb-memory-server + fake Redis)
+#   frontend → lint + production build
 #
-# What it does:
-#   1. Lint backend
-#   2. Lint frontend
-#   3. (Future) Run backend tests
-#   4. (Future) Run frontend tests
-#   5. (Future) Build Docker images
+# Mark both jobs as required status checks on the main ruleset
+# and untested code physically cannot merge — or deploy, since
+# deploy.yml only fires on pushes to main.
 # ============================================================
 
 name: CI
@@ -19,15 +18,15 @@ on:
     branches:
       - "feature/**"
       - develop
+      - main
   pull_request:
     branches:
       - develop
       - main
 
 jobs:
-
-  lint-backend:
-    name: Lint Backend
+  backend:
+    name: Backend (lint + tests)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -38,7 +37,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
@@ -48,8 +47,13 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-  lint-frontend:
-    name: Lint Frontend
+      - name: Run tests
+        run: npm test
+        env:
+          CI: "true"
+
+  frontend:
+    name: Frontend (lint + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,7 +64,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
@@ -70,20 +74,5 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-  # Uncomment when tests are added in Phase 2
-  # test-backend:
-  #   name: Test Backend
-  #   runs-on: ubuntu-latest
-  #   needs: lint-backend
-  #   services:
-  #     mongo:
-  #       image: mongo:7.0
-  #       ports: ["27017:27017"]
-  #     redis:
-  #       image: redis:7.2-alpine
-  #       ports: ["6379:6379"]
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-node@v4
-  #       with: { node-version: "20" }
-  #     - run: cd backend && npm ci && npm test
+      - name: Production build
+        run: npm run build

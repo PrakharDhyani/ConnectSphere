@@ -9,7 +9,7 @@
  *   A named channel (like a folder). Producers write to topics,
  *   consumers read from topics. Topics are persistent and replayable.
  *
- * ConnectSphere topics we'll create:
+ * Groot topics we'll create:
  *   - call.recording.chunks   → raw video/audio chunks from a call
  *   - call.events             → joined/left/started-recording events
  *   - notifications           → email/push notification triggers

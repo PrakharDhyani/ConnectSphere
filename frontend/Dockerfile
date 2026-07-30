@@ -1,25 +1,23 @@
-# ── Stage 1: Build the React app ─────────────────────────
-FROM node:20-alpine AS builder
+# ============================================================
+# Groot Web — builds the Vite app, serves it with Caddy.
+#
+# Caddy (not nginx) because it is ALSO the platform's front door
+# in production: automatic HTTPS (Let's Encrypt, zero config),
+# static files, and reverse-proxying /api + /socket.io to the
+# backend — all in one container. That keeps the app SAME-ORIGIN,
+# so the axios baseURL "/api", the socket.io default URL and the
+# cookie flow all work in production exactly as in dev (where the
+# Vite proxy plays this role). No CORS configuration anywhere.
+# ============================================================
 
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-RUN npm run build      # outputs to /app/dist
+RUN npm run build
 
-# ── Stage 2: Serve with Nginx ─────────────────────────────
-# Nginx is a lightweight, battle-tested static file server
-FROM nginx:1.27-alpine AS runner
-
-# Copy built assets
-COPY --from=builder /app/dist /usr/share/nginx/html
-
-# Custom Nginx config — handles React Router client-side routing
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-EXPOSE 80
-
-HEALTHCHECK --interval=30s --timeout=5s \
-  CMD wget -qO- http://localhost:80 || exit 1
-
-CMD ["nginx", "-g", "daemon off;"]
+FROM caddy:2-alpine
+COPY --from=builder /app/dist /srv
+# deploy/Caddyfile is mounted by docker-compose.prod.yml so routing
+# rules can change without rebuilding this image.

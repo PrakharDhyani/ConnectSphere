@@ -171,6 +171,64 @@ services:
     networks:
       - cs_network
 
+  # ──────────────────────────────────────────────
+  # MailDev — local SMTP catcher for dev (free, self-hosted)
+  #
+  # What it does:
+  #   Accepts SMTP on port 1025 but never delivers anywhere — instead it
+  #   shows every "sent" email in a web UI at http://localhost:1080.
+  #   Lets us build/test email flows (verification, password reset) with
+  #   zero external service and nothing actually leaving the machine.
+  #
+  # Production: swap the backend's SMTP_* env vars to a real provider
+  #   (Resend, Brevo, etc.) — no code change needed.
+  # ──────────────────────────────────────────────
+  maildev:
+    image: maildev/maildev:2.1.0
+    container_name: cs_maildev
+    restart: unless-stopped
+    ports:
+      - "1080:1080"   # web UI
+      - "1025:1025"   # SMTP
+    networks:
+      - cs_network
+
+  # ──────────────────────────────────────────────
+  # MinIO — S3-compatible object storage (free, self-hosted)
+  #
+  # What it does:
+  #   Stores files (avatars now, call recordings later) in "buckets" behind
+  #   the exact same API as AWS S3 — so the backend uses the official AWS SDK
+  #   and switching to real S3/R2 in prod is only an env-var change.
+  #
+  # Backend env vars:
+  #   S3_ENDPOINT=http://localhost:9000
+  #   S3_ACCESS_KEY=minioadmin  S3_SECRET_KEY=minioadmin
+  #   S3_BUCKET=connectsphere
+  #
+  # Web console: http://localhost:9001 (login: minioadmin / minioadmin)
+  # ──────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: cs_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    networks:
+      - cs_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 # ──────────────────────────────────────────────
 # Named Volumes — data persists across restarts
 # ──────────────────────────────────────────────
@@ -180,6 +238,7 @@ volumes:
   zookeeper_data:
   zookeeper_logs:
   kafka_data:
+  minio_data:
 
 # ──────────────────────────────────────────────
 # Network — all services can reach each other

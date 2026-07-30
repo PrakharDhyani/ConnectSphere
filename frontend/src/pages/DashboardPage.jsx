@@ -1,0 +1,259 @@
+import { useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api.js";
+import { disconnectSocket } from "@/lib/socket.js";
+import { useAuthStore } from "@/stores/auth.store.js";
+import { useFriends } from "@/hooks/useFriends.js";
+import Button from "@/components/ui/Button.jsx";
+import Input from "@/components/ui/Input.jsx";
+import Logo from "@/components/Logo.jsx";
+
+export default function DashboardPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const queryClient = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const clearAuth = useAuthStore((s) => s.clearAuth);
+  const { requests } = useFriends();
+  const pendingCount = requests.data?.incoming?.length || 0;
+  const [resent, setResent] = useState(false);
+  const [roomName, setRoomName] = useState("");
+  const [visibility, setVisibility] = useState("private");
+  const [joinCode, setJoinCode] = useState("");
+  const [formError, setFormError] = useState(null);
+
+  // Server state → react-query: caching, loading/error states, refetching.
+  const { data: rooms = [], isLoading } = useQuery({
+    queryKey: ["rooms"],
+    queryFn: async () => (await api.get("/rooms")).data.data.rooms,
+  });
+
+  // Discoverable public rooms (excluding ones I'm already in — those are above).
+  const { data: publicRooms = [] } = useQuery({
+    queryKey: ["publicRooms"],
+    queryFn: async () => (await api.get("/rooms/public")).data.data.rooms,
+  });
+  const myRoomIds = new Set(rooms.map((r) => r.id));
+  const discoverable = publicRooms.filter((r) => !myRoomIds.has(r.id));
+
+  // After a successful mutation, invalidate ["rooms"] — react-query refetches
+  // the list automatically; no manual state juggling.
+  const createRoom = useMutation({
+    mutationFn: async (payload) => (await api.post("/rooms", payload)).data.data.room,
+    onSuccess: (room) => {
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
+      queryClient.invalidateQueries({ queryKey: ["publicRooms"] });
+      setRoomName("");
+      navigate(`/room/${room.id}`);
+    },
+    onError: (err) => setFormError(err.response?.data?.error?.message || "Could not create room."),
+  });
+
+  const joinPublic = useMutation({
+    mutationFn: async (roomId) => (await api.post(`/rooms/${roomId}/join-public`)).data.data.room,
+    onSuccess: (room) => {
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
+      navigate(`/room/${room.id}`);
+    },
+    onError: (err) => setFormError(err.response?.data?.error?.message || "Could not join room."),
+  });
+
+  const joinRoom = useMutation({
+    mutationFn: async (code) => (await api.post("/rooms/join", { code })).data.data.room,
+    onSuccess: (room) => {
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
+      setJoinCode("");
+      navigate(`/room/${room.id}`);
+    },
+    onError: (err) =>
+      setFormError(
+        err.response?.status === 404
+          ? "No room with that code."
+          : err.response?.data?.error?.message || "Could not join room."
+      ),
+  });
+
+  async function handleLogout() {
+    await api.post("/auth/logout").catch(() => {});
+    disconnectSocket(); // drop the realtime connection on logout
+    clearAuth();
+    navigate("/");
+  }
+
+  async function handleResend() {
+    await api.post("/auth/resend-verification", { email: user.email }).catch(() => {});
+    setResent(true);
+  }
+
+  return (
+    <div className="min-h-screen">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+        <Logo />
+        <div className="flex items-center gap-4">
+          <Link to="/friends" className="relative text-sm text-gray-400 hover:text-brand-400">
+            👥 Friends
+            {pendingCount > 0 && (
+              <span className="absolute -top-2 -right-3 bg-brand-600 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">
+                {pendingCount}
+              </span>
+            )}
+          </Link>
+          <Link to="/profile" className="flex items-center gap-2 text-sm text-gray-400 hover:text-brand-400">
+            {user?.avatarUrl ? (
+              <img src={user.avatarUrl} alt="" className="w-7 h-7 rounded-full object-cover" />
+            ) : (
+              <span className="w-7 h-7 rounded-full bg-brand-900 flex items-center justify-center
+                text-xs font-bold text-brand-200">
+                {user?.name?.[0]?.toUpperCase() ?? "?"}
+              </span>
+            )}
+            {user?.name}
+          </Link>
+          <Button variant="secondary" onClick={handleLogout}>Log out</Button>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-6 py-10 space-y-6">
+        {location.state?.message && (
+          <p className="text-sm text-brand-300 bg-brand-950/40 border border-brand-900 rounded-lg p-3">
+            {location.state.message}
+          </p>
+        )}
+
+        {!user?.emailVerified && (
+          <div className="flex items-center justify-between gap-4 bg-yellow-950/40 border border-yellow-900 rounded-lg p-4">
+            <p className="text-sm text-yellow-300">
+              Your email isn&apos;t verified yet — check your inbox for the link.
+            </p>
+            {resent ? (
+              <span className="text-sm text-green-400 shrink-0">Sent ✓</span>
+            ) : (
+              <Button variant="secondary" onClick={handleResend} className="shrink-0">
+                Resend email
+              </Button>
+            )}
+          </div>
+        )}
+
+        {/* Create / Join */}
+        <div className="grid sm:grid-cols-2 gap-4">
+          <form
+            className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setFormError(null);
+              if (roomName.trim().length >= 2) createRoom.mutate({ name: roomName.trim(), visibility });
+            }}
+          >
+            <h2 className="font-semibold">Create a room</h2>
+            <Input label="Room name" value={roomName} placeholder="Daily standup"
+              onChange={(e) => setRoomName(e.target.value)} />
+            <div>
+              <span className="block text-sm text-gray-400 mb-1.5">Who can find it?</span>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { id: "private", label: "🔒 Private", hint: "invite code only" },
+                  { id: "public", label: "🌐 Public", hint: "anyone can discover" },
+                ].map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    onClick={() => setVisibility(v.id)}
+                    className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                      visibility === v.id
+                        ? "border-brand-500 bg-brand-600/20"
+                        : "border-gray-700 bg-gray-800 hover:border-brand-600"
+                    }`}
+                  >
+                    <span className="block font-medium">{v.label}</span>
+                    <span className="block text-[11px] text-gray-500">{v.hint}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <Button type="submit" loading={createRoom.isPending} className="w-full">Create</Button>
+          </form>
+
+          <form
+            className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setFormError(null);
+              if (joinCode.trim()) joinRoom.mutate(joinCode.trim().toLowerCase());
+            }}
+          >
+            <h2 className="font-semibold">Join with a code</h2>
+            <Input label="Invite code" value={joinCode} placeholder="a1b2c3"
+              onChange={(e) => setJoinCode(e.target.value)} />
+            <Button type="submit" variant="secondary" loading={joinRoom.isPending} className="w-full">
+              Join
+            </Button>
+          </form>
+        </div>
+
+        {formError && <p className="text-sm text-red-400">{formError}</p>}
+
+        {/* Room list */}
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+          <h2 className="font-semibold mb-4">Your rooms</h2>
+          {isLoading ? (
+            <p className="text-gray-500 text-sm">Loading…</p>
+          ) : rooms.length === 0 ? (
+            <p className="text-gray-500 text-sm">
+              No rooms yet — create one above, or join with a friend&apos;s code.
+            </p>
+          ) : (
+            <ul className="divide-y divide-gray-800">
+              {rooms.map((room) => (
+                <li key={room.id}>
+                  <Link to={`/room/${room.id}`}
+                    className="flex items-center justify-between py-3 px-2 rounded-lg hover:bg-gray-800/60 transition-colors">
+                    <div>
+                      <p className="font-medium">
+                        {room.name}
+                        <span className="ml-2 text-[11px] text-gray-500">{room.visibility === "public" ? "🌐" : "🔒"}</span>
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        code <span className="font-mono text-gray-400">{room.code}</span>
+                        {" · "}{room.memberCount} member{room.memberCount === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <span className="text-brand-400 text-sm">Open →</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Public rooms discovery */}
+        {discoverable.length > 0 && (
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+            <h2 className="font-semibold mb-1">Discover public rooms 🌐</h2>
+            <p className="text-xs text-gray-500 mb-4">Open hangouts anyone can join.</p>
+            <ul className="divide-y divide-gray-800">
+              {discoverable.map((room) => (
+                <li key={room.id} className="flex items-center justify-between py-3 px-2">
+                  <div>
+                    <p className="font-medium">{room.name}</p>
+                    <p className="text-xs text-gray-500">
+                      {room.memberCount} member{room.memberCount === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    loading={joinPublic.isPending && joinPublic.variables === room.id}
+                    onClick={() => { setFormError(null); joinPublic.mutate(room.id); }}
+                  >
+                    Join
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}

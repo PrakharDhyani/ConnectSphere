@@ -58,3 +58,17 @@ coverage/
 # ========================
 *.pem
 .cache/
+
+# ========================
+# Local-only detailed notes (kept off GitHub by request)
+# The interview journal docs/PROJECT_NOTES.md stays tracked; the deep
+# file-by-file walkthroughs in docs/notes/ are local companion docs only.
+# ========================
+docs/notes/
+
+# ========================
+# Claude Code
+# Machine-specific local settings (paths, personal permission grants) —
+# .claude/settings.json (shared team config) stays tracked.
+# ========================
+.claude/settings.local.json
