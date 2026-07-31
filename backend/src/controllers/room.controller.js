@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { Room } from "../models/Room.js";
 import { Message } from "../models/Message.js";
+import { Report } from "../models/Report.js";
 import { io } from "../sockets/index.js";
 import { roomKey } from "../sockets/chat.handlers.js";
 import { isScopedGuest } from "../utils/roomAccess.js";
@@ -35,14 +36,18 @@ function toPublicRoom(room) {
 // and whether the caller owns it, so the UI can show owner-only actions.
 function toRoomDetail(room, userId) {
   const ownerId = room.owner.toString();
+  const isOwner = ownerId === userId;
   return {
     id: room._id,
     name: room.name,
     code: room.code,
     owner: ownerId,
-    isOwner: ownerId === userId,
+    isOwner,
     createdAt: room.createdAt,
     memberCount: room.members.length,
+    slowModeSec: room.slowModeSec || 0,
+    // The ban list is owner-only information (needed for the unban UI).
+    banned: isOwner ? (room.banned || []).map((b) => ({ id: b.user, name: b.name })) : undefined,
     members: room.members.map((m) => ({
       id: m._id,
       name: m.name,
@@ -50,6 +55,131 @@ function toRoomDetail(room, userId) {
       isOwner: m._id.toString() === ownerId,
     })),
   };
+}
+
+// ── Moderation ───────────────────────────────────────────────────────────────
+
+// Shared kick mechanics: drop membership, force their sockets out of the
+// socket.io room (so games/chat stop instantly), and tell their clients.
+async function ejectFromRoom(room, userId) {
+  room.members = room.members.filter((m) => m.toString() !== userId);
+  await room.save();
+  const rk = roomKey(room._id);
+  io?.to(`user:${userId}`).emit("room:kicked", { roomId: room._id.toString(), roomName: room.name });
+  io?.in(`user:${userId}`).socketsLeave(rk);
+  io?.to(rk).emit("room:members-changed", { roomId: room._id.toString() });
+}
+
+function assertOwnerAction(room, req, targetId) {
+  if (room.owner.toString() !== req.user.id) throw forbidden("Only the room owner can do that");
+  if (!targetId || !mongoose.isValidObjectId(targetId)) throw notFound();
+  if (targetId === req.user.id) {
+    const err = new Error("You can't moderate yourself");
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
+// POST /:id/kick — remove a member; they may rejoin (invite code / public).
+export async function kickMember(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id);
+    const { userId } = req.body;
+    assertOwnerAction(room, req, userId);
+    await ejectFromRoom(room, userId);
+    res.json({ success: true, message: "Member removed" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// POST /:id/ban — kick + never come back (blocks code-join, public-join and
+// socket access via canAccessRoom).
+export async function banMember(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id, { populateMembers: true });
+    const { userId } = req.body;
+    assertOwnerAction(room, req, userId);
+    const target = room.members.find((m) => m._id.toString() === userId);
+    if (!room.banned.some((b) => b.user?.toString() === userId)) {
+      room.banned.push({ user: userId, name: target?.name || "Unknown" });
+    }
+    room.members = room.members.map((m) => m._id); // depopulate for eject's save
+    await ejectFromRoom(room, userId);
+    res.json({ success: true, message: "Member banned" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// POST /:id/unban
+export async function unbanMember(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id);
+    const { userId } = req.body;
+    if (room.owner.toString() !== req.user.id) throw forbidden("Only the room owner can do that");
+    room.banned = (room.banned || []).filter((b) => b.user?.toString() !== userId);
+    await room.save();
+    res.json({ success: true, message: "Ban lifted" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// POST /:id/slowmode { seconds } — 0 turns it off; owner is always exempt.
+export async function setSlowMode(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id);
+    if (room.owner.toString() !== req.user.id) throw forbidden("Only the room owner can do that");
+    const seconds = Math.max(0, Math.min(120, Math.round(Number(req.body.seconds) || 0)));
+    room.slowModeSec = seconds;
+    await room.save();
+    io?.to(roomKey(room._id)).emit("room:updated", {
+      roomId: room._id.toString(),
+      slowModeSec: seconds,
+    });
+    res.json({ success: true, data: { slowModeSec: seconds } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// POST /:id/report { userId, reason } — any member (guests too) may report.
+// Duplicate (same reporter→target in this room) within an hour is a no-op.
+export async function reportMember(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id, { populateMembers: true });
+    const allowed =
+      isScopedGuest(req.user, req.params.id) ||
+      room.members.some((m) => m._id.toString() === req.user.id);
+    if (!allowed) throw forbidden("You are not a member of this room");
+    const { userId, reason } = req.body;
+    if (!userId || !mongoose.isValidObjectId(userId)) throw notFound();
+    if (userId === req.user.id) {
+      const err = new Error("You can't report yourself");
+      err.statusCode = 400;
+      throw err;
+    }
+    const recent = await Report.findOne({
+      room: room._id,
+      reporter: req.user.id,
+      reported: userId,
+      createdAt: { $gt: new Date(Date.now() - 3600_000) },
+    });
+    if (!recent) {
+      const target = room.members.find((m) => m._id.toString() === userId);
+      await Report.create({
+        room: room._id,
+        reporter: req.user.id,
+        reported: userId,
+        reportedName: target?.name,
+        reason: String(reason || "").slice(0, 500),
+      });
+    }
+    res.json({ success: true, message: "Report received — thank you" });
+  } catch (error) {
+    next(error);
+  }
 }
 
 const notFound = () => {
@@ -128,6 +258,11 @@ export async function listPublicRooms(req, res, next) {
 export async function joinPublicRoom(req, res, next) {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) throw notFound();
+    const target = await Room.findById(req.params.id).select("banned visibility").lean();
+    if (!target || target.visibility !== "public") throw notFound();
+    if ((target.banned || []).some((b) => b.user?.toString() === req.user.id)) {
+      throw forbidden("You are banned from this room");
+    }
     const room = await Room.findOneAndUpdate(
       { _id: req.params.id, visibility: "public" },
       { $addToSet: { members: req.user.id } },
@@ -164,6 +299,14 @@ export async function getRoom(req, res, next) {
 export async function joinRoom(req, res, next) {
   try {
     const { code } = req.body;
+
+    // Banned users can't walk back in with the code. (Checked before the
+    // atomic join; the socket layer re-checks via canAccessRoom anyway.)
+    const target = await Room.findOne({ code }).select("banned").lean();
+    if (!target) throw notFound();
+    if ((target.banned || []).some((b) => b.user?.toString() === req.user.id)) {
+      throw forbidden("You are banned from this room");
+    }
 
     // $addToSet = add only if absent (no duplicate memberships), atomically.
     const room = await Room.findOneAndUpdate(

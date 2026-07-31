@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLobbyGame } from "@/hooks/useLobbyGame.js";
 import GameLobby, { SpectateBanner, NoticeFeed } from "@/components/GameLobby.jsx";
+import { useReactions, ReactionBar, ReactionOverlay } from "@/components/Reactions.jsx";
 import Button from "@/components/ui/Button.jsx";
 import { sfx } from "@/lib/sfx.js";
 
@@ -102,6 +103,7 @@ export default function UnoPanel({ roomId }) {
   const { me, state, priv, notices, isHost, act, reset } = lobby;
   const [wildIdx, setWildIdx] = useState(null); // card awaiting color choice
   const [err, setErr] = useState(null);
+  const rx = useReactions("uno", roomId);
 
   const myTurn = state?.turnId === me?.id && !state?.winnerId;
   const hand = priv?.hand || [];
@@ -159,7 +161,8 @@ export default function UnoPanel({ roomId }) {
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-4">
+    <div className="relative max-w-2xl mx-auto space-y-4">
+      <ReactionOverlay floats={rx.floats} />
       {!mySeat && <SpectateBanner />}
 
       {/* Opponents around the table */}
@@ -221,6 +224,7 @@ export default function UnoPanel({ roomId }) {
         </div>
       </div>
 
+      <ReactionBar send={rx.send} className="max-w-xs mx-auto" />
       <NoticeFeed notices={notices} />
       {err && <p className="text-center text-sm text-red-400">{err}</p>}
 

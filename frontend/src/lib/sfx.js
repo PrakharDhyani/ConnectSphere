@@ -208,6 +208,7 @@ const RECIPES = {
     noiseBurst({ dur: 0.06, vol: 0.12, filterFrom: 3000, filterTo: 1200, q: 2 });
   },
   daub: () => tone({ type: "sine", from: 340, to: 220, dur: 0.09, vol: 0.26 }),
+  laugh: () => [440, 392, 440, 392].forEach((f, i) => tone({ type: "square", from: f, to: f * 0.92, dur: 0.09, vol: 0.16, delay: i * 0.11 })),
   falseCall: () => [220, 175].forEach((f, i) => tone({ type: "sawtooth", from: f, dur: 0.2, vol: 0.2, delay: i * 0.15 })),
 };
 

@@ -62,6 +62,7 @@ export default function RoomPage() {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [actionError, setActionError] = useState(null);
+  const [sendError, setSendError] = useState(null);
   const scrollRef = useRef(null);
 
   const { data: room, isLoading, error } = useQuery({
@@ -97,13 +98,21 @@ export default function RoomPage() {
       queryClient.invalidateQueries({ queryKey: ["rooms"] });
       navigate("/dashboard", { state: { message: "That room was closed by its owner." } });
     };
+    // Kicked/banned: the server already forced our sockets out — leave cleanly.
+    const onKicked = (p) => {
+      if (p.roomId !== roomId) return;
+      queryClient.invalidateQueries({ queryKey: ["rooms"] });
+      navigate("/dashboard", { state: { message: `You were removed from “${p.roomName || "the room"}” by its owner.` } });
+    };
     socket.on("room:updated", refresh);
     socket.on("room:members-changed", refresh);
     socket.on("room:closed", onClosed);
+    socket.on("room:kicked", onKicked);
     return () => {
       socket.off("room:updated", refresh);
       socket.off("room:members-changed", refresh);
       socket.off("room:closed", onClosed);
+      socket.off("room:kicked", onKicked);
     };
   }, [room, roomId, queryClient, navigate]);
 
@@ -153,9 +162,38 @@ export default function RoomPage() {
     const text = draft.trim();
     if (!text) return;
     setDraft("");
+    setSendError(null);
     const ack = await sendMessage(text);
-    if (!ack?.ok) setDraft(text);
+    if (!ack?.ok) {
+      setDraft(text);
+      setSendError(ack?.error || "Message not sent"); // e.g. "Slow mode — wait 12s"
+      setTimeout(() => setSendError(null), 4000);
+    }
   }
+
+  // ── Moderation actions (owner: kick/ban/unban/slow-mode · anyone: report) ──
+  const modAction = async (path, body, confirmText) => {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setActionError(null);
+    try {
+      await api.post(`/rooms/${roomId}${path}`, body);
+      queryClient.invalidateQueries({ queryKey: ["room", roomId] });
+    } catch (err) {
+      setActionError(err.response?.data?.error?.message || "Action failed");
+    }
+  };
+  const reportUser = async (u) => {
+    const reason = window.prompt(`Report ${u.name} — what happened? (optional)`);
+    if (reason === null) return;
+    setActionError(null);
+    try {
+      await api.post(`/rooms/${roomId}/report`, { userId: u.id, reason });
+      setActionError("✅ Report received — thank you");
+      setTimeout(() => setActionError(null), 3000);
+    } catch (err) {
+      setActionError(err.response?.data?.error?.message || "Report failed");
+    }
+  };
 
   if (isLoading) {
     return (
@@ -362,6 +400,9 @@ export default function RoomPage() {
 
           {chatError && <p className="px-5 py-2 text-sm text-red-400">{chatError}</p>}
 
+          {sendError && (
+            <p className="px-4 py-1 text-xs text-amber-300 bg-amber-950/40 border-t border-amber-900/50">🐢 {sendError}</p>
+          )}
           <form onSubmit={handleSend} className="flex gap-2 p-3 border-t border-gray-800">
             <input
               value={draft}
@@ -382,18 +423,92 @@ export default function RoomPage() {
               {room.members.map((u) => {
                 const online = onlineIds.has(u.id);
                 return (
-                  <li key={u.id} className="flex items-center gap-2 text-sm">
+                  <li key={u.id} className="group flex items-center gap-2 text-sm">
                     <span className="relative">
                       <Avatar user={u} size="sm" />
                       <span className={`absolute bottom-0 right-0 w-2 h-2 rounded-full border border-gray-900 ${online ? "bg-green-500" : "bg-gray-600"}`} />
                     </span>
                     <span className="text-gray-300 truncate">{u.id === me?.id ? "You" : u.name}</span>
                     {u.isOwner && <span className="text-[10px] uppercase tracking-wide text-brand-400 border border-brand-800 rounded px-1">owner</span>}
+                    {/* Moderation: owner can kick/ban; anyone can report others. */}
+                    {u.id !== me?.id && (
+                      <span className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {room.isOwner && !u.isOwner && (
+                          <>
+                            <button
+                              title={`Kick ${u.name}`}
+                              onClick={() => modAction("/kick", { userId: u.id }, `Kick ${u.name}? They can rejoin with the code.`)}
+                              className="text-xs px-1 rounded hover:bg-gray-800 text-gray-500 hover:text-amber-400"
+                            >
+                              🚪
+                            </button>
+                            <button
+                              title={`Ban ${u.name}`}
+                              onClick={() => modAction("/ban", { userId: u.id }, `BAN ${u.name}? They will not be able to rejoin.`)}
+                              className="text-xs px-1 rounded hover:bg-gray-800 text-gray-500 hover:text-red-400"
+                            >
+                              🚫
+                            </button>
+                          </>
+                        )}
+                        <button
+                          title={`Report ${u.name}`}
+                          onClick={() => reportUser(u)}
+                          className="text-xs px-1 rounded hover:bg-gray-800 text-gray-500 hover:text-yellow-300"
+                        >
+                          ⚠️
+                        </button>
+                      </span>
+                    )}
                   </li>
                 );
               })}
             </ul>
           </div>
+
+          {/* Slow mode (owner sets it; everyone sees when it's on) */}
+          <div className="border-t border-gray-800 pt-3">
+            <p className="text-xs uppercase tracking-wide text-gray-500 mb-1.5">
+              🐢 Slow mode {room.slowModeSec > 0 && <span className="text-amber-300 normal-case">— {room.slowModeSec}s per message</span>}
+            </p>
+            {room.isOwner && (
+              <div className="flex gap-1">
+                {[0, 5, 15, 30].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => modAction("/slowmode", { seconds: s })}
+                    className={`px-2 py-0.5 rounded text-xs border ${
+                      (room.slowModeSec || 0) === s
+                        ? "bg-brand-600 border-brand-500 text-white"
+                        : "bg-gray-800 border-gray-700 text-gray-400 hover:border-brand-500"
+                    }`}
+                  >
+                    {s === 0 ? "Off" : `${s}s`}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Ban list (owner only) */}
+          {room.isOwner && room.banned?.length > 0 && (
+            <div className="border-t border-gray-800 pt-3">
+              <p className="text-xs uppercase tracking-wide text-gray-500 mb-1.5">🚫 Banned</p>
+              <ul className="space-y-1">
+                {room.banned.map((b) => (
+                  <li key={b.id} className="flex items-center justify-between text-xs text-gray-400">
+                    <span className="truncate">{b.name}</span>
+                    <button
+                      onClick={() => modAction("/unban", { userId: b.id })}
+                      className="text-gray-500 hover:text-green-400"
+                    >
+                      unban
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {actionError && <p className="text-xs text-red-400">{actionError}</p>}
 

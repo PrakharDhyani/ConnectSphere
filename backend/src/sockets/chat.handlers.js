@@ -26,6 +26,9 @@ const ANNOUNCE_ACTIVITIES = new Set(["call", "board", "skribbl", "ludo", "kart",
 // broadcast to the same group (e.g. "room:closed" when a room is deleted).
 export const roomKey = (roomId) => `room:${roomId}`;
 
+// roomId:userId → last chat timestamp, for slow mode.
+const slowModeLast = new Map();
+
 // Everyone currently connected to a room, de-duplicated by user (one person
 // can have several tabs = several sockets, but shows up once).
 async function presenceList(io, roomId) {
@@ -77,6 +80,20 @@ export function registerChatHandlers(io, socket) {
       // or is replaying a stale roomId. Never trust the client's claim.
       if (!(await canAccessRoom(socket.user, roomId))) {
         return ack?.({ ok: false, error: "You are not a member of this room" });
+      }
+
+      // Slow mode: non-owners get one message per slowModeSec. The clock is an
+      // in-memory map — per-process is fine, this is friction not security.
+      const roomDoc = await Message.db.model("Room").findById(roomId).select("slowModeSec owner").lean();
+      if (roomDoc?.slowModeSec > 0 && roomDoc.owner.toString() !== socket.user.id) {
+        const key = `${roomId}:${socket.user.id}`;
+        const last = slowModeLast.get(key) || 0;
+        const waitMs = roomDoc.slowModeSec * 1000 - (Date.now() - last);
+        if (waitMs > 0) {
+          return ack?.({ ok: false, error: `Slow mode — wait ${Math.ceil(waitMs / 1000)}s` });
+        }
+        slowModeLast.set(key, Date.now());
+        if (slowModeLast.size > 5000) slowModeLast.clear(); // crude but bounded
       }
 
       const doc = await Message.create({ room: roomId, sender: socket.user.id, text });

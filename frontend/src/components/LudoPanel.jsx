@@ -6,16 +6,7 @@ import { COLORS, COLOR_HEX } from "@/games/ludoBoard.js";
 import { sfx } from "@/lib/sfx.js";
 import { getSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
-
-// Emoji reactions: id → glyph, float animation class, and a matching sound.
-const EMOJI_SET = [
-  { id: "angry", glyph: "😡", anim: "ludo-anim-angry", sound: "hit" },
-  { id: "fire", glyph: "🔥", anim: "ludo-anim-fire", sound: "nitro" },
-  { id: "kiss", glyph: "😘", anim: "ludo-anim-kiss", sound: "move" },
-  { id: "love", glyph: "❤️", anim: "ludo-anim-love", sound: "home" },
-  { id: "gunshot", glyph: "🔫", anim: "ludo-anim-gunshot", sound: "shoot" },
-];
-const EMOJI_BY_ID = Object.fromEntries(EMOJI_SET.map((e) => [e.id, e]));
+import { useReactions, ReactionBar, ReactionOverlay } from "@/components/Reactions.jsx";
 
 // Pip layout per die value on a 3×3 grid.
 const PIPS = {
@@ -170,21 +161,11 @@ const BOT_LEVELS = [
 ];
 
 export default function LudoPanel({ roomId }) {
-  const { state, me, myColor, isMyTurn, join, leave, start, roll, move, reset, addBot, removeBot, floats, notices, sendEmoji } = useLudo(roomId);
+  const { state, me, myColor, isMyTurn, join, leave, start, roll, move, reset, addBot, removeBot, notices } = useLudo(roomId);
   const [error, setError] = useState(null);
   const [botDiff, setBotDiff] = useState("medium");
-
-  // Play each reaction's sound exactly once, when it arrives.
-  const heardRef = useRef(new Set());
-  useEffect(() => {
-    for (const f of floats) {
-      if (heardRef.current.has(f.id)) continue;
-      heardRef.current.add(f.id);
-      const meta = EMOJI_BY_ID[f.emoji];
-      if (meta) sfx.play(meta.sound);
-    }
-    if (heardRef.current.size > 60) heardRef.current = new Set([...heardRef.current].slice(-30));
-  }, [floats]);
+  // Shared animated sticker reactions (same system as UNO/chess/bingo/typing).
+  const rx = useReactions("ludo", roomId);
 
   // Sounds come from STATE DIFFS, so bot moves are audible exactly like human
   // ones (the server doesn't tell us who acted — the board changing does).
@@ -310,20 +291,8 @@ export default function LudoPanel({ roomId }) {
   const spectating = state.status === "playing" && !myColor;
   return (
     <div className="relative max-w-5xl mx-auto space-y-3">
-      {/* Animations for the emoji floats + dice (scoped ludo-* names). */}
+      {/* Dice animations (sticker reactions live in the shared system now). */}
       <style>{`
-        @keyframes ludo-rise { 0% { transform: translateY(0) scale(.7); opacity: 0 } 8% { opacity: 1 } 80% { opacity: 1 } 100% { transform: translateY(-340px) scale(1.6); opacity: 0 } }
-        @keyframes ludo-wiggle { 0%,100% { rotate: -14deg } 50% { rotate: 14deg } }
-        @keyframes ludo-pulse { 0%,100% { scale: 1 } 50% { scale: 1.35 } }
-        @keyframes ludo-drift { 0%,100% { translate: 0 0 } 50% { translate: 26px 0 } }
-        @keyframes ludo-recoil { 0%,60%,100% { rotate: 0deg } 70% { rotate: -32deg } 82% { rotate: 8deg } }
-        @keyframes ludo-flick { 0%,100% { scale: 1 1 } 30% { scale: .92 1.12 } 60% { scale: 1.08 .94 } }
-        .ludo-float { animation: ludo-rise 3s ease-out forwards; }
-        .ludo-anim-angry span { display:inline-block; animation: ludo-wiggle .28s ease-in-out infinite; }
-        .ludo-anim-love span { display:inline-block; animation: ludo-pulse .55s ease-in-out infinite; }
-        .ludo-anim-kiss span { display:inline-block; animation: ludo-drift 1.2s ease-in-out infinite; }
-        .ludo-anim-gunshot span { display:inline-block; animation: ludo-recoil .8s ease-in-out infinite; }
-        .ludo-anim-fire span { display:inline-block; animation: ludo-flick .45s ease-in-out infinite; }
         @keyframes ludo-spin { 0% { transform: rotate(0) scale(1) } 40% { transform: rotate(200deg) scale(1.15) } 100% { transform: rotate(360deg) scale(1) } }
         .ludo-dice-spin { animation: ludo-spin .6s ease-out; }
         @keyframes ludo-glow { 0%,100% { filter: drop-shadow(0 0 4px rgba(34,211,238,.55)) } 50% { filter: drop-shadow(0 0 14px rgba(34,211,238,.95)) } }
@@ -367,20 +336,8 @@ export default function LudoPanel({ roomId }) {
           </div>
 
           <div className="flex-1 w-full space-y-3">
-            {/* Emoji reactions */}
-            <div className="flex justify-center gap-1.5 bg-gray-900/80 border border-gray-800 rounded-xl px-2 py-2">
-              {EMOJI_SET.map((e) => (
-                <button
-                  key={e.id}
-                  type="button"
-                  onClick={() => sendEmoji(e.id)}
-                  title={e.id}
-                  className="text-2xl hover:scale-125 active:scale-95 transition-transform"
-                >
-                  {e.glyph}
-                </button>
-              ))}
-            </div>
+            {/* Animated sticker reactions */}
+            <ReactionBar send={rx.send} />
 
             {notices.length > 0 && (
               <div className="space-y-1">
@@ -400,23 +357,8 @@ export default function LudoPanel({ roomId }) {
         <div className="relative flex-1 order-1 md:order-2 w-full">
           <LudoBoard state={state} myColor={myColor} isMyTurn={isMyTurn} onMove={move} />
 
-          {/* Floating emoji overlay — big, animated, visible to everyone. */}
-          <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
-            {floats.map((f) => {
-              const meta = EMOJI_BY_ID[f.emoji];
-              if (!meta) return null;
-              return (
-                <div
-                  key={f.id}
-                  className={`absolute bottom-[6%] ludo-float ${meta.anim}`}
-                  style={{ left: `${f.left}%` }}
-                >
-                  <span className="text-6xl drop-shadow-[0_4px_10px_rgba(0,0,0,0.6)]">{meta.glyph}</span>
-                  <p className="text-center text-[11px] font-semibold text-white/85 drop-shadow">{f.name}</p>
-                </div>
-              );
-            })}
-          </div>
+          {/* Floating animated stickers — big, visible to everyone. */}
+          <ReactionOverlay floats={rx.floats} />
         </div>
       </div>
 

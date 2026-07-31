@@ -26,10 +26,14 @@
  * socket.io rooms directly, so game rules stay pure and testable.
  */
 import { canAccessRoom } from "../utils/roomAccess.js";
+import { allow } from "../utils/socketRate.js";
 import { roomKey } from "./chat.handlers.js";
 
 const BOT_NAMES = ["Nova", "Pixel", "Turbo", "Echo", "Zippy", "Rook", "Dice", "Bolt"];
 export const DIFFICULTIES = ["easy", "medium", "hard"];
+
+// Sticker reactions — shared by every framework game (and mirrored by ludo).
+export const REACTION_KINDS = ["angry", "fire", "kiss", "love", "gunshot", "laugh"];
 
 export function createLobbyGame(cfg) {
   const games = new Map(); // roomId -> game
@@ -272,6 +276,19 @@ export function createLobbyGame(cfg) {
         }
       });
     }
+
+    // Animated sticker reactions — anyone in the room (spectators included)
+    // can fire them; rate-limited so nobody wallpapers the table.
+    on("react", async ({ roomId, kind } = {}) => {
+      if (!REACTION_KINDS.includes(kind)) return;
+      if (!(await guard(roomId))) return;
+      if (!allow(socket, `${cfg.prefix}React`, 6, 4000)) return;
+      io.to(roomKey(roomId)).emit(`${cfg.prefix}:react`, {
+        kind,
+        name: socket.user.name,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      });
+    });
 
     // Free the room's game once no seated human remains connected.
     socket.on("disconnecting", () => {

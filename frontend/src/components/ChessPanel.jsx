@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Chess } from "chess.js";
 import { useLobbyGame } from "@/hooks/useLobbyGame.js";
 import GameLobby, { SpectateBanner, NoticeFeed } from "@/components/GameLobby.jsx";
+import { useReactions, ReactionBar, ReactionOverlay } from "@/components/Reactions.jsx";
 import PuzzlePanel from "@/components/PuzzlePanel.jsx";
 import Button from "@/components/ui/Button.jsx";
 import { sfx } from "@/lib/sfx.js";
@@ -174,6 +175,7 @@ export default function ChessPanel({ roomId }) {
   const [selected, setSelected] = useState(null); // "e2"
   const [promo, setPromo] = useState(null); // pending promotion {from,to}
   const [mode, setMode] = useState("play"); // "play" | "puzzle"
+  const rx = useReactions("chess", roomId);
 
   // Local mirror for hints/promotion detection only — server stays boss.
   const chess = useMemo(() => {
@@ -305,7 +307,8 @@ export default function ChessPanel({ roomId }) {
   ));
 
   return (
-    <div className="max-w-lg mx-auto space-y-3">
+    <div className="relative max-w-lg mx-auto space-y-3">
+      <ReactionOverlay floats={rx.floats} />
       {state.status === "playing" && !myColor && <SpectateBanner />}
 
       {/* Header: players + clocks + turn */}
@@ -356,6 +359,7 @@ export default function ChessPanel({ roomId }) {
         <div className="flex gap-0.5">{capturedRow(state.captured?.w || [])}</div>
         <div className="flex gap-0.5">{capturedRow(state.captured?.b || [])}</div>
       </div>
+      <ReactionBar send={rx.send} className="max-w-xs mx-auto" />
       <NoticeFeed notices={notices} />
       <div className="flex justify-center gap-2">
         {!state.result && myColor && (

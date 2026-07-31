@@ -32,7 +32,7 @@ const TURN_MS = 30_000;
 const MOVE_MS = 15_000;
 const AFK_LIMIT = 3;
 
-const EMOJIS = new Set(["angry", "fire", "kiss", "love", "gunshot"]);
+const REACTION_KINDS = new Set(["angry", "fire", "kiss", "love", "gunshot", "laugh"]);
 
 const isBotSeat = (seat) => Boolean(seat?.isBot);
 const humanSeatIds = (g) => COLORS.map((c) => g.seats[c]).filter((s) => s && !s.isBot).map((s) => s.id);
@@ -488,14 +488,14 @@ export function registerLudoHandlers(io, socket) {
     doMove(io, roomId, token);
   });
 
-  // Emoji reactions — visible to everyone in the room, animated client-side.
-  // Rate-limited so nobody wallpapers the board.
-  socket.on("ludo:emoji", async ({ roomId, emoji } = {}) => {
-    if (!EMOJIS.has(emoji)) return;
+  // Sticker reactions — same event shape as the lobby-framework games, so the
+  // client shares one reaction system across every game.
+  socket.on("ludo:react", async ({ roomId, kind } = {}) => {
+    if (!REACTION_KINDS.has(kind)) return;
     if (!(await guard(roomId))) return;
-    if (!allow(socket, "ludoEmoji", 6, 4000)) return;
-    io.to(roomKey(roomId)).emit("ludo:emoji", {
-      emoji,
+    if (!allow(socket, "ludoReact", 6, 4000)) return;
+    io.to(roomKey(roomId)).emit("ludo:react", {
+      kind,
       name: socket.user.name,
       // Unique-enough id for React keys across senders and rapid taps.
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,

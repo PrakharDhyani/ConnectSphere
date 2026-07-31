@@ -1927,6 +1927,33 @@ happen to fire before start.
 - Live-verified with two real 60s runs: a 96-wpm run landed on the board,
   a deliberate 36-wpm rerun did NOT override it.
 
+### Animated sticker reactions (all games) + moderation basics
+- **Stickers replace the unicode emoji reactions**: six hand-crafted animated
+  SVGs (beating heart, flickering fire, shaking angry face w/ steam, blowing
+  kiss, recoiling pistol w/ BANG burst, laughing-crying with flying tears) —
+  vectors with internal keyframes, so they scale crisply at any size with
+  ZERO image assets to load or license. One shared system
+  (`useReactions`/`ReactionBar`/`ReactionOverlay`) + a framework-level
+  `:react` event means chess/UNO/bingo/typing got reactions for free and
+  ludo migrated onto the same rails. Spectators can react too.
+- **Moderation basics** (the prerequisite for advertising public rooms):
+  - Kick (rejoinable) vs Ban (blocked at code-join, public-join AND
+    `canAccessRoom` — a ban trumps even a guest token scoped to the room).
+    Eject = drop membership + `socketsLeave` the socket.io room (games/chat
+    die instantly) + a `room:kicked` event the client turns into a polite
+    redirect. Ban list with names is owner-only info; unban restores.
+  - Slow-mode: owner picks 0/5/15/30s; enforced in the chat socket handler
+    with an in-memory per-user clock (owner exempt); the client shows the
+    server's "wait Ns" message inline. Friction, not security — per-process
+    state is fine for that.
+  - Reports: stored in Mongo with denormalized names, deduped per
+    reporter→target per room per hour. No admin UI yet — a queryable paper
+    trail is the minimum viable moderation.
+
+**Interview takeaway:** ban enforcement belongs in the ONE access chokepoint
+(`canAccessRoom`) that both REST and sockets already share — adding it there
+covered chat, games, and media in one line instead of N.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

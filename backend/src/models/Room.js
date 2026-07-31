@@ -58,6 +58,22 @@ const roomSchema = new Schema(
         index: true, // "rooms I'm in" queries
       },
     ],
+    // Moderation: banned users can never (re)join; name is denormalized so the
+    // owner's ban list stays readable after the user is gone from members.
+    banned: [
+      {
+        user: { type: Schema.Types.ObjectId, ref: "User" },
+        name: String,
+      },
+    ],
+    // Slow-mode: non-owner members may send at most one chat message per this
+    // many seconds (0 = off). Enforced in the socket chat handler.
+    slowModeSec: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 120,
+    },
   },
   { timestamps: true }
 );

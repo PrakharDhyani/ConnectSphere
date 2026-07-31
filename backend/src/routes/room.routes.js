@@ -17,6 +17,11 @@ import {
   renameRoom,
   leaveRoom,
   deleteRoom,
+  kickMember,
+  banMember,
+  unbanMember,
+  setSlowMode,
+  reportMember,
 } from "../controllers/room.controller.js";
 import { getRoomMessages } from "../controllers/message.controller.js";
 
@@ -35,9 +40,16 @@ router.post("/:id/join-public", requireFullUser, joinPublicRoom);
 router.patch("/:id", requireFullUser, validate(renameRoomSchema), renameRoom);
 router.delete("/:id", requireFullUser, deleteRoom);
 
+// Moderation — owner-only checks live in the controller.
+router.post("/:id/kick", requireFullUser, kickMember);
+router.post("/:id/ban", requireFullUser, banMember);
+router.post("/:id/unban", requireFullUser, unbanMember);
+router.post("/:id/slowmode", requireFullUser, setSlowMode);
+
 // Allowed for scoped guests too (access is gated per-room inside the handlers).
 router.get("/:id", getRoom);
 router.get("/:id/messages", getRoomMessages);
 router.post("/:id/leave", leaveRoom);
+router.post("/:id/report", reportMember);
 
 export default router;
