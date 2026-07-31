@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api.js";
 import { getSocket } from "@/lib/socket.js";
+import { createCallRecorder, saveBlob } from "@/lib/recorder.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useRoomChat } from "@/hooks/useRoomChat.js";
 import { useMediaRoom } from "@/hooks/useMediaRoom.js";
@@ -40,6 +41,85 @@ function Avatar({ user, size = "md" }) {
   );
 }
 
+const fmtRec = (ms) => {
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+/**
+ * ⏺ Record this call — client-side (lib/recorder.js): the whole grid + mixed
+ * audio is composed locally and downloads as .webm on stop. The server only
+ * relays the "recording" indicator so everyone in the room always knows.
+ */
+function RecordButton({ call, roomId, roomName, nameFor }) {
+  const [elapsed, setElapsed] = useState(0);
+  const recRef = useRef(null);
+  const [recording, setRecording] = useState(false);
+  const callRef = useRef(call);
+  callRef.current = call;
+  const nameForRef = useRef(nameFor);
+  nameForRef.current = nameFor;
+
+  useEffect(() => {
+    if (!recording) return;
+    const t = setInterval(() => setElapsed(recRef.current?.elapsedMs() ?? 0), 500);
+    return () => clearInterval(t);
+  }, [recording]);
+
+  async function stop(save = true) {
+    const rec = recRef.current;
+    if (!rec) return;
+    recRef.current = null;
+    setRecording(false);
+    getSocket().emit("recording:set", { roomId, on: false });
+    const blob = await rec.stop();
+    if (save && blob.size > 0) {
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+      saveBlob(blob, `groot-${(roomName || "call").replace(/\W+/g, "_")}-${stamp}.webm`);
+    }
+  }
+
+  function start() {
+    if (!window.confirm("Record this call? Everyone in the room will see a recording indicator, and the video saves to YOUR device when you stop.")) return;
+    const rec = createCallRecorder({
+      getSources: () => {
+        const c = callRef.current;
+        const tiles = [];
+        if (c.localStream) tiles.push({ id: "me", stream: c.localStream, label: "You" });
+        for (const r of c.remotes.filter((x) => x.source === "camera")) {
+          tiles.push({ id: r.key, stream: r.stream, label: nameForRef.current(r.userId) });
+        }
+        const screens = [];
+        if (c.screenStream) screens.push({ id: "myscreen", stream: c.screenStream, label: "Your screen" });
+        for (const r of c.remotes.filter((x) => x.source === "screen")) {
+          screens.push({ id: r.key, stream: r.stream, label: `${nameForRef.current(r.userId)}'s screen` });
+        }
+        return { tiles, screens };
+      },
+    });
+    rec.start();
+    recRef.current = rec;
+    setElapsed(0);
+    setRecording(true);
+    getSocket().emit("recording:set", { roomId, on: true });
+  }
+
+  // Leaving the call (or the page) ends the recording — best-effort save.
+  useEffect(() => {
+    if (recording && !call.inCall) stop(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [call.inCall, recording]);
+  useEffect(() => () => { if (recRef.current) stop(true); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return recording ? (
+    <Button variant="danger" onClick={() => stop(true)} className="animate-pulse">
+      ⏹ Stop · {fmtRec(elapsed)}
+    </Button>
+  ) : (
+    <Button variant="secondary" onClick={start}>⏺ Record</Button>
+  );
+}
+
 export default function RoomPage() {
   const { roomId } = useParams();
   const navigate = useNavigate();
@@ -71,7 +151,7 @@ export default function RoomPage() {
     retry: false,
   });
 
-  const { messages, presence, typingName, error: chatError, sendMessage, notifyTyping } =
+  const { messages, presence, typingName, error: chatError, recorders, sendMessage, notifyTyping } =
     useRoomChat(room ? roomId : null);
 
   const call = useMediaRoom(room ? roomId : null);
@@ -333,6 +413,13 @@ export default function RoomPage() {
             </div>
           </div>
 
+          {/* Transparency banner: EVERYONE in the room sees who is recording. */}
+          {recorders?.length > 0 && (
+            <div className="flex items-center justify-center gap-2 px-4 py-1.5 bg-red-950/60 border-b border-red-900 text-sm text-red-300">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+              Recording in progress — {recorders.map((r) => (r.id === me?.id ? "you" : r.name)).join(", ")}
+            </div>
+          )}
           {call.inCall && (
             <div className="border-b border-gray-800 p-3 bg-gray-950/40">
               {/* Screen shares — big, on top */}
@@ -367,6 +454,7 @@ export default function RoomPage() {
                 ) : (
                   <Button variant="secondary" onClick={call.startScreenShare}>🖥️ Share screen</Button>
                 )}
+                <RecordButton call={call} roomId={roomId} roomName={room.name} nameFor={nameFor} />
               </div>
             </div>
           )}

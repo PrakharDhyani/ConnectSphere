@@ -1954,6 +1954,30 @@ happen to fire before start.
 (`canAccessRoom`) that both REST and sockets already share — adding it there
 covered chat, games, and media in one line instead of N.
 
+### Call recording — client-side, free-tier honest
+The landing page once promised "cloud recording via a Kafka pipeline". The
+truth: server-side compositing/encoding (mediasoup plain-RTP → ffmpeg) is
+the single most expensive workload this project could run — it would eat a
+free VM whole. The 90% solution costs the server NOTHING:
+- `lib/recorder.js`: a hidden canvas composes the call each frame
+  (screen-share hero + camera strip, else auto grid; audio-only members get
+  initial tiles), WebAudio mixes every participant's audio into one track,
+  and `canvas.captureStream + MediaRecorder` writes VP9/VP8 webm in 1s
+  chunks — a crash loses at most a second. Stop → instant local download.
+  Dynamic joins/leaves work because the compositor re-reads its sources
+  every frame. ~200 lines, zero assets, zero server involvement.
+- **Transparency is non-negotiable**: a `recording:set` socket event keeps a
+  per-room recorders map; everyone gets a red banner (late joiners learn via
+  the join ack; a recorder that disconnects can't leave a stuck indicator),
+  and a blinking REC dot + watermark are baked into the video itself.
+- Next steps when wanted: "Save to Google Drive" via the existing Google
+  OAuth + incremental drive.file scope (client-side upload — server still
+  never touches video).
+
+**Interview takeaway:** when a feature has a 100% version that needs paid
+infra and a 90% version that's free, ship the 90% and say so — client-side
+MediaRecorder made "recording" a half-day feature instead of a subsystem.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

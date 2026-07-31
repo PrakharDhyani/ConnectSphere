@@ -29,6 +29,23 @@ export const roomKey = (roomId) => `room:${roomId}`;
 // roomId:userId → last chat timestamp, for slow mode.
 const slowModeLast = new Map();
 
+// roomId → Map<userId, name> of members currently recording the call. The
+// indicator is a TRANSPARENCY feature: everyone in the room must always know
+// a recording is happening, so state changes broadcast to the whole room.
+const recordersByRoom = new Map();
+
+function recorderList(roomId) {
+  const m = recordersByRoom.get(roomId);
+  return m ? [...m.entries()].map(([id, name]) => ({ id, name })) : [];
+}
+
+function broadcastRecorders(io, roomId) {
+  io.to(roomKey(roomId)).emit("recording:changed", {
+    roomId,
+    recorders: recorderList(roomId),
+  });
+}
+
 // Everyone currently connected to a room, de-duplicated by user (one person
 // can have several tabs = several sockets, but shows up once).
 async function presenceList(io, roomId) {
@@ -55,7 +72,8 @@ export function registerChatHandlers(io, socket) {
       }
       socket.join(roomKey(roomId));
       await broadcastPresence(io, roomId);
-      ack?.({ ok: true });
+      // Late joiners must learn about in-progress recordings immediately.
+      ack?.({ ok: true, recorders: recorderList(roomId) });
     } catch (err) {
       logger.error("room:join failed:", err);
       ack?.({ ok: false, error: "Could not join room" });
@@ -64,7 +82,25 @@ export function registerChatHandlers(io, socket) {
 
   socket.on("room:leave", async (roomId, ack) => {
     socket.leave(roomKey(roomId));
+    const rec = recordersByRoom.get(roomId);
+    if (rec?.delete(socket.user.id)) broadcastRecorders(io, roomId);
     await broadcastPresence(io, roomId);
+    ack?.({ ok: true });
+  });
+
+  // Toggle my "recording" indicator for a room (client-side recorder).
+  socket.on("recording:set", async ({ roomId, on } = {}, ack) => {
+    if (!roomId || !socket.rooms.has(roomKey(roomId))) return ack?.({ ok: false });
+    if (!(await canAccessRoom(socket.user, roomId))) return ack?.({ ok: false });
+    let rec = recordersByRoom.get(roomId);
+    if (!rec) {
+      rec = new Map();
+      recordersByRoom.set(roomId, rec);
+    }
+    if (on) rec.set(socket.user.id, socket.user.name);
+    else rec.delete(socket.user.id);
+    if (rec.size === 0) recordersByRoom.delete(roomId);
+    broadcastRecorders(io, roomId);
     ack?.({ ok: true });
   });
 
@@ -142,7 +178,14 @@ export function registerChatHandlers(io, socket) {
     const rooms = [...socket.rooms].filter((k) => k.startsWith("room:"));
     setImmediate(() => {
       for (const key of rooms) {
-        broadcastPresence(io, key.slice("room:".length)).catch(() => {});
+        const roomId = key.slice("room:".length);
+        // A recorder that vanishes must not leave a stuck 🔴 indicator.
+        const rec = recordersByRoom.get(roomId);
+        if (rec?.delete(socket.user.id)) {
+          if (rec.size === 0) recordersByRoom.delete(roomId);
+          broadcastRecorders(io, roomId);
+        }
+        broadcastPresence(io, roomId).catch(() => {});
       }
     });
   });
