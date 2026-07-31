@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/stores/auth.store.js";
 import Button from "@/components/ui/Button.jsx";
 import Logo from "@/components/Logo.jsx";
+import Aurora from "@/components/Aurora.jsx";
 
 const LIVE_FEATURES = [
   {
@@ -80,21 +81,22 @@ export default function HomePage() {
       </nav>
 
       {/* Hero */}
-      <header className="max-w-4xl mx-auto px-6 pt-16 pb-20 text-center">
-        <span className="inline-block text-xs uppercase tracking-widest text-brand-300 bg-brand-950/60 border border-brand-900 rounded-full px-3 py-1 mb-6">
-          Video · Chat · Collaboration — in one tab
+      <header className="relative max-w-4xl mx-auto px-6 pt-16 pb-20 text-center">
+        <Aurora />
+        <span className="anim-fade-up inline-block text-xs uppercase tracking-widest text-brand-300 bg-brand-950/60 border border-brand-900 rounded-full px-3 py-1 mb-6 backdrop-blur">
+          Video · Chat · Games · Collaboration — in one tab
         </span>
-        <h1 className="text-4xl sm:text-6xl font-extrabold leading-tight">
-          Meet, talk, and create —{" "}
-          <span className="text-brand-400">all in your browser.</span>
+        <h1 className="anim-fade-up d1 text-4xl sm:text-6xl font-extrabold leading-tight">
+          Meet, talk, and play —{" "}
+          <span className="gradient-text">all in your browser.</span>
         </h1>
-        <p className="mt-6 text-lg text-gray-400 max-w-2xl mx-auto">
+        <p className="anim-fade-up d2 mt-6 text-lg text-gray-400 max-w-2xl mx-auto">
           Groot is a real-time video calling &amp; collaboration platform: think Zoom&apos;s calls,
-          Snapchat&apos;s filters, a Figma-style whiteboard, and in-call mini-games — combined into a
+          a Figma-style whiteboard, and a full arcade of multiplayer mini-games — combined into a
           single link you can share with anyone.
         </p>
 
-        <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+        <div className="anim-fade-up d3 mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
           {authed ? (
             <Link to="/dashboard"><Button className="px-6 py-3 text-base">Go to your dashboard</Button></Link>
           ) : (
@@ -106,7 +108,7 @@ export default function HomePage() {
         </div>
 
         {/* Join-as-guest strip */}
-        <form onSubmit={handleJoin} className="mt-10 flex items-center justify-center gap-2 max-w-md mx-auto">
+        <form onSubmit={handleJoin} className="anim-fade-up d4 mt-10 flex items-center justify-center gap-2 max-w-md mx-auto">
           <input
             value={joinCode}
             onChange={(e) => setJoinCode(e.target.value)}
@@ -136,7 +138,7 @@ export default function HomePage() {
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {LIVE_FEATURES.map((f) => (
-            <div key={f.title} className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+            <div key={f.title} className="glass-card card-hover p-5">
               <div className="text-3xl">{f.icon}</div>
               <h3 className="mt-3 font-semibold">{f.title}</h3>
               <p className="mt-2 text-sm text-gray-400">{f.body}</p>
@@ -167,7 +169,7 @@ export default function HomePage() {
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {COMING_SOON.map((f) => (
-            <div key={f.title} className="bg-gray-900/60 border border-dashed border-gray-800 rounded-2xl p-5">
+            <div key={f.title} className="glass-card card-hover border-dashed p-5">
               <div className="text-3xl">{f.icon}</div>
               <h3 className="mt-3 font-semibold text-gray-200">{f.title}</h3>
               <p className="mt-2 text-sm text-gray-500">{f.body}</p>

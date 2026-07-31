@@ -207,10 +207,21 @@ export default function RoomPage() {
 
       <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-800 gap-2">
         <Link to={me?.isGuest ? "/" : "/dashboard"} className="shrink-0"><Logo withText={false} /></Link>
-        <div className="flex items-center gap-1 sm:gap-2">
-          <Button variant={view === "room" ? "primary" : "secondary"} onClick={() => setView("room")}>💬 Room</Button>
-          <Button variant={view === "board" ? "primary" : "secondary"} onClick={() => setView("board")}>🖊️ Board</Button>
-          <Button variant={view === "game" ? "primary" : "secondary"} onClick={() => setView("game")}>🎮 Game</Button>
+        {/* Segmented pill tabs — the active tab slides its gradient in place. */}
+        <div className="flex items-center gap-1 p-1 rounded-full bg-gray-900/70 backdrop-blur border border-white/10">
+          {[["room", "💬 Room"], ["board", "🖊️ Board"], ["game", "🎮 Game"]].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setView(id)}
+              className={`px-3 sm:px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-300 ${
+                view === id
+                  ? "bg-gradient-to-r from-brand-600 to-fuchsia-600 text-white shadow-[0_4px_14px_rgba(139,92,246,0.4)] scale-105"
+                  : "text-gray-400 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400 shrink-0 hidden sm:block">
           {me?.isGuest ? "← Home" : "← Dash"}

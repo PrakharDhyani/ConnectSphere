@@ -11,3 +11,111 @@ body {
   @apply bg-gray-950 text-white font-sans antialiased;
   margin: 0;
 }
+
+/* ── Modern platform polish ─────────────────────────────────────────────── */
+
+/* Slim, on-brand scrollbars (WebKit + Firefox). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #4c1d95 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(#7c3aed, #4c1d95);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::selection {
+  background: rgba(124, 58, 237, 0.45);
+  color: #fff;
+}
+
+/* Keyboard-visible focus that matches the brand instead of browser blue. */
+:focus-visible {
+  outline: 2px solid rgba(167, 139, 250, 0.8);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+@layer components {
+  /* Frosted card — the platform's new default surface. */
+  .glass-card {
+    @apply bg-gray-900/60 backdrop-blur-md border border-white/10 rounded-2xl;
+  }
+
+  /* Interactive cards lift and glow on hover. */
+  .card-hover {
+    @apply transition-all duration-300;
+  }
+  .card-hover:hover {
+    transform: translateY(-3px);
+    border-color: rgba(139, 92, 246, 0.45);
+    box-shadow: 0 12px 32px rgba(124, 58, 237, 0.18);
+  }
+
+  /* Animated gradient headline text. */
+  .gradient-text {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(90deg, #a78bfa, #22d3ee, #f0abfc, #a78bfa);
+    background-size: 300% 100%;
+    animation: gradient-slide 8s ease-in-out infinite;
+  }
+}
+
+/* Entrance: rise + fade. Use .anim-fade-up with .d1…d6 stagger helpers. */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.anim-fade-up {
+  opacity: 0;
+  animation: fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.d1 { animation-delay: 0.08s; }
+.d2 { animation-delay: 0.16s; }
+.d3 { animation-delay: 0.24s; }
+.d4 { animation-delay: 0.32s; }
+.d5 { animation-delay: 0.4s; }
+.d6 { animation-delay: 0.48s; }
+
+@keyframes gradient-slide {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* Aurora blobs — slow drifting glow used behind heroes/dashboards. */
+@keyframes aurora-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(40px, -30px) scale(1.08); }
+  66% { transform: translate(-30px, 24px) scale(0.95); }
+}
+.aurora-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.35;
+  pointer-events: none;
+  animation: aurora-drift 16s ease-in-out infinite;
+}
+
+/* Gentle idle float (hero emoji, decorations). */
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.anim-float {
+  animation: float-y 4s ease-in-out infinite;
+}
+
+/* Accessibility: honor users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .anim-fade-up { animation: none; opacity: 1; }
+  .aurora-blob, .anim-float, .gradient-text { animation: none; }
+  * { transition-duration: 0.01ms !important; }
+}

@@ -8,6 +8,7 @@ import { useFriends } from "@/hooks/useFriends.js";
 import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
 import Logo from "@/components/Logo.jsx";
+import Aurora from "@/components/Aurora.jsx";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -114,7 +115,8 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-6 py-10 space-y-6">
+      <main className="relative max-w-4xl mx-auto px-6 py-10 space-y-6">
+        <Aurora />
         {location.state?.message && (
           <p className="text-sm text-brand-300 bg-brand-950/40 border border-brand-900 rounded-lg p-3">
             {location.state.message}
@@ -139,7 +141,7 @@ export default function DashboardPage() {
         {/* Create / Join */}
         <div className="grid sm:grid-cols-2 gap-4">
           <form
-            className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-3"
+            className="glass-card p-5 space-y-3 anim-fade-up"
             onSubmit={(e) => {
               e.preventDefault();
               setFormError(null);
@@ -176,7 +178,7 @@ export default function DashboardPage() {
           </form>
 
           <form
-            className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-3"
+            className="glass-card p-5 space-y-3 anim-fade-up d1"
             onSubmit={(e) => {
               e.preventDefault();
               setFormError(null);
@@ -195,7 +197,7 @@ export default function DashboardPage() {
         {formError && <p className="text-sm text-red-400">{formError}</p>}
 
         {/* Room list */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+        <div className="glass-card p-6 anim-fade-up d2">
           <h2 className="font-semibold mb-4">Your rooms</h2>
           {isLoading ? (
             <p className="text-gray-500 text-sm">Loading…</p>
@@ -208,7 +210,7 @@ export default function DashboardPage() {
               {rooms.map((room) => (
                 <li key={room.id}>
                   <Link to={`/room/${room.id}`}
-                    className="flex items-center justify-between py-3 px-2 rounded-lg hover:bg-gray-800/60 transition-colors">
+                    className="flex items-center justify-between py-3 px-2 rounded-lg hover:bg-gray-800/60 hover:translate-x-1 border border-transparent hover:border-brand-500/30 transition-all duration-200">
                     <div>
                       <p className="font-medium">
                         {room.name}
@@ -229,7 +231,7 @@ export default function DashboardPage() {
 
         {/* Public rooms discovery */}
         {discoverable.length > 0 && (
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+          <div className="glass-card p-6 anim-fade-up d3">
             <h2 className="font-semibold mb-1">Discover public rooms 🌐</h2>
             <p className="text-xs text-gray-500 mb-4">Open hangouts anyone can join.</p>
             <ul className="divide-y divide-gray-800">

@@ -70,12 +70,13 @@ export default function GamesHub({ roomId }) {
           </div>
           <p className="text-arcade-300/60 text-sm mb-6 tracking-wide">insert coin · pick a game</p>
           <div className="grid grid-cols-2 gap-3">
-            {GAMES.map((g) => (
+            {GAMES.map((g, i) => (
               <button
                 key={g.id}
                 onClick={() => setGame(g.id)}
-                className="group bg-gray-900/80 border border-arcade-500/25 rounded-2xl p-6 transition-all
-                  hover:border-arcade-400 hover:shadow-[0_0_20px_rgba(34,211,238,0.25)] hover:-translate-y-0.5"
+                className={`group bg-gray-900/80 border border-arcade-500/25 rounded-2xl p-6 transition-all
+                  hover:border-arcade-400 hover:shadow-[0_0_20px_rgba(34,211,238,0.25)] hover:-translate-y-0.5
+                  anim-fade-up d${Math.min(6, i + 1)}`}
               >
                 <div className="text-4xl transition-transform group-hover:scale-110">{g.emoji}</div>
                 <div className="mt-2 font-semibold text-arcade-100">{g.name}</div>
