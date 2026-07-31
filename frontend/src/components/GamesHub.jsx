@@ -36,7 +36,19 @@ const GAMES = [
 ];
 
 export default function GamesHub({ roomId }) {
-  const [game, setGame] = useState(null);
+  // Refresh-proof: restore the open game after F5 (per browser tab, per room)
+  // so refreshing mid-Ludo doesn't dump you back on the picker.
+  const gameKey = `groot:game:${roomId}`;
+  const [game, setGameRaw] = useState(() => {
+    try { return sessionStorage.getItem(gameKey) || null; } catch { return null; }
+  });
+  const setGame = (g) => {
+    setGameRaw(g);
+    try {
+      if (g) sessionStorage.setItem(gameKey, g);
+      else sessionStorage.removeItem(gameKey);
+    } catch { /* private mode */ }
+  };
 
   // Background music follows the selected game; silence on the picker.
   useEffect(() => {

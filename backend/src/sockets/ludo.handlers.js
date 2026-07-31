@@ -321,6 +321,19 @@ function doRoll(io, roomId) {
   g.rolled = true;
   broadcast(io, roomId);
   maybeBotTurn(io, roomId); // a bot now picks its token
+
+  // Quality of life: exactly ONE legal token → there's no decision to make,
+  // so play it automatically after a beat (long enough to read the dice).
+  const seat = g.seats[color];
+  if (movable.length === 1 && seat && !seat.isBot) {
+    clearTimeout(g.autoMoveTimer);
+    g.autoMoveTimer = setTimeout(() => {
+      const cur = games.get(roomId);
+      if (!cur || cur.status !== "playing" || currentColor(cur) !== color) return;
+      if (!cur.rolled || cur.movable.length !== 1) return; // they already moved
+      doMove(io, roomId, cur.movable[0]);
+    }, 900);
+  }
 }
 
 function doMove(io, roomId, token) {

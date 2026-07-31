@@ -106,10 +106,13 @@ export function tickBots(race, bots, now = Date.now()) {
   return finished;
 }
 
-// The race ends the moment ANYONE finishes (winner takes it — everyone else
-// is ranked by distance covered), or on timeout with no finisher.
-export function raceOver(race, playerIds, now = Date.now()) {
+// Two modes:
+//   "race"     — ends the moment ANYONE finishes (winner takes it; the rest
+//                are ranked by distance covered)
+//   "practice" — everyone types to the end (or timeout); pure speed test
+export function raceOver(race, playerIds, now = Date.now(), mode = "race") {
   if (now >= race.endAt) return true;
+  if (mode === "practice") return playerIds.every((id) => race.progress[id]?.finishedAt);
   return race.finishOrder.length > 0;
 }
 

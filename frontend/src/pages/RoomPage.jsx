@@ -47,7 +47,17 @@ export default function RoomPage() {
   const me = useAuthStore((s) => s.user);
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
-  const [view, setView] = useState("room"); // "room" | "board" | "game"
+  // Survive refreshes: mid-game F5 used to dump you back on the room tab
+  // (and out of your ludo/chess table UI). sessionStorage is per-browser-tab
+  // and per-room, so each tab restores exactly where it was.
+  const viewKey = `groot:view:${roomId}`;
+  const [view, setViewRaw] = useState(() => {
+    try { return sessionStorage.getItem(viewKey) || "room"; } catch { return "room"; }
+  }); // "room" | "board" | "game"
+  const setView = (v) => {
+    setViewRaw(v);
+    try { sessionStorage.setItem(viewKey, v); } catch { /* private mode */ }
+  };
   const [toasts, setToasts] = useState([]);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");

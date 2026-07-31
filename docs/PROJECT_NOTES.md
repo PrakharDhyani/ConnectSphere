@@ -1877,6 +1877,36 @@ concrete examples, not before) buys you.
 external dependencies, offline-friendly, infinite supply — because chess.js
 makes VERIFYING a forced mate cheap, and verified-random beats curated.
 
+### Playtest polish round — refresh-proofing, auto-moves, modes, turn-pick bingo
+- **Refresh no longer ejects you from a game.** The room tab and selected
+  game were React state → F5 reset both to defaults. Now persisted in
+  sessionStorage keyed per room (`groot:view:{roomId}` / `groot:game:{...}`)
+  — per-browser-tab semantics are exactly right for "restore THIS tab where
+  it was", and it clears itself when the tab closes. (URL params were the
+  alternative; sessionStorage won because game panels are nested state the
+  router doesn't own.)
+- **Ludo auto-move**: exactly one legal token after a roll → the server plays
+  it after a 900ms beat (long enough to read the dice). No decision = no
+  wait. Guarded against races (only fires if still that color's un-acted
+  turn).
+- **Typing modes made visible**: host-picked Race (first finisher ends it)
+  vs Practice (everyone types to the end — the WPM-test mode), as lobby
+  cards with descriptions. One `mode` param through `raceOver` — the engine
+  supports both semantics with two lines.
+- **Bingo turn-pick variant** (the schoolyard classic): every card is a
+  random ARRANGEMENT of 1–25; players call numbers turn-wise; a call daubs
+  every card simultaneously (all cards share all numbers — the game is
+  pure arrangement + call strategy); first to FIVE complete lines (rows,
+  cols, diagonals; overlaps count — 12 possible lines) wins automatically,
+  server-verified. Greedy bots pick calls that maximize their own line
+  growth. Rules for both modes are written INTO the lobby. Live-verified by
+  actually winning a game 5-lines-to-bot with a call-my-own-card strategy.
+
+**Interview takeaway:** the same lobby framework absorbed a per-game mode
+system (chess time controls, typing race/practice, bingo classic/turns) with
+one generic `lobbyEvents` hook — settings are just host-only events that
+happen to fire before start.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

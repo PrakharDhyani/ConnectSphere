@@ -103,12 +103,40 @@ export default function TypingPanel({ roomId }) {
   };
 
   if (!state || state.status === "lobby") {
+    const isHost = lobby.isHost;
+    const modes = [
+      { id: "race", label: "🏁 Race", desc: "first to finish wins — ends the race for everyone" },
+      { id: "practice", label: "🧘 Practice", desc: "everyone types to the end — pure WPM test (great solo)" },
+    ];
     return (
       <GameLobby
         title="TYPING RACE" emoji="⌨️"
-        tagline="First to finish wins — race friends, WPM bots, or start alone to test your speed."
+        tagline="Same sentence, fastest fingers — with friends, WPM bots, or solo."
         minPlayers={1} maxPlayers={8} lobby={lobby}
-      />
+      >
+        <div className="mt-4 pt-4 border-t border-gray-800 text-left">
+          <p className="text-xs uppercase tracking-wider text-arcade-300/70 mb-1.5">
+            Mode {!isHost && <span className="text-gray-600 normal-case">(host picks)</span>}
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            {modes.map((m) => (
+              <button
+                key={m.id}
+                disabled={!isHost}
+                onClick={() => act("setMode", { mode: m.id })}
+                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                  (state?.raceMode || "race") === m.id
+                    ? "border-arcade-300 bg-arcade-400/20 shadow-[0_0_10px_rgba(34,211,238,0.3)]"
+                    : "border-gray-700 bg-gray-800"
+                } ${isHost ? "hover:border-arcade-400" : "opacity-75 cursor-default"}`}
+              >
+                <span className="block text-sm font-semibold">{m.label}</span>
+                <span className="block text-[11px] text-gray-500 leading-snug">{m.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </GameLobby>
     );
   }
 

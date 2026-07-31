@@ -330,6 +330,16 @@ describe("bingo", () => {
     expect(B.drawBall(b)).toBeNull();
   });
 
+  test("practice mode: race runs until everyone finishes (or timeout)", () => {
+    const race = T.setup(["a", "b"]);
+    race.startAt = Date.now() - 60_000;
+    T.applyProgress(race, "a", race.text.length, 0);
+    expect(T.raceOver(race, ["a", "b"], Date.now(), "practice")).toBe(false); // b still typing
+    expect(T.raceOver(race, ["a", "b"], Date.now(), "race")).toBe(true);
+    T.applyProgress(race, "b", race.text.length, 0);
+    expect(T.raceOver(race, ["a", "b"], Date.now(), "practice")).toBe(true);
+  });
+
   test("hard bots daub every called number; letterFor maps ranges", () => {
     const b = B.setup(["bot"]);
     for (let i = 0; i < 40; i++) B.drawBall(b);
@@ -345,5 +355,69 @@ describe("bingo", () => {
     expect(B.letterFor(16)).toBe("I");
     expect(B.letterFor(45)).toBe("N");
     expect(B.letterFor(75)).toBe("O");
+  });
+});
+
+describe("bingo — turn-pick variant", () => {
+  test("cards are a full permutation of 1..25 (no free space)", () => {
+    const card = B.genCard25();
+    const flat = card.flat();
+    expect(flat).toHaveLength(25);
+    expect(new Set(flat).size).toBe(25);
+    expect(Math.min(...flat)).toBe(1);
+    expect(Math.max(...flat)).toBe(25);
+  });
+
+  test("callNumber: 1..25 once each, rejects repeats and junk", () => {
+    const b = B.setupTurns(["a", "b"]);
+    expect(B.callNumber(b, 7)).toBe(true);
+    expect(B.callNumber(b, 7)).toBe(false); // repeat
+    expect(B.callNumber(b, 0)).toBe(false);
+    expect(B.callNumber(b, 26)).toBe(false);
+    expect(B.callNumber(b, 2.5)).toBe(false);
+  });
+
+  test("lineCount25 counts rows, columns and BOTH diagonals — overlaps included", () => {
+    const b = B.setupTurns(["a"]);
+    const card = b.cards.a;
+    // Call the entire first column and the main diagonal — they overlap on
+    // card[0][0], and both lines must still count.
+    const called = new Set();
+    for (let r = 0; r < 5; r++) called.add(card[0][r]);
+    for (let i = 0; i < 5; i++) called.add(card[i][i]);
+    expect(B.lineCount25(card, called)).toBe(2);
+    // All 25 called → all 12 lines (5 rows + 5 cols + 2 diags).
+    const all = new Set(card.flat());
+    expect(B.lineCount25(card, all)).toBe(12);
+  });
+
+  test("win detection at 5 lines via lineCounts", () => {
+    const b = B.setupTurns(["a", "z"]);
+    const card = b.cards.a;
+    // Call five full columns of a's card → a has ≥5 lines; z has whatever
+    // its arrangement gives (usually fewer, but a is guaranteed ≥5).
+    for (let c = 0; c < 5; c++) for (let r = 0; r < 5; r++) {
+      if (!b.called.includes(card[c][r])) b.called.push(card[c][r]);
+    }
+    const counts = B.lineCounts(b, ["a", "z"]);
+    expect(counts.a).toBeGreaterThanOrEqual(B.LINES_TO_WIN);
+  });
+
+  test("bestPick always returns an uncalled number and greedy bots chase lines", () => {
+    const b = B.setupTurns(["bot"]);
+    for (const d of ["easy", "medium", "hard"]) {
+      const n = B.bestPick(b, "bot", d);
+      expect(n).toBeGreaterThanOrEqual(1);
+      expect(n).toBeLessThanOrEqual(25);
+      expect(b.called.includes(n)).toBe(false);
+    }
+    // Rig: bot's first column has 4/5 called → hard must complete the line.
+    const card = b.cards.bot;
+    b.called = card[0].slice(0, 4);
+    const pick = B.bestPick(b, "bot", "hard");
+    expect(pick).toBe(card[0][4]);
+    // All called → null.
+    b.called = Array.from({ length: 25 }, (_, i) => i + 1);
+    expect(B.bestPick(b, "bot", "hard")).toBeNull();
   });
 });

@@ -12,15 +12,30 @@ const typing = createLobbyGame({
   maxPlayers: 8,
   allowBots: true,
 
-  init: () => ({ race: null }),
+  init: () => ({ race: null, raceMode: "race" }),
+
+  // Rematches keep the chosen mode.
+  onReset(old, fresh) {
+    fresh.raceMode = old.raceMode;
+  },
+
+  lobbyEvents: {
+    setMode(ctx, { mode }, cb) {
+      if (mode !== "race" && mode !== "practice") return cb?.({ error: "Unknown mode" });
+      ctx.g.raceMode = mode;
+      ctx.broadcast();
+      cb?.({ ok: true });
+    },
+  },
 
   start(g) {
     g.race = T.setup(g.players.map((p) => p.id));
   },
 
   publicState(g) {
-    if (!g.race) return {};
+    if (!g.race) return { raceMode: g.raceMode };
     return {
+      raceMode: g.raceMode,
       text: g.race.text,
       startAt: g.race.startAt,
       endAt: g.race.endAt,
@@ -37,9 +52,12 @@ const typing = createLobbyGame({
       const { g } = ctx;
       const finished = T.applyProgress(g.race, playerId, Number(chars) || 0, Number(errors) || 0);
       if (finished) {
-        ctx.notice(`🏁 ${g.players.find((p) => p.id === playerId)?.name} wins the race!`);
+        const place = g.race.finishOrder.indexOf(playerId) + 1;
+        ctx.notice(place === 1
+          ? `🏁 ${g.players.find((p) => p.id === playerId)?.name} wins the race!`
+          : `🏁 ${g.players.find((p) => p.id === playerId)?.name} finishes #${place}`);
         ctx.broadcast();
-        if (T.raceOver(g.race, g.players.map((p) => p.id))) ctx.endGame();
+        if (T.raceOver(g.race, g.players.map((p) => p.id), Date.now(), g.raceMode)) ctx.endGame();
       }
       cb?.({ ok: true });
     },
@@ -51,9 +69,12 @@ const typing = createLobbyGame({
       const { g } = ctx;
       const finished = T.tickBots(g.race, g.players.filter((p) => p.isBot));
       for (const id of finished) {
-        ctx.notice(`🏁 ${g.players.find((p) => p.id === id)?.name} wins the race!`);
+        const place = g.race.finishOrder.indexOf(id) + 1;
+        ctx.notice(place === 1
+          ? `🏁 ${g.players.find((p) => p.id === id)?.name} wins the race!`
+          : `🏁 ${g.players.find((p) => p.id === id)?.name} finishes #${place}`);
       }
-      if (T.raceOver(g.race, g.players.map((p) => p.id))) {
+      if (T.raceOver(g.race, g.players.map((p) => p.id), Date.now(), g.raceMode)) {
         ctx.endGame();
       } else {
         ctx.broadcast();
