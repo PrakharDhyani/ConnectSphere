@@ -1907,6 +1907,26 @@ system (chess time controls, typing race/practice, bingo classic/turns) with
 one generic `lobbyEvents` hook — settings are just host-only events that
 happen to fire before start.
 
+### Typing: the 60-second test + the platform's first GLOBAL leaderboard
+- **Timed mode** (replaces Practice): 60 seconds over an ENDLESS stream of
+  random common words (monkeytype-style). Implementation trick: no protocol
+  change at all — the "text" is simply 280 random words (~1,600 chars),
+  which exceeds the anti-cheat ceiling (21 chars/s × 60s = 1,260), so the
+  stream can never run dry for a legitimate typist. The UI renders a
+  sliding window (word-aligned, ~45 chars behind the cursor), the clock is
+  front and center, and only the clock can end the run.
+- **Why records come only from timed mode**: fixed duration = comparable
+  numbers. Race passages vary in length/difficulty; 60 fixed seconds makes
+  "96 wpm" mean the same thing for everyone.
+- **TypingRecord model**: one row per user (their personal best), `submit()`
+  is a race-safe conditional upsert (`findOneAndUpdate {wpm: {$lt}}` +
+  E11000-tolerant insert), top-10 = an indexed sort. Bots and sub-25-char
+  runs are excluded. The finish path sets a synchronous `_finishing` flag —
+  the 500ms ticker could fire again during the async Mongo write and
+  double-submit otherwise.
+- Live-verified with two real 60s runs: a 96-wpm run landed on the board,
+  a deliberate 36-wpm rerun did NOT override it.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

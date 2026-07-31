@@ -330,14 +330,24 @@ describe("bingo", () => {
     expect(B.drawBall(b)).toBeNull();
   });
 
-  test("practice mode: race runs until everyone finishes (or timeout)", () => {
-    const race = T.setup(["a", "b"]);
-    race.startAt = Date.now() - 60_000;
-    T.applyProgress(race, "a", race.text.length, 0);
-    expect(T.raceOver(race, ["a", "b"], Date.now(), "practice")).toBe(false); // b still typing
-    expect(T.raceOver(race, ["a", "b"], Date.now(), "race")).toBe(true);
-    T.applyProgress(race, "b", race.text.length, 0);
-    expect(T.raceOver(race, ["a", "b"], Date.now(), "practice")).toBe(true);
+  test("timed mode: only the 60s clock ends the run", () => {
+    const race = T.setup(["a", "b"], Math.random, "timed");
+    expect(race.endAt - race.startAt).toBe(T.TIMED_MS);
+    race.startAt = Date.now() - 30_000;
+    race.endAt = race.startAt + T.TIMED_MS;
+    T.applyProgress(race, "a", 400, 0);
+    // Heavy progress ends a RACE, but never a timed run…
+    expect(T.raceOver(race, ["a", "b"], Date.now(), "timed")).toBe(false);
+    // …only the clock does.
+    expect(T.raceOver(race, ["a", "b"], race.endAt + 1, "timed")).toBe(true);
+  });
+
+  test("timed mode: the word stream outlasts any legitimate typist", () => {
+    const race = T.setup(["a"], Math.random, "timed");
+    const maxLegit = Math.ceil((T.TIMED_MS / 1000) * T.MAX_CHARS_PER_SEC);
+    expect(race.text.length).toBeGreaterThan(maxLegit);
+    // Stream is made of known dictionary words only.
+    for (const w of race.text.split(" ")) expect(T.WORDS).toContain(w);
   });
 
   test("hard bots daub every called number; letterFor maps ranges", () => {
