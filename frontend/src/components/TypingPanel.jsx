@@ -105,7 +105,8 @@ export default function TypingPanel({ roomId }) {
   if (!state || state.status === "lobby") {
     return (
       <GameLobby
-        title="TYPING RACE" emoji="⌨️" tagline="Same sentence, fastest fingers. Race friends or WPM bots."
+        title="TYPING RACE" emoji="⌨️"
+        tagline="First to finish wins — race friends, WPM bots, or start alone to test your speed."
         minPlayers={1} maxPlayers={8} lobby={lobby}
       />
     );
@@ -193,22 +194,37 @@ export default function TypingPanel({ roomId }) {
 
       <NoticeFeed notices={notices} />
 
-      {/* Podium */}
+      {/* Podium — winner takes the race; everyone else ranked by distance */}
       {over && (
         <div className="text-center space-y-3">
-          <div className="flex justify-center gap-4">
-            {(state.finishOrder || []).slice(0, 3).map((id, i) => {
-              const p = players.find((pl) => pl.id === id);
-              const prog = state.progress?.[id];
-              return (
-                <div key={id} className={`px-4 py-3 rounded-xl border ${i === 0 ? "border-amber-400 bg-amber-950/30" : "border-gray-700 bg-gray-900"}`}>
-                  <div className="text-2xl">{["🥇", "🥈", "🥉"][i]}</div>
-                  <div className="text-sm font-semibold">{p?.name}</div>
-                  <div className="text-xs text-arcade-300">{prog?.wpm} wpm</div>
-                </div>
-              );
-            })}
-          </div>
+          {players.length === 1 ? (
+            // Solo practice: your stats, front and center.
+            <div className="inline-block px-8 py-5 rounded-2xl border border-arcade-400 bg-arcade-950/40">
+              <div className="text-3xl mb-1">⌨️</div>
+              <div className="text-4xl font-black text-arcade-300">{meProg?.wpm ?? 0} <span className="text-lg">wpm</span></div>
+              <div className="text-xs text-gray-400 mt-1">
+                {meProg?.finishedAt ? "full passage completed" : "timed out"} · {errors} mistakes
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-center gap-4">
+              {(state.standings || state.finishOrder || []).slice(0, 3).map((id, i) => {
+                const p = players.find((pl) => pl.id === id);
+                const prog = state.progress?.[id];
+                const finished = Boolean(prog?.finishedAt);
+                const pct = text.length ? Math.round(((prog?.chars ?? 0) / text.length) * 100) : 0;
+                return (
+                  <div key={id} className={`px-4 py-3 rounded-xl border ${i === 0 ? "border-amber-400 bg-amber-950/30" : "border-gray-700 bg-gray-900"}`}>
+                    <div className="text-2xl">{["🥇", "🥈", "🥉"][i]}</div>
+                    <div className="text-sm font-semibold">{p?.name}</div>
+                    <div className="text-xs text-arcade-300">
+                      {prog?.wpm} wpm{!finished && <span className="text-gray-500"> · {pct}%</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {isHost && <Button variant="arcade" onClick={reset}>Race again</Button>}
         </div>
       )}

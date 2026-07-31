@@ -237,9 +237,25 @@ export function createLobbyGame(cfg) {
       fresh.players = g.players; // keep the table together for a rematch
       fresh.hostId = g.hostId;
       fresh.nextBotId = g.nextBotId;
+      cfg.onReset?.(g, fresh); // carry over settings (e.g. chess time control)
       games.set(roomId, fresh);
       broadcast(io, roomId);
     });
+
+    // Host-only settings changed BEFORE the game starts (time controls etc.).
+    for (const [name, handler] of Object.entries(cfg.lobbyEvents || {})) {
+      on(name, async (payload = {}, cb) => {
+        const { roomId } = payload;
+        const g = games.get(roomId);
+        if (!g || g.status !== "lobby") return cb?.({ error: "Only in the lobby" });
+        if (g.hostId !== uid) return cb?.({ error: "Only the host can change settings" });
+        try {
+          handler(makeCtx(io, roomId), payload, cb);
+        } catch {
+          cb?.({ error: "Setting failed" });
+        }
+      });
+    }
 
     // Game-specific moves. Handlers get a validated seated context.
     for (const [name, handler] of Object.entries(cfg.events || {})) {

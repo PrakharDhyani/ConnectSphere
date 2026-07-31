@@ -19,7 +19,24 @@ function announceEffects(ctx, playerId, effects) {
   const { g } = ctx;
   if (effects.uno) ctx.notice(`🗣️ ${nameOf(g, playerId)} shouts UNO!`);
   if (effects.drew) ctx.notice(`🃏 ${nameOf(g, effects.drew.playerId)} draws ${effects.drew.n}`);
+  if (effects.stacked) {
+    const glyph = effects.stacked.type === "draw2" ? "+2" : "+4";
+    ctx.notice(
+      effects.stacked.count > (effects.stacked.type === "draw2" ? 2 : 4)
+        ? `🔥 ${nameOf(g, playerId)} STACKS a ${glyph} — pile is now +${effects.stacked.count}!`
+        : `⚡ ${nameOf(g, playerId)} plays ${glyph} — stack it or draw!`
+    );
+  }
   if (effects.reversed) ctx.notice("🔄 Direction reversed");
+}
+
+// Facing a stack with no answer: swallow the pile (shared by humans timing
+// out, bots, and the draw button).
+function swallowStack(ctx, playerId) {
+  const { g } = ctx;
+  const res = U.resolveStackDraw(g.uno, order(g), playerId);
+  if (res.ok) ctx.notice(`💥 ${nameOf(g, playerId)} draws ${res.n} from the stack!`);
+  return res;
 }
 
 function afterAction(ctx) {
@@ -38,6 +55,11 @@ function autoPlay(ctx, playerId) {
   const { g } = ctx;
   const choice = U.botChoose(g.uno, order(g), playerId, "easy", null);
   if (choice.draw) {
+    if (g.uno.stack) {
+      swallowStack(ctx, playerId);
+      afterAction(ctx);
+      return;
+    }
     U.drawCards(g.uno, playerId, 1);
     const hand = g.uno.hands[playerId];
     const idx = hand.length - 1;
@@ -96,6 +118,7 @@ const uno = createLobbyGame({
       top: U.top(g.uno),
       activeColor: g.uno.activeColor,
       direction: g.uno.direction,
+      stack: g.uno.stack,
       turnId: turnId(g),
       counts: Object.fromEntries(Object.entries(g.uno.hands).map(([id, h]) => [id, h.length])),
       drawPileCount: g.uno.drawPile.length,
@@ -126,6 +149,12 @@ const uno = createLobbyGame({
       if (turnId(g) !== playerId) return cb?.({ error: "Not your turn" });
       if (g.uno.pendingDraw !== null) return cb?.({ error: "Play or keep your drawn card" });
       g.afk[playerId] = 0;
+      // Facing a stack, "draw" means swallowing the whole pile.
+      if (g.uno.stack) {
+        swallowStack(ctx, playerId);
+        ctx.broadcast();
+        return cb?.({ ok: true });
+      }
       U.drawCards(g.uno, playerId, 1);
       const hand = g.uno.hands[playerId];
       const idx = hand.length - 1;
@@ -181,6 +210,11 @@ const uno = createLobbyGame({
     const counts = Object.fromEntries(Object.entries(g.uno.hands).map(([pid, h]) => [pid, h.length]));
     const choice = U.botChoose(g.uno, order(g), id, seat.difficulty, counts);
     if (choice.draw) {
+      if (g.uno.stack) {
+        swallowStack(ctx, id);
+        afterAction(ctx);
+        return;
+      }
       U.drawCards(g.uno, id, 1);
       const hand = g.uno.hands[id];
       const idx = hand.length - 1;

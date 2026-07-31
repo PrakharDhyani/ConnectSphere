@@ -106,7 +106,17 @@ export function tickBots(race, bots, now = Date.now()) {
   return finished;
 }
 
+// The race ends the moment ANYONE finishes (winner takes it — everyone else
+// is ranked by distance covered), or on timeout with no finisher.
 export function raceOver(race, playerIds, now = Date.now()) {
   if (now >= race.endAt) return true;
-  return playerIds.every((id) => race.progress[id]?.finishedAt);
+  return race.finishOrder.length > 0;
+}
+
+/** Final standings: finishers in order, then the rest by progress. */
+export function standings(race, playerIds) {
+  const unfinished = playerIds
+    .filter((id) => !race.progress[id]?.finishedAt)
+    .sort((a, b) => (race.progress[b]?.chars ?? 0) - (race.progress[a]?.chars ?? 0));
+  return [...race.finishOrder, ...unfinished];
 }

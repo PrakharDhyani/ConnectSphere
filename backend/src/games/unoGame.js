@@ -7,9 +7,15 @@
  *
  * Official-ish rules kept: skip/reverse/draw2 effects, wilds pick a color,
  * reverse acts as skip in 2-player, can't finish rules simplified (any card
- * may finish), no +2/+4 stacking, no wild4 challenges (nobody at game night
- * wants to litigate a challenge). "UNO!" is announced automatically by the
- * server — the fun of the shout without the gotcha penalty.
+ * may finish), no wild4 challenges (nobody at game night wants to litigate
+ * a challenge). "UNO!" is announced automatically by the server — the fun
+ * of the shout without the gotcha penalty.
+ *
+ * HOUSE RULE — STACKING: a +2 can be answered with another +2 (and a +4
+ * with another +4), passing the accumulated penalty on. While a stack is
+ * live (`u.stack = { type, count }`), the player to act may ONLY stack the
+ * SAME card type or draw the whole pile. Cross-stacking (+2 on +4) is not
+ * allowed.
  */
 
 export const COLORS = ["red", "yellow", "green", "blue"];
@@ -63,8 +69,15 @@ export function setup(playerIds, rand = Math.random) {
     direction: 1,
     turnIdx: 0,
     pendingDraw: null, // index of a just-drawn playable card awaiting keep/play
+    stack: null, // { type: "draw2"|"wild4", count } — live draw pile-up
     winnerId: null,
   };
+}
+
+/** What may be played RIGHT NOW (stack-aware — under a stack, only the same card type). */
+export function playableNow(u, card) {
+  if (u.stack) return card.value === u.stack.type;
+  return canPlay(card, top(u), u.activeColor);
 }
 
 export const top = (u) => u.discard[u.discard.length - 1];
@@ -97,11 +110,14 @@ export function advance(u, order, steps = 1) {
  * Play `cardIdx` from `playerId`'s hand. Returns { ok, error?, effects }.
  * `chosenColor` is required for wilds. Mutates the state.
  */
-export function playCard(u, order, playerId, cardIdx, chosenColor, rand = Math.random) {
+export function playCard(u, order, playerId, cardIdx, chosenColor) {
   const hand = u.hands[playerId];
   const card = hand?.[cardIdx];
   if (!card) return { error: "No such card" };
-  if (!canPlay(card, top(u), u.activeColor)) return { error: "That card can't be played" };
+  if (u.stack && card.value !== u.stack.type) {
+    return { error: `Stack a +${u.stack.type === "draw2" ? 2 : 4} or draw ${u.stack.count}` };
+  }
+  if (!u.stack && !canPlay(card, top(u), u.activeColor)) return { error: "That card can't be played" };
   if (card.color === "wild" && !COLORS.includes(chosenColor)) return { error: "Pick a color" };
 
   hand.splice(cardIdx, 1);
@@ -109,7 +125,7 @@ export function playCard(u, order, playerId, cardIdx, chosenColor, rand = Math.r
   u.activeColor = card.color === "wild" ? chosenColor : card.color;
   u.pendingDraw = null;
 
-  const effects = { skipped: null, drew: null, reversed: false, uno: hand.length === 1 };
+  const effects = { skipped: null, drew: null, reversed: false, uno: hand.length === 1, stacked: null };
 
   if (hand.length === 0) {
     u.winnerId = playerId;
@@ -128,24 +144,33 @@ export function playCard(u, order, playerId, cardIdx, chosenColor, rand = Math.r
       // In 2p, reverse behaves as a skip (you go again).
       advance(u, order, twoPlayer ? 0 : 1);
       break;
-    case "draw2": {
-      const victim = order[(order.indexOf(playerId) + u.direction + order.length) % order.length];
-      drawCards(u, victim, 2, rand);
-      effects.drew = { playerId: victim, n: 2 };
-      advance(u, order, 2);
+    // HOUSE RULE: +2/+4 no longer punish immediately — they open (or grow) a
+    // stack. The next player either stacks the same card type or draws the
+    // whole accumulated pile (resolveStackDraw).
+    case "draw2":
+      u.stack = { type: "draw2", count: (u.stack?.count || 0) + 2 };
+      effects.stacked = { ...u.stack };
+      advance(u, order, 1);
       break;
-    }
-    case "wild4": {
-      const victim = order[(order.indexOf(playerId) + u.direction + order.length) % order.length];
-      drawCards(u, victim, 4, rand);
-      effects.drew = { playerId: victim, n: 4 };
-      advance(u, order, 2);
+    case "wild4":
+      u.stack = { type: "wild4", count: (u.stack?.count || 0) + 4 };
+      effects.stacked = { ...u.stack };
+      advance(u, order, 1);
       break;
-    }
     default:
       advance(u, order, 1);
   }
   return { ok: true, effects };
+}
+
+/** The player facing a stack gives up and swallows the whole pile. */
+export function resolveStackDraw(u, order, playerId, rand = Math.random) {
+  if (!u.stack) return { error: "No stack to draw" };
+  const n = u.stack.count;
+  drawCards(u, playerId, n, rand);
+  u.stack = null;
+  advance(u, order, 1);
+  return { ok: true, n };
 }
 
 // ── Bot ──────────────────────────────────────────────────────────────────────
@@ -168,9 +193,11 @@ export const bestColor = (hand) => {
  */
 export function botChoose(u, order, playerId, difficulty, handCounts) {
   const hand = u.hands[playerId];
+  // Stack-aware: under a stack only matching cards are legal; an empty list
+  // means "swallow the pile" (the caller resolves the stack draw).
   const legal = hand
     .map((card, i) => ({ card, i }))
-    .filter(({ card }) => canPlay(card, top(u), u.activeColor));
+    .filter(({ card }) => playableNow(u, card));
   if (legal.length === 0) return { draw: true };
 
   const pickColor = () => bestColor(hand);

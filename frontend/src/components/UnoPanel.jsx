@@ -189,9 +189,13 @@ export default function UnoPanel({ roomId }) {
       <div className="flex items-center justify-center gap-6 py-2">
         <button onClick={myTurn && !state.pendingDraw ? doDraw : undefined}
           className={myTurn && !state.pendingDraw ? "hover:-translate-y-1 transition-transform" : "opacity-80"}
-          title="Draw a card">
+          title={state.stack ? `Draw ${state.stack.count}!` : "Draw a card"}>
           <CardBack size={1} />
-          <span className="block text-center text-[11px] text-gray-500 mt-1">{state.drawPileCount} left</span>
+          <span className="block text-center text-[11px] mt-1">
+            {state.stack && myTurn
+              ? <b className="text-red-400">draw {state.stack.count}!</b>
+              : <span className="text-gray-500">{state.drawPileCount} left</span>}
+          </span>
         </button>
         {state.top && (
           <div className="relative">
@@ -199,6 +203,12 @@ export default function UnoPanel({ roomId }) {
             {/* Active color halo (matters after wilds) */}
             <span className="absolute -inset-2 rounded-2xl -z-10"
               style={{ boxShadow: `0 0 22px 6px ${COLOR_DOT[state.activeColor]}66` }} />
+            {/* Live stack pile-up badge */}
+            {state.stack && (
+              <span className="absolute -top-3 -right-4 z-10 px-2.5 py-1 rounded-full bg-red-600 text-white font-black text-lg animate-pulse shadow-[0_0_14px_rgba(239,68,68,0.8)]">
+                +{state.stack.count}
+              </span>
+            )}
           </div>
         )}
         <div className="flex flex-col items-center text-3xl w-16">
@@ -229,7 +239,11 @@ export default function UnoPanel({ roomId }) {
         <div className="pt-2">
           <div className="flex justify-center" style={{ paddingLeft: 24 }}>
             {hand.map((card, i) => {
-              const playable = myTurn && (card.color === "wild" || card.color === state.activeColor || card.value === state.top?.value);
+              // Stack-aware: while a +2/+4 pile is live, only the same card
+              // type answers it (server enforces; this mirrors for UX).
+              const playable = myTurn && (state.stack
+                ? card.value === state.stack.type
+                : card.color === "wild" || card.color === state.activeColor || card.value === state.top?.value);
               const drawnPending = priv?.pendingDraw === i;
               return (
                 <div key={`${card.color}-${card.value}-${i}`} style={{ marginLeft: i === 0 ? 0 : Math.max(-30, -hand.length * 2 - 14) }}>

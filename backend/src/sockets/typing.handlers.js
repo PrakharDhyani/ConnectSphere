@@ -26,6 +26,9 @@ const typing = createLobbyGame({
       endAt: g.race.endAt,
       progress: g.race.progress,
       finishOrder: g.race.finishOrder,
+      // Full ranking (finishers first, then by distance) for the podium —
+      // the race ends the moment someone wins, so most racers WON'T finish.
+      standings: T.standings(g.race, g.players.map((p) => p.id)),
     };
   },
 
@@ -34,8 +37,7 @@ const typing = createLobbyGame({
       const { g } = ctx;
       const finished = T.applyProgress(g.race, playerId, Number(chars) || 0, Number(errors) || 0);
       if (finished) {
-        const place = g.race.finishOrder.indexOf(playerId) + 1;
-        ctx.notice(`🏁 ${g.players.find((p) => p.id === playerId)?.name} finishes #${place}!`);
+        ctx.notice(`🏁 ${g.players.find((p) => p.id === playerId)?.name} wins the race!`);
         ctx.broadcast();
         if (T.raceOver(g.race, g.players.map((p) => p.id))) ctx.endGame();
       }
@@ -49,8 +51,7 @@ const typing = createLobbyGame({
       const { g } = ctx;
       const finished = T.tickBots(g.race, g.players.filter((p) => p.isBot));
       for (const id of finished) {
-        const place = g.race.finishOrder.indexOf(id) + 1;
-        ctx.notice(`🏁 ${g.players.find((p) => p.id === id)?.name} finishes #${place}!`);
+        ctx.notice(`🏁 ${g.players.find((p) => p.id === id)?.name} wins the race!`);
       }
       if (T.raceOver(g.race, g.players.map((p) => p.id))) {
         ctx.endGame();

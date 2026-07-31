@@ -1844,6 +1844,39 @@ bingo rejected an uncalled daub and a false BINGO). Suite: 187 → **210**.
 #1 — that's what extracting the framework at the right moment (after three
 concrete examples, not before) buys you.
 
+### Round 2 on the new games — clocks, stacking, first-to-finish, PUZZLES
+- **Chess clocks**: host picks a time control in the lobby (1/3/5/10/15 min
+  or clockless); both sides get the same budget; thinking time is deducted
+  ON move, and the framework's AFK deadline doubles as the flag-fall timer —
+  first clock to hit zero loses (`timeout` result), bots included. Needed
+  one framework addition: `lobbyEvents` (host-only settings pre-start) and
+  an `onReset` hook so rematches keep the chosen control.
+- **UNO stacking house rule**: +2 answers +2, +4 answers +4 (`u.stack`
+  accumulates); the victim may ONLY stack the same type or swallow the whole
+  pile. No cross-stacking. Bots stack when they can. The old
+  instant-penalty tests were rewritten for the new semantics.
+- **Typing race**: the FIRST finisher now ends the race for everyone
+  (standings = finishers, then distance covered); solo start = a WPM
+  speed-test with a personal stats card.
+- **Chess puzzles — GENERATED, not curated.** The question was "can we have
+  random daily puzzles?" — answer: generate them. Random sparse positions
+  (edge-biased hunted king) are validated by chess.js and then SEARCHED for
+  a forced mate (forcing-move candidates, full defense verification), so
+  every puzzle ships with a machine-checked proof of solvability. Easy =
+  mate-in-1, medium/hard = forced mate-in-2 (hard adds defenders). The
+  DAILY puzzle seeds the RNG from the date — everyone gets the same one.
+  Generation is chunked async (15 attempts per event-loop turn) so the UI
+  never freezes; typical latency 0.1–1s. Solving verifies every user move
+  keeps the mate forced (`defenseCannotEscape`), replies with a random
+  losing defense, and tracks a per-day streak in localStorage.
+- **Flake fixed**: the typing-bot test could randomly hit the bot's 6%
+  "humanizing micro-pause" on its single tick — tests that touch randomness
+  must either seed it or iterate past it.
+
+**Interview takeaway:** "generate puzzles" beats "find a puzzle API": zero
+external dependencies, offline-friendly, infinite supply — because chess.js
+makes VERIFYING a forced mate cheap, and verified-random beats curated.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a

@@ -9,7 +9,21 @@ import { Chess } from "chess.js";
 import { createLobbyGame } from "./lobbyGame.js";
 import { chooseBotMove, gameResult } from "../games/chessGame.js";
 
-const MOVE_MS = 75_000; // per-move clock; expiry = resignation
+const MOVE_MS = 75_000; // per-move fallback when playing WITHOUT a clock
+// Host-selectable time controls (minutes per player for the whole game; 0 = no clock).
+const TIME_CONTROLS = [0, 1, 3, 5, 10, 15, 30];
+
+const clockKey = (color) => (color === "w" ? "whiteMs" : "blackMs");
+
+// Deduct the elapsed thinking time from the side to move. Returns true if
+// their flag fell (caller must end the game).
+function settleClock(g) {
+  if (g.whiteMs == null) return false;
+  const mover = g._chess.turn();
+  const key = clockKey(mover);
+  g[key] = Math.max(0, g[key] - (Date.now() - g.turnStartedAt));
+  return g[key] <= 0;
+}
 
 function applyResult(g, result) {
   g.result = result.type;
@@ -17,10 +31,26 @@ function applyResult(g, result) {
   g.winnerId = result.winner ? (result.winner === "w" ? g.whiteId : g.blackId) : null;
 }
 
+function timeoutLoss(ctx) {
+  const { g } = ctx;
+  const loser = g._chess.turn();
+  applyResult(g, { type: "timeout", winner: loser === "w" ? "b" : "w" });
+  const name = g.players.find((p) => p.id === (loser === "w" ? g.whiteId : g.blackId))?.name;
+  ctx.notice(`⏰ ${name}'s flag fell — out of time!`);
+  ctx.endGame();
+}
+
 function doMove(ctx, san) {
   const { g } = ctx;
+  // Clock first: if this player's time ran out before the move landed, the
+  // move doesn't count — their flag fell.
+  if (settleClock(g)) {
+    timeoutLoss(ctx);
+    return null;
+  }
   const move = g._chess.move(san);
   if (!move) return null;
+  g.turnStartedAt = Date.now(); // opponent's clock starts now
   g.lastMove = { from: move.from, to: move.to, san: move.san, color: move.color };
   if (move.captured) {
     g.captured[move.color === "w" ? "w" : "b"].push(move.captured);
@@ -50,7 +80,26 @@ const chess = createLobbyGame({
     result: null,
     winnerColor: null,
     winnerId: null,
+    timeCtrlMin: 10, // host-selectable; 0 = play without a clock
+    whiteMs: null,
+    blackMs: null,
+    turnStartedAt: null,
   }),
+
+  // "Play again" keeps the table's chosen time control.
+  onReset(old, fresh) {
+    fresh.timeCtrlMin = old.timeCtrlMin;
+  },
+
+  lobbyEvents: {
+    setTime(ctx, { minutes }, cb) {
+      const m = Number(minutes);
+      if (!TIME_CONTROLS.includes(m)) return cb?.({ error: "Pick a listed time control" });
+      ctx.g.timeCtrlMin = m;
+      ctx.broadcast();
+      cb?.({ ok: true });
+    },
+  },
 
   start(g) {
     // Coin flip for white — fair rematches instead of host always white.
@@ -63,6 +112,10 @@ const chess = createLobbyGame({
     g.result = null;
     g.winnerColor = null;
     g.winnerId = null;
+    // Same budget for both players; whoever's clock hits zero first loses.
+    g.whiteMs = g.timeCtrlMin > 0 ? g.timeCtrlMin * 60_000 : null;
+    g.blackMs = g.timeCtrlMin > 0 ? g.timeCtrlMin * 60_000 : null;
+    g.turnStartedAt = Date.now();
   },
 
   publicState(g) {
@@ -77,6 +130,12 @@ const chess = createLobbyGame({
       winnerId: g.winnerId,
       whiteId: g.whiteId,
       blackId: g.blackId,
+      timeCtrlMin: g.timeCtrlMin,
+      // Clock snapshot: values are exact as of turnStartedAt; the client
+      // subtracts (now - turnStartedAt) from the side to move for display.
+      whiteMs: g.whiteMs,
+      blackMs: g.blackMs,
+      turnStartedAt: g.turnStartedAt,
     };
   },
 
@@ -109,7 +168,13 @@ const chess = createLobbyGame({
   },
 
   afkDeadline(g) {
-    // Bots move on their own timer; only arm the clock for human turns.
+    // With a real clock: the deadline IS the flag fall of the side to move
+    // (applies to bots too — a bot on 0:00 loses like anyone else). Without
+    // a clock: 75s-per-move anti-AFK for humans only.
+    if (g.whiteMs != null && g._chess) {
+      const remaining = g[clockKey(g._chess.turn())];
+      return Date.now() + Math.max(50, remaining);
+    }
     const turnId = g._chess?.turn() === "w" ? g.whiteId : g.blackId;
     const seat = g.players.find((p) => p.id === turnId);
     if (!seat || seat.isBot) return null;
@@ -118,11 +183,8 @@ const chess = createLobbyGame({
 
   onAfkTimeout(ctx) {
     const { g } = ctx;
-    const loser = g._chess.turn();
-    applyResult(g, { type: "timeout", winner: loser === "w" ? "b" : "w" });
-    const name = g.players.find((p) => p.id === (loser === "w" ? g.whiteId : g.blackId))?.name;
-    ctx.notice(`⏰ ${name} ran out of time`);
-    ctx.endGame();
+    if (g.whiteMs != null) settleClock(g); // zero out the loser's display
+    timeoutLoss(ctx);
   },
 
   botTurn(g) {

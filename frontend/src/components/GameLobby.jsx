@@ -15,6 +15,7 @@ const BOT_LEVELS = [
 export default function GameLobby({
   title, emoji, tagline, minPlayers, maxPlayers, allowBots = true,
   lobby, // the useLobbyGame() bundle
+  children, // optional game-specific settings block (e.g. chess time control)
 }) {
   const { me, state, seated, isHost, join, leave, start, addBot, removeBot } = lobby;
   const [error, setError] = useState(null);
@@ -59,6 +60,8 @@ export default function GameLobby({
           {players.length === 0 && <li className="text-sm text-gray-600">Nobody seated yet.</li>}
         </ul>
       </div>
+
+      {children}
 
       {isHost && allowBots && (
         <div className="mt-4 pt-4 border-t border-gray-800 text-left">

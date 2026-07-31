@@ -81,15 +81,88 @@ describe("uno engine", () => {
     expect(U.canPlay({ color: "blue", value: "9" }, topCard, "blue")).toBe(true);
   });
 
-  test("draw2 gives the victim two cards and skips them", () => {
+  test("draw2 opens a stack — the victim must answer, not auto-draw", () => {
     const order = ["a", "b", "c"];
     const u = U.setup(order);
     u.hands.a = [{ color: u.activeColor, value: "draw2" }, { color: "red", value: "3" }];
     const before = u.hands.b.length;
     const res = U.playCard(u, order, "a", 0, null);
     expect(res.ok).toBe(true);
-    expect(u.hands.b.length).toBe(before + 2);
-    expect(order[u.turnIdx]).toBe("c"); // b was skipped
+    expect(res.effects.stacked).toEqual({ type: "draw2", count: 2 });
+    expect(u.hands.b.length).toBe(before); // nothing drawn yet
+    expect(order[u.turnIdx]).toBe("b"); // b is ON TURN, facing the stack
+    expect(u.stack).toEqual({ type: "draw2", count: 2 });
+  });
+
+  test("stacking a +2 on a +2 passes an accumulated +4 along", () => {
+    const order = ["a", "b", "c"];
+    const u = U.setup(order);
+    u.hands.a = [{ color: u.activeColor, value: "draw2" }, { color: "red", value: "3" }];
+    u.hands.b = [{ color: "blue", value: "draw2" }, { color: "red", value: "7" }];
+    U.playCard(u, order, "a", 0, null);
+    const res = U.playCard(u, order, "b", 0, null); // b stacks
+    expect(res.ok).toBe(true);
+    expect(u.stack).toEqual({ type: "draw2", count: 4 });
+    expect(order[u.turnIdx]).toBe("c");
+    // c has no +2 → swallows all 4
+    const before = u.hands.c.length;
+    const resolved = U.resolveStackDraw(u, order, "c");
+    expect(resolved).toEqual({ ok: true, n: 4 });
+    expect(u.hands.c.length).toBe(before + 4);
+    expect(u.stack).toBeNull();
+    expect(order[u.turnIdx]).toBe("a"); // play continues past c
+  });
+
+  test("under a stack, non-matching cards are rejected (no cross-stacking)", () => {
+    const order = ["a", "b"];
+    const u = U.setup(order);
+    u.hands.a = [{ color: u.activeColor, value: "draw2" }, { color: "red", value: "3" }];
+    u.hands.b = [
+      { color: "wild", value: "wild4" }, // same FAMILY but wrong type — rejected
+      { color: u.activeColor, value: "9" },
+      { color: "green", value: "draw2" }, // the only legal answer
+    ];
+    U.playCard(u, order, "a", 0, null);
+    expect(U.playCard(u, order, "b", 0, "red").error).toMatch(/Stack/);
+    expect(U.playCard(u, order, "b", 1, null).error).toMatch(/Stack/);
+    expect(U.playCard(u, order, "b", 2, null).ok).toBe(true);
+    expect(u.stack.count).toBe(4);
+  });
+
+  test("wild4 stacks grow by four and the last wild sets the color", () => {
+    const order = ["a", "b", "c"];
+    const u = U.setup(order);
+    u.hands.a = [{ color: "wild", value: "wild4" }, { color: "red", value: "3" }];
+    u.hands.b = [{ color: "wild", value: "wild4" }, { color: "red", value: "7" }];
+    U.playCard(u, order, "a", 0, "red");
+    U.playCard(u, order, "b", 0, "blue");
+    expect(u.stack).toEqual({ type: "wild4", count: 8 });
+    expect(u.activeColor).toBe("blue");
+    const before = u.hands.c.length;
+    U.resolveStackDraw(u, order, "c");
+    expect(u.hands.c.length).toBe(before + 8);
+  });
+
+  test("playableNow: under a stack only the matching type; otherwise normal rules", () => {
+    const u = U.setup(["a", "b"]);
+    u.stack = { type: "draw2", count: 2 };
+    expect(U.playableNow(u, { color: "green", value: "draw2" })).toBe(true);
+    expect(U.playableNow(u, { color: "wild", value: "wild4" })).toBe(false);
+    expect(U.playableNow(u, { color: u.activeColor, value: "5" })).toBe(false);
+    u.stack = null;
+    expect(U.playableNow(u, { color: u.activeColor, value: "5" })).toBe(true);
+  });
+
+  test("bots answer a stack when they can, swallow it when they can't", () => {
+    const order = ["bot", "x"];
+    const u = U.setup(order);
+    u.stack = { type: "draw2", count: 4 };
+    u.hands.bot = [{ color: "red", value: "draw2" }, { color: "blue", value: "5" }];
+    const canAnswer = U.botChoose(u, order, "bot", "hard", null);
+    expect(canAnswer.cardIdx).toBe(0);
+    u.hands.bot = [{ color: "blue", value: "5" }, { color: "wild", value: "wild4" }];
+    const cannot = U.botChoose(u, order, "bot", "hard", null);
+    expect(cannot.draw).toBe(true);
   });
 
   test("reverse flips direction (and acts as skip for 2 players)", () => {
@@ -179,7 +252,12 @@ describe("typing race", () => {
     const race = T.setup(["bot1"]);
     const bots = [{ id: "bot1", difficulty: "hard" }];
     race.startAt = Date.now() - 90_000; // pretend 90s elapsed
-    T.tickBots(race, bots);
+    // A single tick can randomly hit the bot's humanizing micro-pause (~6%),
+    // so tick a few times — exactly like the real 500ms ticker does.
+    for (let i = 0; i < 10 && !race.progress.bot1.finishedAt; i++) {
+      race.botState.bot1 && (race.botState.bot1.pauseUntil = 0);
+      T.tickBots(race, bots);
+    }
     expect(race.progress.bot1.chars).toBe(race.text.length);
     expect(race.finishOrder).toContain("bot1");
   });
@@ -188,6 +266,18 @@ describe("typing race", () => {
     const race = T.setup(["a", "b"]);
     expect(T.raceOver(race, ["a", "b"], race.endAt + 1)).toBe(true);
     expect(T.raceOver(race, ["a", "b"], race.startAt + 1000)).toBe(false);
+  });
+
+  test("the FIRST finisher ends the race for everyone", () => {
+    const race = T.setup(["a", "b", "c"]);
+    race.startAt = Date.now() - 60_000;
+    T.applyProgress(race, "b", 40, 0);
+    T.applyProgress(race, "c", 80, 0);
+    expect(T.raceOver(race, ["a", "b", "c"])).toBe(false);
+    T.applyProgress(race, "a", race.text.length, 0); // a wins
+    expect(T.raceOver(race, ["a", "b", "c"])).toBe(true);
+    // Standings: winner first, then the rest by distance covered.
+    expect(T.standings(race, ["a", "b", "c"])).toEqual(["a", "c", "b"]);
   });
 });
 
