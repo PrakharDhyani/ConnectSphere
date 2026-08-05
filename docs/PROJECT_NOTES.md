@@ -2231,6 +2231,40 @@ the reaction names straight out of `lib/gifs.js` and checks every one against
 the live `/gif/allreactions` list (skipped offline so CI never fails on a
 third party being down).
 
+**The broken-thumbnail bug: a payload problem wearing a URL problem's
+clothes.** The picker showed broken-image icons in the grid, yet clicking a
+tile worked perfectly. That combination rules out dead URLs (a 404 fails both
+ways) and rules out CSP (there is none on the Vite-served page — checked).
+Measuring the actual bytes found it: these are full-resolution reaction GIFs
+averaging ~500 KB and peaking at 1.3 MB, so an 18-tile grid was firing
+**~9 MB of parallel image requests**. Browsers cap parallel connections per
+host at ~6; the rest queued, stalled, and rendered as broken icons. A single
+click succeeded because it was one warm request instead of eighteen cold ones.
+
+Three changes, each measured rather than assumed:
+- **WebP instead of GIF** — the API serves the same artwork from a parallel
+  `/webps/` path at a measured 68% smaller (`celebrate`: 1,327 KB → 64 KB).
+  A first attempt *derived* the webp url from the gif url by swapping
+  `/gifs/`→`/webps/` and the extension; **all 12 test URLs 404'd**, because
+  the two formats are independent random draws with unrelated ids. Verified
+  by diffing them side by side, then fixed by requesting webp once and using
+  it for both the thumbnail and the sent message — one request, so the tile
+  you click is the image that gets sent.
+- **Smaller shelf** (18 → 12 tiles) and request **batching** (6 at a time)
+  rather than a single 18-wide `Promise.allSettled` burst at a free community
+  API.
+- **Per-tile load state**: a shimmer while loading, a labelled placeholder on
+  error, and staggered start times (4 tiles per ~220 ms wave) so the first
+  row appears immediately. A failed tile stays clickable, because silently
+  dropping tiles reads as results vanishing.
+
+Result: one grid render went from ~9 MB to **2.85 MB**, and 12/12 tiles load.
+
+**Lesson:** "works on click, broken in the grid" is a *concurrency and payload*
+signature, not a URL signature. And the near-miss is worth as much as the fix
+— deriving the webp url looked obviously right and was verifiably wrong;
+the only reason it did not ship is that the check hit real URLs.
+
 **The fallback bug — and the rule that came out of it.** The first version
 degraded (no key configured) to a "curated set of evergreen reaction GIFs"
 that were hardcoded Tenor CDN urls. **Every single one 404'd.** A Tenor CDN

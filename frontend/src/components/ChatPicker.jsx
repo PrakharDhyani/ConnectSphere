@@ -209,6 +209,59 @@ function EmojiTab({ onPick }) {
 
 // ── GIFs ───────────────────────────────────────────────────────────────────
 
+/**
+ * One GIF thumbnail. Owns its own load state so a slow or failed image shows a
+ * shimmer / a labelled placeholder instead of the browser's broken-image icon
+ * — which is what the whole grid looked like when these were full-size GIFs.
+ * A tile that errors stays clickable: the full image often still loads fine
+ * on its own, and silently removing tiles would look like results vanishing.
+ */
+function GifTile({ gif, onPick, index = 0 }) {
+  const [state, setState] = useState("loading"); // loading | ok | error
+  // Stagger when each tile starts fetching. Browsers cap parallel connections
+  // per host (~6), so releasing them in waves means the first rows appear
+  // quickly instead of every tile crawling at once.
+  const [armed, setArmed] = useState(index < 4);
+
+  useEffect(() => {
+    if (armed) return;
+    const t = setTimeout(() => setArmed(true), Math.floor(index / 4) * 220);
+    return () => clearTimeout(t);
+  }, [armed, index]);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onPick(gif)}
+      title={gif.name}
+      className="mb-1.5 w-full block rounded-lg overflow-hidden border border-transparent hover:border-brand-500 transition-colors relative"
+    >
+      {state !== "ok" && (
+        <div
+          className={`w-full h-24 flex items-center justify-center bg-gray-800/60 ${
+            state === "loading" ? "animate-pulse" : ""
+          }`}
+        >
+          <span className="text-[10px] text-gray-500 px-1 truncate">
+            {state === "loading" ? "…" : gif.name}
+          </span>
+        </div>
+      )}
+      {armed && (
+        <img
+          src={gif.previewUrl}
+          alt={gif.name}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setState("ok")}
+          onError={() => setState("error")}
+          className={`w-full block ${state === "ok" ? "" : "hidden"}`}
+        />
+      )}
+    </button>
+  );
+}
+
 function GifTab({ onPick }) {
   const [query, setQuery] = useState("");
   const [gifs, setGifs] = useState([]);
@@ -293,15 +346,8 @@ function GifTab({ onPick }) {
           // Masonry-ish two columns so GIFs of different aspect ratios pack
           // tightly instead of leaving gaps in a rigid grid.
           <div className="columns-2 gap-1.5 [column-fill:_balance]">
-            {gifs.map((g) => (
-              <button
-                key={g.id}
-                type="button"
-                onClick={() => onPick(g)}
-                className="mb-1.5 w-full block rounded-lg overflow-hidden border border-transparent hover:border-brand-500 transition-colors"
-              >
-                <img src={g.previewUrl} alt={g.name} loading="lazy" className="w-full block" />
-              </button>
+            {gifs.map((g, i) => (
+              <GifTile key={g.id} gif={g} onPick={onPick} index={i} />
             ))}
           </div>
         )}

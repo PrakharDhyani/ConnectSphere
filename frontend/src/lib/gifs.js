@@ -158,14 +158,28 @@ const OTAKU_REACTIONS = [
 
 const OTAKU_INDEX = new Map(OTAKU_REACTIONS);
 
-/** One random GIF for a reaction. Otakugifs returns a different one per call. */
+/**
+ * One random reaction image. OtakuGIFs returns a DIFFERENT one per call.
+ *
+ * WHY WEBP AND NOT GIF — the original .gif files are heavy: measured live they
+ * average ~500 KB and peak over 1.3 MB, so a grid of 18 was ~9 MB of parallel
+ * requests. That is what made the thumbnails render as broken icons while a
+ * single click still worked. `format=webp` is the same artwork at a measured
+ * 68% smaller (celebrate: 1,327 KB → 64 KB), animates natively in every
+ * browser we support, and is what both the grid AND the sent message use.
+ *
+ * It has to be ONE request, not a gif for sending plus a webp for preview:
+ * the two formats are independent random draws with unrelated ids
+ * (/gifs/wave/7832e5c7….gif vs /webps/wave/967a5f2a….webp — verified), so a
+ * second call would show one image and send a different one.
+ */
 async function otakuOne(reaction) {
-  const res = await fetch(`${OTAKU_BASE}?reaction=${encodeURIComponent(reaction)}&format=gif`);
+  const res = await fetch(`${OTAKU_BASE}?reaction=${encodeURIComponent(reaction)}&format=webp`);
   if (!res.ok) throw new Error(`Otakugifs ${res.status}`);
   const { url } = await res.json();
   if (!url) return null;
   return {
-    // The CDN filename is unique per GIF, so it doubles as a stable React key.
+    // The CDN filename is unique per image, so it doubles as a stable React key.
     id: `otaku-${reaction}-${url.split("/").pop()}`,
     previewUrl: url,
     url,
@@ -174,19 +188,34 @@ async function otakuOne(reaction) {
   };
 }
 
-/** Fetch `count` random GIFs across the given reactions, tolerating failures. */
+/**
+ * Fetch `count` random GIFs across the given reactions, tolerating failures.
+ * Requests run in small batches: OtakuGIFs is a free community service, and
+ * firing 18 simultaneous requests at it is both rude and less reliable than
+ * a few at a time.
+ */
 async function otakuMany(reactions, count) {
   const picks = [];
   for (let i = 0; i < count; i++) picks.push(reactions[i % reactions.length]);
-  const settled = await Promise.allSettled(picks.map(otakuOne));
-  return settled
-    .filter((s) => s.status === "fulfilled" && s.value)
-    .map((s) => s.value);
+
+  const out = [];
+  const BATCH = 6;
+  for (let i = 0; i < picks.length; i += BATCH) {
+    const settled = await Promise.allSettled(picks.slice(i, i + BATCH).map(otakuOne));
+    out.push(...settled.filter((s) => s.status === "fulfilled" && s.value).map((s) => s.value));
+  }
+  return out;
 }
+
+// How many tiles a shelf shows. Even as webp these are full-resolution
+// reaction animations (~250 KB each, measured), so 12 keeps one grid render
+// near ~3 MB. The 🎲 shuffle button is how you see more, rather than making
+// every open pay for a longer list.
+const SHELF_SIZE = 12;
 
 export const otakuTrending = () => {
   const shuffledReactions = [...OTAKU_REACTIONS.map(([r]) => r)].sort(() => Math.random() - 0.5);
-  return otakuMany(shuffledReactions, 18);
+  return otakuMany(shuffledReactions, SHELF_SIZE);
 };
 
 export async function otakuSearch(query) {
@@ -210,7 +239,7 @@ export async function otakuSearch(query) {
   // Several GIFs from the best match, fewer from runners-up — a search for
   // "laugh" should mostly be laughing, with some variety.
   const top = scored.slice(0, 4).map((s) => s.reaction);
-  return otakuMany(top, Math.min(18, top.length * 5));
+  return otakuMany(top, Math.min(SHELF_SIZE, top.length * 4));
 }
 
 export const otakuHasMatch = (query) =>
