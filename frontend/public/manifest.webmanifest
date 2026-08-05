@@ -1,0 +1,17 @@
+{
+  "name": "Groot",
+  "short_name": "Groot",
+  "description": "Hang out with your people — calls, games, whiteboard, watch parties.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030712",
+  "theme_color": "#8b5cf6",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

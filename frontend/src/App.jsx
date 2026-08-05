@@ -3,6 +3,7 @@ import { Routes, Route, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { bootstrapAuth } from "@/lib/api.js";
 import { connectSocket, getSocket } from "@/lib/socket.js";
+import { registerServiceWorker } from "@/lib/push.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useNotify } from "@/stores/notify.store.js";
 import ProtectedRoute from "@/components/ProtectedRoute.jsx";
@@ -34,6 +35,9 @@ export default function App() {
   // /refresh whether the httpOnly cookie session is still alive.
   useEffect(() => {
     bootstrapAuth();
+    // Keep sw.js fresh for browsers that already opted into push; costs nothing
+    // for the rest (registration without a subscription shows no prompts).
+    registerServiceWorker();
   }, []);
 
   // App-wide socket for friend events — so a friend request / invite pops a

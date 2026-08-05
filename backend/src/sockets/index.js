@@ -23,6 +23,8 @@ import { registerChessHandlers } from "./chess.handlers.js";
 import { registerUnoHandlers } from "./uno.handlers.js";
 import { registerTypingHandlers } from "./typing.handlers.js";
 import { registerBingoHandlers } from "./bingo.handlers.js";
+import { registerPollHandlers } from "./poll.handlers.js";
+import { registerCaptionHandlers } from "./caption.handlers.js";
 
 let io;
 
@@ -55,6 +57,8 @@ export function initSocket(httpServer) {
     registerUnoHandlers(io, socket);
     registerTypingHandlers(io, socket);
     registerBingoHandlers(io, socket);
+    registerPollHandlers(io, socket);
+    registerCaptionHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {
       logger.info(`Socket disconnected: ${socket.id} — reason: ${reason}`);

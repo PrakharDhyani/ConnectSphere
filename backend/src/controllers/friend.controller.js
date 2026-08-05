@@ -4,6 +4,7 @@ import { Room } from "../models/Room.js";
 import { Friendship } from "../models/Friendship.js";
 import { isRoomMember } from "../utils/roomAccess.js";
 import { io } from "../sockets/index.js";
+import { sendPushToUsers } from "../services/push.service.js";
 
 const publicUser = (u) => ({ id: u._id, name: u.name, avatarUrl: u.avatarUrl });
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -221,6 +222,17 @@ export async function inviteToRoom(req, res, next) {
       from: publicUser(me),
       room: { id: room._id, name: room.name, code: room.code },
     });
+
+    // No open tab to toast? Web Push reaches their device instead (no await —
+    // the invite response shouldn't wait on a push relay round-trip).
+    if (!(await isOnline(friendId))) {
+      sendPushToUsers([friendId], {
+        title: `${me.name} invited you to “${room.name}”`,
+        body: "Tap to join the hangout 🎉",
+        url: `/join/${room.code}`,
+        tag: `invite:${room._id}`,
+      }).catch(() => {});
+    }
 
     res.json({ success: true, message: "Invite sent" });
   } catch (error) {

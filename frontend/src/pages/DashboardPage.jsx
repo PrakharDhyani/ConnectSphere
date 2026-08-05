@@ -9,6 +9,7 @@ import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
 import Logo from "@/components/Logo.jsx";
 import Aurora from "@/components/Aurora.jsx";
+import PushToggle from "@/components/PushToggle.jsx";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -92,6 +93,7 @@ export default function DashboardPage() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
         <Logo />
         <div className="flex items-center gap-4">
+          <PushToggle />
           <Link to="/friends" className="relative text-sm text-gray-400 hover:text-brand-400">
             👥 Friends
             {pendingCount > 0 && (

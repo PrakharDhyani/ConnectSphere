@@ -20,6 +20,8 @@ import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import roomRoutes from "./routes/room.routes.js";
 import friendRoutes from "./routes/friend.routes.js";
+import pushRoutes from "./routes/push.routes.js";
+import translateRoutes from "./routes/translate.routes.js";
 
 // ── Error handler ──
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -88,6 +90,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/rooms", roomRoutes);
 app.use("/api/friends", friendRoutes);
+app.use("/api/push", pushRoutes);
+app.use("/api/translate", translateRoutes);
 
 // ── 404 & error handling (always last) ──
 app.use(notFound);
