@@ -157,6 +157,40 @@ describe("chat attachments over sockets", () => {
     expect(res.message.attachments).toHaveLength(0); // silently dropped, text kept
   });
 
+  it("accepts OtakuGIFs and Klipy CDN gifs", async () => {
+    const { s, room } = await soloRoom("ProviderGifs");
+    for (const url of [
+      "https://cdn.otakugifs.xyz/gifs/laugh/abc123.gif",
+      "https://cdn.klipy.com/gif/xyz.gif",   // subdomain suffix rule
+      "https://media.klipy.com/a/b.gif",
+    ]) {
+      const res = await ack(s, "message:send", {
+        roomId: room.id, text: "", attachments: [{ kind: "gif", url }],
+      });
+      expect(res.ok).toBe(true);
+      expect(res.message.attachments).toHaveLength(1);
+    }
+  });
+
+  // A suffix rule is only safe if it anchors on a dot — "evilklipy.com" and
+  // "klipy.com.evil.net" must both lose.
+  it("cannot be fooled by lookalike domains", async () => {
+    const { s, room } = await soloRoom("Lookalike");
+    for (const url of [
+      "https://evilklipy.com/x.gif",           // suffix without the dot
+      "https://klipy.com.evil.net/x.gif",      // domain as a prefix
+      "https://notklipy.com/x.gif",
+      "https://cdn.otakugifs.xyz.evil.com/x.gif",
+      "http://cdn.klipy.com/x.gif",            // plain http
+    ]) {
+      const res = await ack(s, "message:send", {
+        roomId: room.id, text: "hmm", attachments: [{ kind: "gif", url }],
+      });
+      expect(res.ok).toBe(true);
+      expect(res.message.attachments).toHaveLength(0);
+    }
+  });
+
   it("accepts a Tenor gif but rejects a gif from anywhere else", async () => {
     const { s, room } = await soloRoom("GifSender");
     const good = await ack(s, "message:send", {
@@ -202,6 +236,33 @@ describe("chat attachments over sockets", () => {
     expect([...frontendIds].filter((id) => !backendIds.has(id))).toEqual([]); // frontend-only → would be rejected
     expect([...backendIds].filter((id) => !frontendIds.has(id))).toEqual([]); // backend-only → dead entry
   });
+
+  // The frontend's OtakuGIFs reaction names must be real upstream categories,
+  // or a search silently returns nothing (this exact bug shipped once: "think"
+  // is a Gifukai action, not an OtakuGIFs one). Offline-safe: skipped when the
+  // network is unavailable so CI never fails on a third party being down.
+  it("OtakuGIFs reaction names are all real upstream categories", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(
+      new URL("../../frontend/src/lib/gifs.js", import.meta.url),
+      "utf8"
+    );
+    const block = /const OTAKU_REACTIONS = \[([\s\S]*?)\n\];/.exec(src)?.[1] || "";
+    const names = [...block.matchAll(/\["([^"]+)",/g)].map((m) => m[1]);
+    expect(names.length).toBeGreaterThan(20);
+
+    let upstream;
+    try {
+      const res = await fetch("https://api.otakugifs.xyz/gif/allreactions", {
+        signal: AbortSignal.timeout(8000),
+      });
+      upstream = new Set((await res.json()).reactions);
+    } catch {
+      console.warn("OtakuGIFs unreachable — skipping upstream name check");
+      return;
+    }
+    expect(names.filter((n) => !upstream.has(n))).toEqual([]);
+  }, 20000);
 
   it("accepts a built-in reaction GIF by id and stores NO url", async () => {
     const { s, room } = await soloRoom("LocalGif");

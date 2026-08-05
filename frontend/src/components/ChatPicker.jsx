@@ -6,11 +6,11 @@ import {
   pushRecentEmoji,
 } from "@/lib/emoji.js";
 import {
-  gifSearchEnabled,
+  klipyEnabled,
   searchGifs,
   trendingGifs,
-  fallbackSearch,
   fallbackTrending,
+  providerLabel,
 } from "@/lib/gifs.js";
 import { STICKERS } from "@/components/stickers/Stickers.jsx";
 
@@ -227,35 +227,25 @@ function GifTab({ onPick }) {
     setError(null);
     setNoMatch(false);
 
+    // lib/gifs.js already cascades Klipy → OtakuGIFs → built-ins internally and
+    // never throws, so this only has to handle "came back empty".
     const run = async () => {
       const q = query.trim();
       try {
-        if (!gifSearchEnabled()) {
-          if (cancelled) return;
-          const hits = q ? fallbackSearch(q) : fallbackTrending();
-          // Never leave the user staring at an empty panel: if their term
-          // matched nothing, say so AND still show something pickable.
-          if (q && hits.length === 0) {
-            setNoMatch(true);
-            setGifs(fallbackTrending());
-          } else {
-            setGifs(hits);
-          }
-          return;
-        }
         const results = q ? await searchGifs(q) : await trendingGifs();
         if (cancelled) return;
         if (results.length === 0) {
+          // Never leave the user staring at an empty panel: say nothing
+          // matched AND still show something pickable.
           setNoMatch(true);
-          setGifs(q ? fallbackSearch(q).length ? fallbackSearch(q) : fallbackTrending() : fallbackTrending());
+          setGifs(fallbackTrending());
         } else {
           setGifs(results);
         }
       } catch {
         if (!cancelled) {
-          setError("Couldn't reach Tenor");
-          const hits = q ? fallbackSearch(q) : fallbackTrending();
-          setGifs(hits.length ? hits : fallbackTrending());
+          setError("GIF service unreachable");
+          setGifs(fallbackTrending());
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -269,15 +259,13 @@ function GifTab({ onPick }) {
     };
   }, [query, nonce]);
 
-  const usingBuiltins = gifs.some((g) => g.local);
-
   return (
     <div>
       <div className="p-2 pb-1 flex gap-1.5">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={gifSearchEnabled() ? "Search Tenor…" : "Search reactions…"}
+          placeholder={klipyEnabled() ? "Search GIFs…" : "Search reactions…"}
           className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-gray-950 border border-gray-700 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500"
         />
         <button
@@ -320,11 +308,7 @@ function GifTab({ onPick }) {
       </div>
 
       <p className="px-2.5 py-1 border-t border-gray-800 text-[10px] text-gray-600">
-        {error
-          ? `⚠️ ${error} — showing built-ins`
-          : gifSearchEnabled() && !usingBuiltins
-            ? "Powered by Tenor"
-            : "Built-in reactions · add VITE_TENOR_KEY for full GIF search"}
+        {error ? `⚠️ ${error} — showing built-ins` : providerLabel(gifs)}
       </p>
     </div>
   );

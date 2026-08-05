@@ -2161,7 +2161,7 @@ travel through the *client*, so `message:send` treats them as hostile input
 (`sanitizeAttachments`): uploads must have an origin matching our own
 `S3_ENDPOINT`/`S3_PUBLIC_URL` — otherwise anyone could paste a third-party
 URL and use the room as a link-laundering surface; GIFs must be https on a
-Tenor CDN host; stickers carry no URL at all (just a registry id, since the
+known provider CDN host; stickers carry no URL at all (just a registry id, since the
 art is vector code shipped with the client). Anything unrecognised is
 **dropped silently while the text is kept** — a hostile attachment shouldn't
 cost you your sentence. Live-verified: a `https://evil.example.com/x.png`
@@ -2186,11 +2186,50 @@ localStorage "Recent" tray. Bonus: **jumbomoji** — a message that is only
 emoji (≤3 graphemes) renders at 4xl with no bubble. Counting needs
 `Intl.Segmenter`, because `"👨‍👩‍👧".length` is 8, not 1.
 
-**GIFs: Tenor over Giphy.** Giphy's free key is explicitly development-only
-with production behind a paid plan; Tenor's free tier permits real use. The
-key is *meant* to be public (it ships in the bundle) so it lives in
-`VITE_TENOR_KEY`. Real GIFs are never re-hosted: we store the Tenor CDN url,
-so our storage bill for GIFs stays exactly zero.
+**GIFs — and the provider landscape collapsing mid-build.** The first pass
+chose Tenor over Giphy (Giphy's free key is development-only, production is
+paid and approval-gated). Then a check of the actual current state found the
+bigger problem: **Google is discontinuing the Tenor API on 30 June 2026 and
+stopped issuing new keys on 13 Jan 2026** — the chosen provider was not just
+risky, it was already impossible to sign up for. Verified live, not from
+memory: Tenor's anonymous v1 endpoint returns 401, Giphy's old public beta
+key returns 403, and `api.waifu.pics` no longer resolves at all.
+
+So the GIF source became **three layers, best-available-wins**, each
+degrading into the next so the picker is never empty and never shows a broken
+image:
+
+1. **KLIPY** (`VITE_KLIPY_KEY`, optional) — full free-text search. Founded by
+   ex-Tenor engineers with a near-identical API, free tier, no credit card,
+   ads explicitly optional. WhatsApp migrated to it; Bluesky is following. It
+   is the migration path the ecosystem actually took.
+2. **OtakuGIFs** — **no key, no signup**, ~46 mapped reaction categories out
+   of 70 upstream. This is what makes the feature work the moment you clone
+   the repo, which the built-ins alone could not.
+3. **Built-in SVG cards** — 24 generated animated reactions, no network.
+
+Real GIFs are never re-hosted: the message stores the provider's CDN url, so
+our storage bill for GIFs stays exactly zero.
+
+*Two things this pass got right by refusing to guess:*
+- The Klipy response parser **walks** the `files` object for the first
+  plausible image url instead of hard-coding bucket names, because their docs
+  host blocks crawlers and I could not verify the schema. Unknown shape → the
+  item is skipped, never rendered broken.
+- The backend GIF host whitelist mixes **verified exact hosts**
+  (`cdn.otakugifs.xyz`, resolved live) with a **registrable-domain suffix
+  rule** for Klipy, whose CDN subdomain is unknowable without a production
+  key — `cdn.klipy.com` and `media.klipy.com` do not currently resolve, so
+  listing either as a literal would have been another invented URL. The
+  suffix match anchors on a dot, and tests prove `evilklipy.com`,
+  `klipy.com.evil.net` and plain-http variants are all rejected.
+
+*And one bug the verification caught before shipping:* the reaction map
+included `think`, which is a **Gifukai** action, not an OtakuGIFs one —
+searching "thinking" would have silently returned nothing. A test now reads
+the reaction names straight out of `lib/gifs.js` and checks every one against
+the live `/gif/allreactions` list (skipped offline so CI never fails on a
+third party being down).
 
 **The fallback bug — and the rule that came out of it.** The first version
 degraded (no key configured) to a "curated set of evergreen reaction GIFs"
@@ -2207,12 +2246,13 @@ The fix wasn't better urls — it was removing the external dependency from the
 fallback path entirely. `lib/localGifs.js` generates **24 animated reaction
 cards as inline SVG data URIs**: bouncing/pulsing emoji, a confetti rain, and
 a typing-dots loop, each a few hundred bytes, animated with SMIL, impossible
-to 404. (Checked first whether any keyless GIF API still exists — Tenor's v1
-anonymous endpoint 401s, Giphy's old public beta key 403s. None does.)
-Three behaviours were added at the same time, because "no results" was the
-actual complaint: the shelf **shuffles** on every open, a 🎲 button reshuffles
-on demand, and a search that matches nothing shows *"nothing for X — here are
-some favourites"* over a full shelf rather than an empty box.
+to 404. Three behaviours were added at the same time, because "no results"
+was the actual complaint: the shelf **shuffles** on every open, a 🎲 button
+reshuffles on demand, and a search that matches nothing shows *"nothing for
+X — here are some favourites"* over a full shelf rather than an empty box.
+(The keyless OtakuGIFs layer above later slotted in *between* real search and
+these cards, so the built-ins are now the third line of defence rather than
+the second.)
 
 *Storage/security note:* built-ins are persisted as `gifId` only, never the
 data URI. Storing client-supplied SVG markup would be an XSS foothold — the
@@ -2337,6 +2377,6 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | TURN server (WebRTC NAT traversal) | Twilio TURN | Self-hosted **coturn**, or Metered.ca free tier |
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
-| GIF search (chat) | Giphy paid production plan | **Tenor** free tier (`VITE_TENOR_KEY`); with no key at all, 24 **self-generated animated SVG** reaction cards (`lib/localGifs.js`) — no network, no key, nothing to 404. Real GIFs are never re-hosted, so storage cost is zero |
+| GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-07-31 (rich chat pass: emoji picker with search, Tenor GIFs, animated stickers, and file/image/video uploads to MinIO — 251 tests green)*
+*Last updated: 2026-08-05 (rich chat pass: emoji picker with search, three-layer GIF sourcing — KLIPY → OtakuGIFs → built-in SVG cards after Tenor's API shutdown — animated stickers, and file/image/video uploads to MinIO — 258 tests green)*

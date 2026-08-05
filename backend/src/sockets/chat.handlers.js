@@ -96,7 +96,30 @@ const slowModeLast = new Map();
 //   · stickers carry no URL at all (the art is vector code on the client), so
 //     only a short id is kept.
 const STICKER_IDS = new Set(["love", "laugh", "fire", "kiss", "angry", "gunshot"]);
-const GIF_HOSTS = new Set(["media.tenor.com", "c.tenor.com", "tenor.com"]);
+
+/**
+ * GIF provider CDNs we will store a link to.
+ *
+ * Exact hosts where they are KNOWN (verified by resolving them), plus a
+ * registrable-domain suffix rule for providers whose CDN subdomain we cannot
+ * confirm without a production key. Guessing a literal hostname is how the
+ * first version of this feature shipped dead URLs — a suffix rule is honest
+ * about the uncertainty while still refusing arbitrary third-party hosts.
+ *
+ * Tenor stays listed so messages sent before its shutdown (30 Jun 2026) keep
+ * rendering; new GIFs come from Klipy (keyed) or OtakuGIFs (keyless).
+ */
+const GIF_HOSTS = new Set([
+  "cdn.otakugifs.xyz",                            // verified live
+  "media.tenor.com", "c.tenor.com", "tenor.com",  // legacy
+]);
+// Any subdomain of these — the provider owns the whole domain, and their CDN
+// hostname isn't publicly documented.
+const GIF_HOST_SUFFIXES = ["klipy.com", "otakugifs.xyz"];
+
+const isAllowedGifHost = (hostname) =>
+  GIF_HOSTS.has(hostname) ||
+  GIF_HOST_SUFFIXES.some((d) => hostname === d || hostname.endsWith(`.${d}`));
 const UPLOAD_KINDS = new Set(["image", "video", "audio", "file"]);
 const MAX_ATTACHMENTS = 10;
 
@@ -147,7 +170,7 @@ function sanitizeAttachments(raw) {
     try { url = new URL(String(a.url)); } catch { continue; }
 
     if (a.kind === "gif") {
-      if (url.protocol !== "https:" || !GIF_HOSTS.has(url.hostname)) continue;
+      if (url.protocol !== "https:" || !isAllowedGifHost(url.hostname)) continue;
       out.push({
         kind: "gif",
         url: url.href.slice(0, 2000),
