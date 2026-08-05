@@ -1984,6 +1984,277 @@ the dev-server log held the trigger. The deeper lesson is that *reconnect is a
 state transition your app must handle* — anything the server stores per-socket
 (room membership, subscriptions) has to be re-established on every connect.
 
+### Retention & inclusion pass — push notifications, polls, live captions + translation, face filters
+Four features in one pass, all riding rails that already existed.
+
+**Web Push — "a friend started Ludo in your room", even with the tab closed.**
+- *Options:* FCM SDK (ties you to Firebase), OneSignal (free tier, third-party
+  script + data sharing), or the raw **Web Push standard with VAPID** — keys
+  are just a locally generated keypair (`npx web-push generate-vapid-keys`),
+  the browser vendors run the relay servers, $0 forever. We chose raw VAPID.
+- *What we did:* `PushSubscription` model (endpoint = natural unique key, so
+  re-subscribing upserts), `push.service.js` (VAPID-config check with the same
+  graceful-degradation convention as S3/OAuth; 404/410 responses auto-prune
+  dead subscriptions), `/api/push` routes, `public/sw.js` (service worker:
+  push → notification, click → focus-or-open the room), and a header bell
+  (`PushToggle`) that deliberately does NOT auto-prompt — permission dialogs
+  users didn't ask for get blocked forever.
+- *The trigger* hooks the existing `room:announce` event: on any activity
+  start, the server pushes to the actor's **friends** who are **room members**
+  but have **no socket in the room** (everyone in the room already got the
+  toast). Throttled to one push per room+activity per minute — toasts are
+  cheap, phone buzzes are not. The friend-invite flow also falls back to push
+  when the recipient has no live socket (`isOnline()` already existed).
+- *Challenge:* the SW suppresses the notification if a focused tab is already
+  on the target page — without that check you get a system banner for a thing
+  you're literally looking at.
+
+**Polls — "what do we do next?", one socket event, used every session.**
+- *Options:* persist in Mongo (overkill — a poll that outlives the hangout is
+  worthless), reuse the seat-based `lobbyGame` framework (wrong shape — polls
+  want ALL room members, no seats/host), or a tiny hand-rolled handler like
+  whiteboard's. Hand-rolled won: ~120 lines, in-memory `Map<roomId, poll>`,
+  one poll per room at a time.
+- *Semantics:* anyone can open one when none is running; tap to vote, tap the
+  same option to retract; only the creator (or the optional 1–5 min timer)
+  closes it; results stay up until the next poll replaces them. Votes are
+  public (names on hover) — it's a hangout, not an election.
+- Added `"poll"` to `ANNOUNCE_ACTIVITIES` → the tap-to-join toast came free.
+  UI is a card at the top of chat with live-animating gradient result bars.
+- *Tested* in `sockets.test.js`: full create→vote→retract→close cycle,
+  duplicate-poll rejection, creator-only close, non-member rejection.
+
+**Live captions + translation — the "include my grandmother" feature.**
+- *The architectural fact that decides everything:* our mediasoup SFU forwards
+  **encrypted** RTP — the server never has decodable audio, so server-side
+  transcription would need a PlainTransport tap + an STT model (real infra,
+  real money). Instead each speaker's own browser transcribes their mic with
+  the **Web Speech API** and relays text via a new `caption:say` → `caption:new`
+  socket pair (transient, rate-limited, nothing stored — exactly like `typing`).
+- *Trade-offs accepted:* recognition is Chromium-only (Firefox users still SEE
+  captions, they can't produce them) and Chrome's recognizer stops on silence —
+  the hook restarts it in `onend` until the user actually turns CC off.
+- *Translation:* viewer picks a target language; final lines (never interims —
+  they change too fast to be worth a round-trip) go through `POST /api/translate`,
+  a proxy to **LibreTranslate** — free, self-hosted MT added to docker-compose
+  (`LT_LOAD_ONLY` keeps it to the 10 languages the UI offers). Env var absent →
+  501 → captions simply stay untranslated. Client caches translations and only
+  overwrites a caption line if it still shows the same utterance (async race).
+- UI: subtitle strip fixed bottom-center so captions survive tab switches
+  (voice-while-gaming is exactly when you can't watch the chat pane); CC
+  controls live in both the call row and the floating VoiceBar.
+
+**Face filters — Snapchat energy, fully on-device.**
+- *Options:* face-api.js (abandoned), TF.js facemesh (older), or **MediaPipe
+  FaceLandmarker** (`@mediapipe/tasks-vision`) — actively maintained, 478
+  landmarks, WASM/GPU, free, on-device. Chose MediaPipe; the ~3 MB model +
+  WASM lazy-load from CDNs the first time a filter is picked, so join-call
+  latency is untouched (version pinned to match package.json exactly — wasm
+  and JS API ship as a pair).
+- *Pipeline:* raw camera track → hidden `<video>` → canvas rAF loop (draw
+  frame, `detectForVideo`, draw overlays anchored/rotated/scaled by landmarks)
+  → `canvas.captureStream(30)` → **`producer.replaceTrack()`**. The same
+  canvas→captureStream trick the recorder already proved; replaceTrack means
+  switching filters never renegotiates the call. "None" swaps the raw track
+  back and tears the pipeline down (no idle canvas burning CPU).
+- Five filters, zero image assets: vector sunglasses/moustache/dog (canvas
+  bezier art with gradients, glints, whiskers) and emoji-composited heart-eyes
+  and crown (`fillText` scales emoji crisply; hearts pulse on a sine, sparkles
+  orbit). All rotate with head tilt via the eye-line angle; two faces
+  supported.
+- *Subtlety:* `localStream` state is switched to the filtered stream so your
+  self-tile AND the recorder show exactly what the room sees, but
+  `localStreamRef` keeps pointing at the raw stream — cam/mic toggles and
+  cleanup own the real hardware track. The pipeline must never stop the raw
+  track it doesn't own.
+
+**Interview takeaway:** all four features were cheap because each rode an
+existing chokepoint: push rode `room:announce` + `isOnline()`, polls rode the
+socket/room conventions and the announce toast, captions rode the transient-
+relay pattern (`typing`) because the SFU's encryption forced client-side STT,
+and filters rode `replaceTrack` + the recorder's proven canvas pipeline.
+Feature cost is mostly determined by how well the last ten features were
+factored.
+
+### Meetings-grade pass — background effects replace face filters, Slack-style chat
+Two changes with one theme: the room should feel professional-first, playful
+on top (the platform pivot in reverse order of the games work).
+
+**Background effects (blur / virtual backgrounds), Teams/Meet style.**
+- *Why the face filters went:* Snapchat overlays read as a toy in the room
+  view we now position as "hang out AND take a call in". Background privacy
+  is the feature people actually expect from a video call in 2026. The face
+  filter code is preserved in git history if a "party mode" ever wants it.
+- *Options for segmentation:* TF.js BodyPix (old, slow), WebRTC
+  `backgroundBlur` constraint (barely shipped anywhere), or **MediaPipe
+  ImageSegmenter** with the selfie model (`@mediapipe/tasks-vision`) — same
+  library the face filters already proved, ~1 MB model, WASM/GPU, on-device.
+  Obvious continuity win: `lib/faceFilter.js` → `lib/bgFilter.js` keeps the
+  identical architecture (hidden video → canvas rAF → `captureStream` →
+  `producer.replaceTrack`), only the per-frame math changed.
+- *Compositing:* per frame, the segmenter yields a person-confidence mask →
+  drawn as soft alpha into a mask canvas (values <0.15 dropped, >0.85 solid,
+  linear ramp between — kills mask flicker), person = video ∩ mask via
+  `destination-in` with a 1.5px mask blur for feathered edges, over a
+  background layer: CSS-filter-blurred video frame (drawn over-scaled so the
+  blur doesn't leave transparent fringes), a procedural gradient scene, or an
+  uploaded photo (`object-fit: cover` math). Scenes are painted ONCE per
+  resolution — aurora/sunset/forest/graphite gradients + radial glows match
+  the platform's aesthetic with zero image assets.
+- *Robustness details:* mask polarity is resolved from `getLabels()` at load
+  (don't hard-code which confidence mask is "person"); masks are `close()`d
+  every frame (MPMask wraps GPU memory — leaking it hangs the tab); model
+  load failure degrades to plain passthrough exactly like before.
+- *Picker UI:* Meet-style thumbnail grid — the gradient swatches ARE the
+  backgrounds (CSS approximations of the canvas painters), custom photo via
+  file input → object URL → `Image` handed through `setBackground(id, img)`.
+
+**Chat window redesigned to the Slack/Teams reading model.**
+- *What changed:* left/right chat bubbles → a flat, left-aligned message
+  list. Consecutive messages from the same sender within 5 min **group**
+  under one avatar+name header; grouped lines show their timestamp only on
+  hover, in a gutter exactly as wide as the avatar (alignment is what makes
+  grouping read cleanly). **Day dividers** ("Today" / "Yesterday" / date
+  pills) replace scanning timestamps. Rows get a subtle hover wash; squared
+  avatars (Slack's cue) distinguish chat from the circular presence
+  avatars elsewhere.
+- *Composer:* one bordered container with focus ring — emoji quick-picker
+  (24 curated emoji, popover), borderless input with a "Message {room}"
+  placeholder, and a gradient paper-plane send button that lights up only
+  when there's something to send. Typing indicator is now three staggered
+  bouncing dots (`animation-delay` inline — Tailwind can't stagger).
+- *Grouping is computed at render, not stored:* `prev` message comparison in
+  the map (same sender + <5 min + same day). No schema change, no migration,
+  and history regroups correctly as messages stream in.
+- *Bonus fix:* the Tailwind `brand` palette only defined 6 of 11 shades —
+  existing classes like `brand-300`/`brand-800` were silently generating NO
+  css (Tailwind won't warn). Completed the violet scale; several existing
+  UI accents quietly came back to life.
+
+**Interview takeaway:** replacing a feature is cheaper than building one if
+the old feature was factored as pipeline + effect: `replaceTrack` plumbing,
+lazy CDN loading, and the "never stop the raw track you don't own" rule all
+carried over untouched — swapping face landmarks for segmentation masks was
+a one-file change plus UI.
+
+### Rich chat — emoji, GIFs, stickers, and file/image/video sharing
+The chat looked like Slack after the last pass but could still only send
+plain text. This pass made the message a *container* rather than a string.
+
+**The schema decision that shaped everything.** `Message.text` was `required`.
+Rather than inventing a parallel "attachment message" type, `text` became
+optional, an `attachments[]` subdocument array was added, and a `pre("validate")`
+hook enforces "text OR attachments, never neither". One collection, one
+socket event, one render path — a photo with a caption is just a message
+that has both. Attachment kinds: `image` · `video` · `audio` · `file` ·
+`gif` · `sticker`.
+
+**Upload flow: REST first, then socket.** The client POSTs files to
+`/api/rooms/:id/attachments` (multer memory storage → straight to MinIO),
+gets back descriptors, and only then emits ONE `message:send` carrying them.
+Two reasons over streaming binary through Socket.io: the socket path stays
+small and JSON-only, and a failed upload can never leave a half-written
+message in the history. Progress comes free from axios' `onUploadProgress`.
+
+**Why the socket re-validates what REST just produced.** The descriptors
+travel through the *client*, so `message:send` treats them as hostile input
+(`sanitizeAttachments`): uploads must have an origin matching our own
+`S3_ENDPOINT`/`S3_PUBLIC_URL` — otherwise anyone could paste a third-party
+URL and use the room as a link-laundering surface; GIFs must be https on a
+Tenor CDN host; stickers carry no URL at all (just a registry id, since the
+art is vector code shipped with the client). Anything unrecognised is
+**dropped silently while the text is kept** — a hostile attachment shouldn't
+cost you your sentence. Live-verified: a `https://evil.example.com/x.png`
+attachment was stripped and the message stored without it.
+
+**Storage safety.** The public-read bucket policy was extended from
+`avatars/*` to `chat/*`, and keys are `chat/<roomId>/<uuid><ext>` — random,
+so the prefix is "public but unlisted" (the same trade-off Slack's own file
+links make; signed URLs would be stricter but expire, which breaks durable
+history). The user's filename never enters the key (path-traversal bait) —
+only a sanitized extension. Non-media types get
+`Content-Disposition: attachment` so nothing served from our own origin can
+execute in a user's session; media stays `inline` so it renders in the
+bubble. The MIME whitelist deliberately omits executables/scripts.
+
+**Emoji: a hand-curated list, not a library.** Every npm emoji package ships
+the full ~1,900-emoji set plus keyword indexes (300 KB–1 MB of JS). This is
+~500 emoji people actually send, with search keywords, in a few KB — zero
+dependencies, zero bundle hit, and it renders in the system font (no image
+requests). 8 categories, substring search ranked prefix-matches-first, and a
+localStorage "Recent" tray. Bonus: **jumbomoji** — a message that is only
+emoji (≤3 graphemes) renders at 4xl with no bubble. Counting needs
+`Intl.Segmenter`, because `"👨‍👩‍👧".length` is 8, not 1.
+
+**GIFs: Tenor over Giphy.** Giphy's free key is explicitly development-only
+with production behind a paid plan; Tenor's free tier permits real use. The
+key is *meant* to be public (it ships in the bundle) so it lives in
+`VITE_TENOR_KEY`. Real GIFs are never re-hosted: we store the Tenor CDN url,
+so our storage bill for GIFs stays exactly zero.
+
+**The fallback bug — and the rule that came out of it.** The first version
+degraded (no key configured) to a "curated set of evergreen reaction GIFs"
+that were hardcoded Tenor CDN urls. **Every single one 404'd.** A Tenor CDN
+id is an opaque token you only get *from the API* — writing plausible-looking
+ones from memory produces URLs that are syntactically perfect and completely
+dead. Worse, the failure was invisible in code review: the array looked
+right, lint passed, tests passed (nothing asserted the urls resolved), and
+only clicking the tab revealed broken images. Search compounded it: with no
+key, search filtered those 12 dead entries by label, so most terms returned
+an empty panel.
+
+The fix wasn't better urls — it was removing the external dependency from the
+fallback path entirely. `lib/localGifs.js` generates **24 animated reaction
+cards as inline SVG data URIs**: bouncing/pulsing emoji, a confetti rain, and
+a typing-dots loop, each a few hundred bytes, animated with SMIL, impossible
+to 404. (Checked first whether any keyless GIF API still exists — Tenor's v1
+anonymous endpoint 401s, Giphy's old public beta key 403s. None does.)
+Three behaviours were added at the same time, because "no results" was the
+actual complaint: the shelf **shuffles** on every open, a 🎲 button reshuffles
+on demand, and a search that matches nothing shows *"nothing for X — here are
+some favourites"* over a full shelf rather than an empty box.
+
+*Storage/security note:* built-ins are persisted as `gifId` only, never the
+data URI. Storing client-supplied SVG markup would be an XSS foothold — the
+client re-renders the art from its own registry, and a test asserts the
+backend whitelist and the frontend registry contain exactly the same ids
+(two lists that drift silently would make picked GIFs vanish on send).
+
+**Lesson worth keeping:** a fallback whose whole job is "work when the network
+/ API is unavailable" must not itself depend on an unverifiable external URL.
+And any asset list that can't be checked by the type system needs a test that
+actually resolves it — I verified these 24 by decoding each data URI and
+asserting it parses as animated SVG, which is exactly the check the original
+Tenor urls never had.
+
+**Stickers came free.** The six animated SVG stickers built for the games'
+reaction system (`STICKERS` registry) were already vector components — the
+chat sticker tab is a second consumer of that registry, and the message
+renderer just mounts `<S.Comp size={104} />`. No new art, no assets.
+
+**UI details that matter:** paste-to-upload (clipboard screenshots are the
+#1 way people share an image), drag-and-drop with an overlay (using a
+depth *counter*, not a boolean — drag events fire per child element and a
+boolean flickers), staged thumbnails with per-file remove before sending,
+multi-image messages tiling into a grid, a lightbox with download for
+images/GIFs, native players for video/audio, and typed icon chips for
+documents. Object URLs are tracked in a ref and revoked on unmount — the
+classic blob leak.
+
+**Verification:** 20 new backend tests (**255 total green**, up from 235) plus
+live end-to-end scripts against the *running* server and MinIO — 19 checks
+covering real upload → public fetch → byte-identical round-trip →
+content-disposition → socket broadcast → durable history → hostile-URL
+rejection, and 6 more for the built-in GIF id path. Every built-in reaction
+card is validated by decoding its data URI and asserting well-formed,
+animated SVG.
+
+**Interview takeaway:** the security question in a file-sharing feature is
+not "can I upload" but "what does the server *believe* the client". Uploading
+over REST and then re-validating the descriptors at the socket boundary means
+the trust decision lives in exactly one function, and the same rule protects
+uploads, GIFs and stickers with three different policies.
+
 ---
 
 ## Current Status / Next Steps
@@ -2066,5 +2337,6 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | TURN server (WebRTC NAT traversal) | Twilio TURN | Self-hosted **coturn**, or Metered.ca free tier |
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
+| GIF search (chat) | Giphy paid production plan | **Tenor** free tier (`VITE_TENOR_KEY`); with no key at all, 24 **self-generated animated SVG** reaction cards (`lib/localGifs.js`) — no network, no key, nothing to 404. Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-07-29 (Smash Karts: cinematic graphics pass — bloom pipeline, living backgrounds, Volcano map; shaped arenas with curvy spline tracks — Grand Circuit ring + Canyon blob; 5 maps total)*
+*Last updated: 2026-07-31 (rich chat pass: emoji picker with search, Tenor GIFs, animated stickers, and file/image/video uploads to MinIO — 251 tests green)*

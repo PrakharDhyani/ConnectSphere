@@ -105,4 +105,109 @@ describe("GET /api/rooms/:id/messages", () => {
       .set("Authorization", `Bearer ${alice.token}`);
     expect(malformed.status).toBe(404);
   });
+
+  it("returns attachments alongside text", async () => {
+    await Message.create({
+      room: roomId,
+      sender: alice.id,
+      text: "",
+      attachments: [{ kind: "sticker", stickerId: "fire" }],
+    });
+
+    const res = await request(h.app)
+      .get(`/api/rooms/${roomId}/messages`)
+      .set("Authorization", `Bearer ${alice.token}`);
+
+    const last = res.body.data.messages.at(-1);
+    expect(last.text).toBe("");
+    expect(last.attachments).toEqual([{ kind: "sticker", stickerId: "fire" }]);
+  });
+});
+
+describe("Message model content rule", () => {
+  it("rejects a message with neither text nor attachments", async () => {
+    await expect(Message.create({ room: roomId, sender: alice.id, text: "" })).rejects.toThrow(
+      /text or an attachment/
+    );
+  });
+
+  it("allows an attachment-only message (no text)", async () => {
+    const doc = await Message.create({
+      room: roomId,
+      sender: alice.id,
+      attachments: [{ kind: "gif", url: "https://media.tenor.com/abc.gif" }],
+    });
+    expect(doc.text).toBe("");
+    expect(doc.attachments).toHaveLength(1);
+  });
+
+  it("caps attachments at 10", async () => {
+    const many = Array.from({ length: 11 }, () => ({ kind: "sticker", stickerId: "love" }));
+    await expect(
+      Message.create({ room: roomId, sender: alice.id, text: "hi", attachments: many })
+    ).rejects.toThrow(/Too many attachments/);
+  });
+});
+
+describe("POST /api/rooms/:id/attachments", () => {
+  const png = Buffer.from(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6300010000050001",
+    "hex"
+  );
+
+  it("uploads files and returns descriptors", async () => {
+    const res = await request(h.app)
+      .post(`/api/rooms/${roomId}/attachments`)
+      .set("Authorization", `Bearer ${alice.token}`)
+      .attach("files", png, { filename: "shot.png", contentType: "image/png" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.attachments).toHaveLength(1);
+    expect(res.body.data.attachments[0]).toMatchObject({
+      kind: "image",
+      mime: "image/png",
+      name: "shot.png",
+    });
+    expect(res.body.data.attachments[0].url).toContain(`/chat/${roomId}/`);
+  });
+
+  it("accepts several files in one request", async () => {
+    const res = await request(h.app)
+      .post(`/api/rooms/${roomId}/attachments`)
+      .set("Authorization", `Bearer ${alice.token}`)
+      .attach("files", png, { filename: "a.png", contentType: "image/png" })
+      .attach("files", Buffer.from("hello"), { filename: "notes.txt", contentType: "text/plain" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.attachments.map((a) => a.kind)).toEqual(["image", "file"]);
+  });
+
+  it("rejects a disallowed file type (400)", async () => {
+    const res = await request(h.app)
+      .post(`/api/rooms/${roomId}/attachments`)
+      .set("Authorization", `Bearer ${alice.token}`)
+      .attach("files", Buffer.from("MZ"), {
+        filename: "virus.exe",
+        contentType: "application/x-msdownload",
+      });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a non-member with 403", async () => {
+    const res = await request(h.app)
+      .post(`/api/rooms/${roomId}/attachments`)
+      .set("Authorization", `Bearer ${bob.token}`)
+      .attach("files", png, { filename: "shot.png", contentType: "image/png" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("400s when no file is attached", async () => {
+    const res = await request(h.app)
+      .post(`/api/rooms/${roomId}/attachments`)
+      .set("Authorization", `Bearer ${alice.token}`);
+
+    expect(res.status).toBe(400);
+  });
 });

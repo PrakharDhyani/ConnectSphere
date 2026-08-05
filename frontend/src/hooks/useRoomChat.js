@@ -75,10 +75,13 @@ export function useRoomChat(roomId) {
     };
   }, [roomId]);
 
+  // `attachments` are descriptors the server re-validates (see chat.handlers.js
+  // sanitizeAttachments) — uploads must already be in our storage, GIFs must be
+  // provider URLs, stickers are just registry ids.
   const sendMessage = useCallback(
-    (text) =>
+    (text, attachments = []) =>
       new Promise((resolve) =>
-        getSocket().emit("message:send", { roomId, text }, resolve)
+        getSocket().emit("message:send", { roomId, text, attachments }, resolve)
       ),
     [roomId]
   );

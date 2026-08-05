@@ -7,7 +7,14 @@ import { createCallRecorder, saveBlob } from "@/lib/recorder.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useRoomChat } from "@/hooks/useRoomChat.js";
 import { useMediaRoom } from "@/hooks/useMediaRoom.js";
+import { useCaptions } from "@/hooks/useCaptions.js";
+import { useChatUploads } from "@/hooks/useChatUploads.js";
+import ChatPicker from "@/components/ChatPicker.jsx";
+import ChatAttachments, { fmtBytes } from "@/components/ChatAttachments.jsx";
+import { CaptionOverlay, CaptionControls } from "@/components/Captions.jsx";
 import VideoTile from "@/components/VideoTile.jsx";
+import BackgroundPicker from "@/components/BackgroundPicker.jsx";
+import PollPanel from "@/components/PollPanel.jsx";
 import GamesHub from "@/components/GamesHub.jsx";
 import VoiceBar from "@/components/VoiceBar.jsx";
 import InviteFriends from "@/components/InviteFriends.jsx";
@@ -20,18 +27,26 @@ const ACT_LABEL = {
   skribbl: "started Draw & Guess 🎨",
   ludo: "started Ludo 🎲",
   kart: "started Smash Karts 🏎️",
+  chess: "started Chess ♟️",
+  uno: "started UNO 🃏",
+  typing: "started a Typing race ⌨️",
+  bingo: "started Bingo 🎱",
+  poll: "started a poll 📊",
 };
-const ACT_VIEW = { call: "room", board: "board", skribbl: "game", ludo: "game", kart: "game" };
+const ACT_VIEW = {
+  call: "room", board: "board", skribbl: "game", ludo: "game", kart: "game",
+  chess: "game", uno: "game", typing: "game", bingo: "game", poll: "room",
+};
 
 // Excalidraw is heavy (~1.8 MB) — load it only when the whiteboard is opened.
 const WhiteboardPanel = lazy(() => import("@/components/WhiteboardPanel.jsx"));
 
 // Full literal class strings per size — Tailwind only generates classes it can
 // see as complete tokens, so `w-${n}` would silently produce no CSS.
-const AVATAR_SIZES = { sm: "w-7 h-7", md: "w-8 h-8" };
+const AVATAR_SIZES = { sm: "w-7 h-7", md: "w-8 h-8", chat: "w-9 h-9" };
 
-function Avatar({ user, size = "md" }) {
-  const cls = `${AVATAR_SIZES[size]} rounded-full object-cover shrink-0`;
+function Avatar({ user, size = "md", square = false }) {
+  const cls = `${AVATAR_SIZES[size]} ${square ? "rounded-lg" : "rounded-full"} object-cover shrink-0`;
   return user?.avatarUrl ? (
     <img src={user.avatarUrl} alt="" className={cls} />
   ) : (
@@ -39,6 +54,54 @@ function Avatar({ user, size = "md" }) {
       {user?.name?.[0]?.toUpperCase() ?? "?"}
     </span>
   );
+}
+
+// ── Slack-style chat helpers ───────────────────────────────────────────────
+const fmtTime = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const sameDay = (a, b) =>
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+
+function dayLabel(d) {
+  const now = new Date();
+  if (sameDay(d, now)) return "Today";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameDay(d, yesterday)) return "Yesterday";
+  return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
+
+function DayDivider({ date }) {
+  return (
+    <div className="flex items-center gap-3 my-4 select-none">
+      <span className="flex-1 h-px bg-gray-800" />
+      <span className="text-[11px] font-medium text-gray-500 bg-gray-900 border border-gray-800 rounded-full px-3 py-0.5">
+        {dayLabel(date)}
+      </span>
+      <span className="flex-1 h-px bg-gray-800" />
+    </div>
+  );
+}
+
+// Consecutive messages from the same person within 5 min collapse into one
+// block (avatar + name once, then bare lines) — the Slack/Teams reading flow.
+const GROUP_WINDOW_MS = 5 * 60 * 1000;
+
+// A message that is ONLY emoji (up to 3 of them) renders big and bubble-less —
+// the "jumbomoji" convention every modern chat app uses. Emoji are multi-code-
+// point (skin tones, ZWJ families, variation selectors), so counting requires
+// a grapheme-aware segmenter, not `.length`.
+const segmenter =
+  typeof Intl !== "undefined" && Intl.Segmenter
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+const EMOJI_ONLY_RE = /^[\p{Extended_Pictographic}\p{Emoji_Component}\s]+$/u;
+
+function isJumboEmoji(text) {
+  if (!text || !EMOJI_ONLY_RE.test(text)) return false;
+  const stripped = text.replace(/\s/g, "");
+  if (!stripped) return false;
+  const count = segmenter ? [...segmenter.segment(stripped)].length : stripped.length / 2;
+  return count <= 3;
 }
 
 const fmtRec = (ms) => {
@@ -127,6 +190,13 @@ export default function RoomPage() {
   const me = useAuthStore((s) => s.user);
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
+  // Drag events fire per-child-element, so a naive boolean flickers as the
+  // pointer crosses the composer's children. Counting enter/leave pairs is the
+  // standard fix.
+  const dragDepth = useRef(0);
   // Survive refreshes: mid-game F5 used to dump you back on the room tab
   // (and out of your ludo/chess table UI). sessionStorage is per-browser-tab
   // and per-room, so each tab restores exactly where it was.
@@ -155,6 +225,8 @@ export default function RoomPage() {
     useRoomChat(room ? roomId : null);
 
   const call = useMediaRoom(room ? roomId : null);
+  const captions = useCaptions(room ? roomId : null, { active: call.inCall });
+  const uploads = useChatUploads(roomId);
 
   // Activity notifications: someone started a call/board/game in this room.
   useEffect(() => {
@@ -237,18 +309,63 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  /**
+   * Send text and/or staged files as ONE message: upload first (so a storage
+   * failure aborts before anything is posted), then emit with the returned
+   * attachment descriptors. On failure the draft AND the staged files are put
+   * back so nothing the user typed or picked is lost.
+   */
   async function handleSend(e) {
-    e.preventDefault();
+    e?.preventDefault();
     const text = draft.trim();
-    if (!text) return;
-    setDraft("");
+    const hasFiles = uploads.staged.length > 0;
+    if (!text && !hasFiles) return;
+
     setSendError(null);
-    const ack = await sendMessage(text);
+    let attachments = [];
+    if (hasFiles) {
+      attachments = await uploads.upload();
+      if (attachments === null) return; // hook surfaced the error; keep the draft
+    }
+
+    setDraft("");
+    uploads.clear();
+    inputRef.current?.focus();
+
+    const ack = await sendMessage(text, attachments);
     if (!ack?.ok) {
       setDraft(text);
       setSendError(ack?.error || "Message not sent"); // e.g. "Slow mode — wait 12s"
       setTimeout(() => setSendError(null), 4000);
     }
+  }
+
+  /** GIFs and stickers post immediately — no draft staging, like every chat app. */
+  async function sendAttachmentNow(attachment) {
+    setSendError(null);
+    const ack = await sendMessage("", [attachment]);
+    if (!ack?.ok) {
+      setSendError(ack?.error || "Not sent");
+      setTimeout(() => setSendError(null), 4000);
+    }
+  }
+
+  // Paste an image straight from the clipboard (screenshots — the single most
+  // common way people share an image in a chat).
+  function handlePaste(e) {
+    const files = [...(e.clipboardData?.files || [])];
+    if (files.length) {
+      e.preventDefault();
+      uploads.add(files);
+    }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = [...(e.dataTransfer?.files || [])];
+    if (files.length) uploads.add(files);
   }
 
   // ── Moderation actions (owner: kick/ban/unban/slow-mode · anyone: report) ──
@@ -304,7 +421,10 @@ export default function RoomPage() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* Persistent mic/call bar — available on every tab */}
-      <VoiceBar call={call} />
+      <VoiceBar call={call} captions={captions} />
+
+      {/* Live captions — subtitle strip visible on every tab */}
+      <CaptionOverlay lines={captions.lines} />
 
       {/* Activity notifications */}
       <div className="fixed top-4 right-4 z-40 space-y-2 w-64">
@@ -454,36 +574,85 @@ export default function RoomPage() {
                 ) : (
                   <Button variant="secondary" onClick={call.startScreenShare}>🖥️ Share screen</Button>
                 )}
+                <BackgroundPicker call={call} />
+                <CaptionControls captions={captions} />
                 <RecordButton call={call} roomId={roomId} roomName={room.name} nameFor={nameFor} />
               </div>
             </div>
           )}
           {call.error && <p className="px-5 py-2 text-sm text-red-400">{call.error}</p>}
 
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+          {/* 📊 One live poll per room — everyone sees it, votes update live. */}
+          <PollPanel roomId={roomId} />
+
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4">
             {messages.length === 0 && (
-              <p className="text-gray-500 text-sm text-center mt-8">No messages yet — say hello 👋</p>
+              <div className="flex flex-col items-center justify-center h-full text-center gap-2 py-10">
+                <span className="text-4xl">👋</span>
+                <p className="text-gray-300 text-sm font-medium">It&apos;s quiet in here</p>
+                <p className="text-gray-600 text-xs max-w-[240px]">
+                  Say hello — chat, calls, games and the whiteboard all live in this room.
+                </p>
+              </div>
             )}
-            {messages.map((m) => {
+            {messages.map((m, i) => {
+              const prev = messages[i - 1];
               const mine = m.sender?.id === me?.id;
+              const time = new Date(m.createdAt);
+              const newDay = !prev || !sameDay(new Date(prev.createdAt), time);
+              const grouped =
+                !newDay &&
+                prev?.sender?.id != null &&
+                prev.sender.id === m.sender?.id &&
+                time - new Date(prev.createdAt) < GROUP_WINDOW_MS;
               return (
-                <div key={m.id} className={`flex gap-2 ${mine ? "flex-row-reverse" : ""}`}>
-                  <Avatar user={m.sender} />
-                  <div className={`max-w-[75%] ${mine ? "text-right" : ""}`}>
-                    <p className="text-xs text-gray-500 mb-0.5">
-                      {mine ? "You" : m.sender?.name || "Guest"}{" "}
-                      <span className="opacity-60">
-                        {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                <div key={m.id}>
+                  {newDay && <DayDivider date={time} />}
+                  <div className={`group flex gap-3 px-2 rounded-lg hover:bg-white/[0.04] transition-colors ${grouped ? "py-0.5" : "mt-2.5 py-1"}`}>
+                    {grouped ? (
+                      <span className="w-9 shrink-0 text-right text-[10px] text-gray-600 tabular-nums select-none opacity-0 group-hover:opacity-100 pt-1">
+                        {fmtTime(time)}
                       </span>
-                    </p>
-                    <p className={`inline-block px-3 py-2 rounded-2xl text-sm break-words ${mine ? "bg-brand-600 text-white" : "bg-gray-800 text-gray-100"}`}>
-                      {m.text}
-                    </p>
+                    ) : (
+                      <Avatar user={m.sender} size="chat" square />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      {!grouped && (
+                        <p className="text-sm leading-tight">
+                          <span className={`font-semibold ${mine ? "text-brand-300" : "text-white"}`}>
+                            {mine ? "You" : m.sender?.name || "Guest"}
+                          </span>
+                          <span className="ml-2 text-[11px] text-gray-500 tabular-nums">{fmtTime(time)}</span>
+                        </p>
+                      )}
+                      {m.text &&
+                        (isJumboEmoji(m.text) ? (
+                          <p className="text-4xl leading-tight py-0.5">{m.text}</p>
+                        ) : (
+                          <p className="text-sm text-gray-200 break-words whitespace-pre-wrap leading-relaxed">
+                            {m.text}
+                          </p>
+                        ))}
+                      <ChatAttachments attachments={m.attachments} />
+                    </div>
                   </div>
                 </div>
               );
             })}
-            {typingName && <p className="text-xs text-gray-500 italic">{typingName} is typing…</p>}
+            {typingName && (
+              <div className="flex items-center gap-2 px-2 mt-2 text-xs text-gray-500">
+                <span className="flex gap-1">
+                  {[0, 150, 300].map((d) => (
+                    <span
+                      key={d}
+                      className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce"
+                      style={{ animationDelay: `${d}ms` }}
+                    />
+                  ))}
+                </span>
+                {typingName} is typing
+              </div>
+            )}
           </div>
 
           {chatError && <p className="px-5 py-2 text-sm text-red-400">{chatError}</p>}
@@ -491,15 +660,118 @@ export default function RoomPage() {
           {sendError && (
             <p className="px-4 py-1 text-xs text-amber-300 bg-amber-950/40 border-t border-amber-900/50">🐢 {sendError}</p>
           )}
-          <form onSubmit={handleSend} className="flex gap-2 p-3 border-t border-gray-800">
-            <input
-              value={draft}
-              onChange={(e) => { setDraft(e.target.value); notifyTyping(); }}
-              placeholder="Type a message…"
-              maxLength={2000}
-              className="flex-1 px-3 py-2 rounded-lg bg-gray-950 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
-            />
-            <Button type="submit" disabled={!draft.trim()}>Send</Button>
+          <form
+            onSubmit={handleSend}
+            className="relative p-3 border-t border-gray-800"
+            onDragEnter={(e) => { e.preventDefault(); dragDepth.current++; setDragging(true); }}
+            onDragOver={(e) => e.preventDefault()}
+            onDragLeave={(e) => { e.preventDefault(); if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); } }}
+            onDrop={handleDrop}
+          >
+            {dragging && (
+              <div className="absolute inset-2 z-20 rounded-xl border-2 border-dashed border-brand-500 bg-brand-950/70 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+                <p className="text-sm font-medium text-brand-200">📎 Drop files to attach</p>
+              </div>
+            )}
+
+            {/* staged attachments — previews before sending */}
+            {uploads.staged.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {uploads.staged.map((s) => (
+                  <div
+                    key={s.id}
+                    className="group relative rounded-lg border border-gray-700 bg-gray-950 overflow-hidden"
+                  >
+                    {s.kind === "image" && s.previewUrl ? (
+                      <img src={s.previewUrl} alt="" className="w-16 h-16 object-cover" />
+                    ) : s.kind === "video" && s.previewUrl ? (
+                      <video src={s.previewUrl} muted className="w-16 h-16 object-cover" />
+                    ) : (
+                      <div className="w-16 h-16 flex flex-col items-center justify-center gap-0.5 px-1">
+                        <span className="text-lg">📎</span>
+                        <span className="text-[8px] text-gray-500 truncate w-full text-center">
+                          {s.file.name}
+                        </span>
+                      </div>
+                    )}
+                    <span className="absolute bottom-0 inset-x-0 bg-black/70 text-[8px] text-gray-300 text-center py-px">
+                      {fmtBytes(s.file.size)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => uploads.remove(s.id)}
+                      title="Remove"
+                      className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-black/80 text-gray-300 hover:bg-red-600 hover:text-white text-[10px] leading-none flex items-center justify-center"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {uploads.uploading && (
+              <div className="mb-2 h-1 rounded-full bg-gray-800 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-brand-500 to-fuchsia-500 transition-all duration-200"
+                  style={{ width: `${uploads.progress}%` }}
+                />
+              </div>
+            )}
+            {uploads.error && (
+              <p className="mb-2 text-xs text-amber-300">⚠️ {uploads.error}</p>
+            )}
+
+            <div className="flex items-center gap-1 rounded-xl bg-gray-950 border border-gray-700 focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500/40 transition-colors px-1.5 py-1.5">
+              <ChatPicker
+                onInsertEmoji={(glyph) => { setDraft((d) => d + glyph); inputRef.current?.focus(); }}
+                onSendAttachment={sendAttachmentNow}
+                disabled={uploads.uploading}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploads.uploading}
+                title="Attach files, images or video"
+                className="w-8 h-8 rounded-lg text-lg leading-none hover:bg-white/5 transition-colors disabled:opacity-40"
+              >
+                📎
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => { uploads.add(e.target.files); e.target.value = ""; }}
+              />
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={(e) => { setDraft(e.target.value); notifyTyping(); }}
+                onPaste={handlePaste}
+                placeholder={uploads.staged.length ? "Add a caption…" : `Message ${room.name}`}
+                maxLength={2000}
+                className="flex-1 bg-transparent px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={(!draft.trim() && !uploads.staged.length) || uploads.uploading}
+                title="Send"
+                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                  (draft.trim() || uploads.staged.length) && !uploads.uploading
+                    ? "bg-gradient-to-r from-brand-600 to-fuchsia-600 text-white shadow-[0_2px_10px_rgba(139,92,246,0.35)] hover:brightness-110"
+                    : "text-gray-600 cursor-default"
+                }`}
+              >
+                {uploads.uploading ? (
+                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor" aria-hidden="true">
+                    <path d="M3.4 20.4 21.9 12 3.4 3.6l.01 6.53L15.3 12 3.41 13.87z" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </form>
         </section>
 

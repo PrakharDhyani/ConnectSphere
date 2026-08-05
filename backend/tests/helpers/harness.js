@@ -39,6 +39,10 @@ process.env.JWT_REFRESH_EXPIRES_IN = "7d";
 process.env.CLIENT_URL = "http://localhost:3000";
 process.env.SERVER_URL = "http://localhost:5000";
 process.env.EMAIL_FROM = "no-reply@connectsphere.test";
+// Storage itself is mocked, but chat.handlers reads S3_ENDPOINT directly to
+// decide which attachment URLs are "ours" — set it so that rule is under test
+// rather than silently permissive.
+process.env.S3_ENDPOINT = "http://localhost:9000";
 // Ensure Google OAuth is treated as "not configured" (routes 501, no strategy).
 delete process.env.GOOGLE_CLIENT_ID;
 delete process.env.GOOGLE_CLIENT_SECRET;
@@ -76,6 +80,24 @@ export function startHarness() {
       const url = `http://localhost:9000/connectsphere/avatars/${userId}`;
       uploads.push({ userId: String(userId), size: buffer.length, mimetype, url });
       return url;
+    }),
+    // Chat attachments — same capture-in-memory treatment as avatars. Keep the
+    // mime whitelist in sync with the real service; the mock's URL shape must
+    // match S3_ENDPOINT so the socket's sanitizeAttachments accepts it.
+    allowedChatMimeTypes: [
+      "image/jpeg", "image/png", "image/webp", "image/gif",
+      "video/mp4", "video/webm", "audio/mpeg", "audio/webm",
+      "application/pdf", "text/plain",
+    ],
+    MAX_CHAT_FILE_BYTES: 25 * 1024 * 1024,
+    chatKindFor: (mime) => (mime?.split("/")[0] === "application" || mime?.startsWith("text/") ? "file" : mime?.split("/")[0] || null),
+    uploadChatAttachment: jest.fn(async (roomId, { buffer, mimetype, originalname }) => {
+      const top = mimetype.split("/")[0];
+      const kind = ["image", "video", "audio"].includes(top) ? top : "file";
+      const url = `http://localhost:9000/connectsphere/chat/${roomId}/${uploads.length}`;
+      const record = { roomId: String(roomId), size: buffer.length, mimetype, url, kind, name: originalname };
+      uploads.push(record);
+      return { kind, url, name: originalname, mime: mimetype, size: buffer.length };
     }),
   }));
 

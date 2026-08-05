@@ -16,11 +16,63 @@
  *   message:new       (message)   presence:update ({roomId, users})   typing ({roomId, user})
  */
 import { Message } from "../models/Message.js";
+import { Room } from "../models/Room.js";
+import { Friendship } from "../models/Friendship.js";
 import { canAccessRoom } from "../utils/roomAccess.js";
 import { allow } from "../utils/socketRate.js";
 import { logger } from "../utils/logger.js";
+import { sendPushToUsers } from "../services/push.service.js";
 
-const ANNOUNCE_ACTIVITIES = new Set(["call", "board", "skribbl", "ludo", "kart", "chess", "uno", "typing", "bingo"]);
+const ANNOUNCE_ACTIVITIES = new Set(["call", "board", "skribbl", "ludo", "kart", "chess", "uno", "typing", "bingo", "poll"]);
+
+const PUSH_LABEL = {
+  call: "started a call", board: "opened the whiteboard", skribbl: "started Draw & Guess",
+  ludo: "started Ludo", kart: "started Smash Karts", chess: "started Chess", uno: "started UNO",
+  typing: "started a Typing race", bingo: "started Bingo", poll: "started a poll",
+};
+
+// roomId:activity → last push timestamp. In-room toasts are cheap, but a push
+// buzzes phones — one per room+activity per minute, no matter how many people
+// pile into the same game.
+const pushThrottle = new Map();
+
+/**
+ * The retention half of `room:announce`: the in-room toast only reaches open
+ * tabs, so also Web-Push the actor's FRIENDS who are members of this room but
+ * aren't currently in it. Fire-and-forget — never blocks the socket event.
+ */
+async function pushActivityToAbsentFriends(io, socket, roomId, activity) {
+  if (socket.user.isGuest) return; // guests have no friends graph
+  const throttleKey = `${roomId}:${activity}`;
+  if (Date.now() - (pushThrottle.get(throttleKey) || 0) < 60_000) return;
+  pushThrottle.set(throttleKey, Date.now());
+  if (pushThrottle.size > 5000) pushThrottle.clear(); // crude but bounded
+
+  const room = await Room.findById(roomId).select("name members").lean();
+  if (!room) return;
+
+  const links = await Friendship.find({
+    status: "accepted",
+    $or: [{ requester: socket.user.id }, { recipient: socket.user.id }],
+  }).lean();
+  const friendIds = new Set(
+    links.map((l) => (l.requester.toString() === socket.user.id ? l.recipient : l.requester).toString())
+  );
+
+  // Anyone with a socket in the room already got the live toast.
+  const present = new Set((await io.in(roomKey(roomId)).fetchSockets()).map((s) => s.user.id));
+  const targets = room.members
+    .map((m) => m.toString())
+    .filter((id) => friendIds.has(id) && !present.has(id));
+  if (!targets.length) return;
+
+  await sendPushToUsers(targets, {
+    title: `${socket.user.name} ${PUSH_LABEL[activity] || "started an activity"} in ${room.name}`,
+    body: "Tap to jump in 🎉",
+    url: `/room/${roomId}`,
+    tag: `activity:${roomId}`,
+  });
+}
 
 // The Socket.io room name for an app room. Exported so REST controllers can
 // broadcast to the same group (e.g. "room:closed" when a room is deleted).
@@ -28,6 +80,96 @@ export const roomKey = (roomId) => `room:${roomId}`;
 
 // roomId:userId → last chat timestamp, for slow mode.
 const slowModeLast = new Map();
+
+// ── Attachment sanitisation ────────────────────────────────────────────────
+// The client sends attachment DESCRIPTORS over the socket, so everything here
+// is untrusted input. Rules:
+//   · uploads (image/video/audio/file) must point at OUR storage — a client
+//     can't smuggle an arbitrary third-party URL into a message and use the
+//     room as a link-laundering surface;
+//   · gifs must be https and come from the GIF provider's CDN, OR be one of
+//     our own built-in reactions (lib/localGifs.js), which are self-contained
+//     animated SVGs sent as data URIs — those are stored by ID, never by
+//     payload, so a client can't smuggle arbitrary markup into the database
+//     (an inline <svg> is a script-execution vector, so we never persist one
+//     that came from a client);
+//   · stickers carry no URL at all (the art is vector code on the client), so
+//     only a short id is kept.
+const STICKER_IDS = new Set(["love", "laugh", "fire", "kiss", "angry", "gunshot"]);
+const GIF_HOSTS = new Set(["media.tenor.com", "c.tenor.com", "tenor.com"]);
+const UPLOAD_KINDS = new Set(["image", "video", "audio", "file"]);
+const MAX_ATTACHMENTS = 10;
+
+// Built-in reaction ids — must stay in sync with frontend lib/localGifs.js.
+const LOCAL_GIF_IDS = new Set([
+  "lg-yes", "lg-no", "lg-lol", "lg-love", "lg-fire", "lg-party",
+  "lg-clap", "lg-mind", "lg-cry", "lg-shrug", "lg-think", "lg-wave",
+  "lg-gg", "lg-letsgo", "lg-popcorn", "lg-sleep", "lg-typing", "lg-100",
+  "lg-bday", "lg-thanks", "lg-sorry", "lg-cool", "lg-scared", "lg-eyes",
+]);
+
+// Our own storage origin(s) — whatever the browser is told to load from.
+function storageOrigins() {
+  return [process.env.S3_PUBLIC_URL, process.env.S3_ENDPOINT]
+    .filter(Boolean)
+    .map((u) => {
+      try { return new URL(u).origin; } catch { return null; }
+    })
+    .filter(Boolean);
+}
+
+const clip = (v, max) => (typeof v === "string" ? v.slice(0, max) : undefined);
+const posInt = (v) => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined);
+
+function sanitizeAttachments(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const ours = storageOrigins();
+  const out = [];
+
+  for (const a of raw.slice(0, MAX_ATTACHMENTS)) {
+    if (!a || typeof a !== "object") continue;
+
+    if (a.kind === "sticker") {
+      if (!STICKER_IDS.has(a.stickerId)) continue;
+      out.push({ kind: "sticker", stickerId: a.stickerId });
+      continue;
+    }
+
+    // Built-in reaction GIF: keep only the id and drop the data-URI payload
+    // entirely — the client re-renders the art from its own registry. Storing
+    // client-supplied SVG markup would be an XSS foothold.
+    if (a.kind === "gif" && LOCAL_GIF_IDS.has(a.gifId)) {
+      out.push({ kind: "gif", gifId: a.gifId, name: clip(a.name, 300) });
+      continue;
+    }
+
+    let url;
+    try { url = new URL(String(a.url)); } catch { continue; }
+
+    if (a.kind === "gif") {
+      if (url.protocol !== "https:" || !GIF_HOSTS.has(url.hostname)) continue;
+      out.push({
+        kind: "gif",
+        url: url.href.slice(0, 2000),
+        name: clip(a.name, 300),
+        width: posInt(a.width),
+        height: posInt(a.height),
+      });
+      continue;
+    }
+
+    if (!UPLOAD_KINDS.has(a.kind)) continue;
+    if (ours.length && !ours.includes(url.origin)) continue; // not from our storage
+    out.push({
+      kind: a.kind,
+      url: url.href.slice(0, 2000),
+      name: clip(a.name, 300),
+      mime: clip(a.mime, 150),
+      size: posInt(a.size),
+    });
+  }
+  return out;
+}
 
 // roomId → Map<userId, name> of members currently recording the call. The
 // indicator is a TRANSPARENCY feature: everyone in the room must always know
@@ -108,7 +250,10 @@ export function registerChatHandlers(io, socket) {
     try {
       const roomId = payload?.roomId;
       const text = (payload?.text || "").trim();
-      if (!roomId || !text) return ack?.({ ok: false, error: "Message cannot be empty" });
+      const attachments = sanitizeAttachments(payload?.attachments);
+      if (!roomId || (!text && attachments.length === 0)) {
+        return ack?.({ ok: false, error: "Message cannot be empty" });
+      }
       if (text.length > 2000) return ack?.({ ok: false, error: "Message is too long (max 2000)" });
       if (!allow(socket, "msg", 15, 10_000)) return ack?.({ ok: false, error: "Slow down a moment" });
 
@@ -132,11 +277,17 @@ export function registerChatHandlers(io, socket) {
         if (slowModeLast.size > 5000) slowModeLast.clear(); // crude but bounded
       }
 
-      const doc = await Message.create({ room: roomId, sender: socket.user.id, text });
+      const doc = await Message.create({
+        room: roomId,
+        sender: socket.user.id,
+        text,
+        ...(attachments.length ? { attachments } : {}),
+      });
       const message = {
         id: doc._id.toString(),
         roomId,
         text: doc.text,
+        attachments: doc.attachments || [],
         createdAt: doc.createdAt,
         sender: { id: socket.user.id, name: socket.user.name, avatarUrl: socket.user.avatarUrl },
       };
@@ -160,6 +311,10 @@ export function registerChatHandlers(io, socket) {
       name: socket.user.name,
       userId: socket.user.id,
     });
+    // Beyond the open tab: Web Push the room's absent friends (no await).
+    pushActivityToAbsentFriends(io, socket, roomId, activity).catch((err) =>
+      logger.warn(`activity push failed: ${err.message}`)
+    );
   });
 
   // Transient — never stored. `socket.to` = everyone in the room EXCEPT sender.
