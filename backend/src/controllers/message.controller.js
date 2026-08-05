@@ -3,6 +3,7 @@ import { Room } from "../models/Room.js";
 import { Message } from "../models/Message.js";
 import { isScopedGuest } from "../utils/roomAccess.js";
 import { storageEnabled, uploadChatAttachment } from "../services/storage.service.js";
+import { redactForViewer } from "../sockets/chat.handlers.js";
 
 const notFound = () => {
   const error = new Error("Room not found");
@@ -52,7 +53,9 @@ export async function getRoomMessages(req, res, next) {
       id: d._id,
       roomId: id,
       text: d.text,
-      attachments: d.attachments || [],
+      // View-once media is stripped per viewer — a spent link must never come
+      // back out of the history endpoint.
+      attachments: redactForViewer(d, req.user.id),
       createdAt: d.createdAt,
       sender: d.sender
         ? { id: d.sender._id, name: d.sender.name, avatarUrl: d.sender.avatarUrl }
@@ -107,6 +110,74 @@ export async function uploadRoomAttachments(req, res, next) {
 
     const attachments = await Promise.all(files.map((f) => uploadChatAttachment(id, f)));
     res.status(201).json({ success: true, data: { attachments } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/rooms/:id/messages/:messageId/view  { index }
+ *
+ * Open a view-once attachment. Returns its url exactly ONCE per viewer, then
+ * records the view so every later read (history, or a second call) is
+ * redacted. The enforcement has to live here rather than in the client,
+ * otherwise "view once" is just a suggestion.
+ *
+ * The sender is exempt from consuming their own media — checking what you
+ * sent should not burn the recipient's view — but they still cannot re-open
+ * it after someone else has.
+ */
+export async function viewOnceAttachment(req, res, next) {
+  try {
+    const { id, messageId } = req.params;
+    if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(messageId)) throw notFound();
+
+    const room = await Room.findById(id).select("members banned").lean();
+    if (!room) throw notFound();
+    const banned = (room.banned || []).some((b) => b.user?.toString() === req.user.id);
+    const allowed =
+      !banned &&
+      (isScopedGuest(req.user, id) || room.members.some((m) => m.toString() === req.user.id));
+    if (!allowed) {
+      const error = new Error("You are not a member of this room");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const index = Number(req.body?.index ?? 0);
+    const message = await Message.findOne({ _id: messageId, room: id });
+    if (!message) throw notFound();
+
+    const attachment = message.attachments?.[index];
+    if (!attachment || !attachment.viewOnce) {
+      const error = new Error("That attachment is not view-once");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const viewed = (attachment.viewedBy || []).map(String);
+    const isSender = message.sender.toString() === req.user.id;
+
+    if (isSender ? viewed.length > 0 : viewed.includes(req.user.id)) {
+      const error = new Error("This media has already been opened");
+      error.statusCode = 410; // Gone — the resource is deliberately unavailable
+      throw error;
+    }
+
+    const url = attachment.url;
+    // The sender peeking does not consume the recipients' view.
+    if (!isSender) {
+      // $addToSet keeps this idempotent under a double-tap race.
+      await Message.updateOne(
+        { _id: messageId },
+        { $addToSet: { [`attachments.${index}.viewedBy`]: req.user.id } }
+      );
+    }
+
+    res.json({
+      success: true,
+      data: { url, mime: attachment.mime, kind: attachment.kind, name: attachment.name },
+    });
   } catch (error) {
     next(error);
   }

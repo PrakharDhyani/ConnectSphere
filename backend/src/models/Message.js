@@ -23,6 +23,35 @@ const attachmentSchema = new Schema(
     height: { type: Number, min: 0 },
     stickerId: { type: String, maxlength: 40 }, // key into the client sticker registry
     gifId: { type: String, maxlength: 40 },     // key into the built-in reaction registry (no url)
+
+    // Voice notes: `kind: "audio"` plus these. The waveform is captured while
+    // recording and carried in the document so a bubble can draw the real
+    // shape without downloading and decoding the audio first.
+    // An uploaded image that is a custom STICKER, not a photo — rendered
+    // small and transparent-background rather than in the photo grid.
+    isSticker: { type: Boolean },
+
+    voice: { type: Boolean },                   // true = recorded here, not an uploaded file
+    durationMs: { type: Number, min: 0 },
+    waveform: {
+      type: [Number],
+      default: undefined,
+      validate: {
+        validator: (w) => !w || w.length <= 64,
+        message: "Waveform too long",
+      },
+    },
+
+    // View-once ("permanent: false"): the media may be opened once per viewer,
+    // then the server stops serving its url. Enforced server-side — a flag the
+    // client could ignore would be theatre, not a feature.
+    viewOnce: { type: Boolean },
+    // Who has already opened it. Kept on the attachment so a multi-photo
+    // message tracks each item separately.
+    viewedBy: {
+      type: [{ type: Schema.Types.ObjectId, ref: "User" }],
+      default: undefined,
+    },
   },
   { _id: false }
 );

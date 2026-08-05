@@ -183,15 +183,64 @@ function sanitizeAttachments(raw) {
 
     if (!UPLOAD_KINDS.has(a.kind)) continue;
     if (ours.length && !ours.includes(url.origin)) continue; // not from our storage
-    out.push({
+    const entry = {
       kind: a.kind,
       url: url.href.slice(0, 2000),
       name: clip(a.name, 300),
       mime: clip(a.mime, 150),
       size: posInt(a.size),
-    });
+    };
+
+    // A custom sticker is just an uploaded PNG flagged for smaller rendering.
+    if (a.isSticker === true && a.kind === "image") entry.isSticker = true;
+
+    // Voice note extras (audio only) — the waveform is cosmetic, so it is
+    // clamped rather than rejected: 64 small ints, each 0..100.
+    if (a.kind === "audio" && a.voice) {
+      entry.voice = true;
+      entry.durationMs = posInt(a.durationMs);
+      if (Array.isArray(a.waveform)) {
+        entry.waveform = a.waveform
+          .slice(0, 64)
+          .map((n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0))));
+      }
+    }
+
+    // View-once: only meaningful for visual media. `viewedBy` is server-owned
+    // state — never trust a client-supplied value for it.
+    if (a.viewOnce === true && (a.kind === "image" || a.kind === "video")) {
+      entry.viewOnce = true;
+      entry.viewedBy = [];
+    }
+
+    out.push(entry);
   }
   return out;
+}
+
+/**
+ * What a given viewer is allowed to see of a message. View-once media is
+ * stripped of its url once that viewer has opened it (or, for the sender's own
+ * copy, once anyone has) so the history API can never hand back a spent link.
+ */
+export function redactForViewer(message, viewerId) {
+  const attachments = (message.attachments || []).map((a) => {
+    const raw = a.toObject ? a.toObject() : { ...a };
+    if (!raw.viewOnce) return raw;
+    const viewed = (raw.viewedBy || []).map(String);
+    const isSender = String(message.sender?._id || message.sender) === String(viewerId);
+    // The sender sees "opened by N", never the media again; viewers lose it
+    // after their own view.
+    const spent = isSender ? viewed.length > 0 : viewed.includes(String(viewerId));
+    return {
+      ...raw,
+      url: spent ? undefined : raw.url,
+      viewedCount: viewed.length,
+      spent,
+      viewedBy: undefined, // never leak the roster of who opened it
+    };
+  });
+  return attachments;
 }
 
 // roomId → Map<userId, name> of members currently recording the call. The
@@ -314,6 +363,25 @@ export function registerChatHandlers(io, socket) {
         createdAt: doc.createdAt,
         sender: { id: socket.user.id, name: socket.user.name, avatarUrl: socket.user.avatarUrl },
       };
+
+      // A view-once url must never ride the broadcast — recipients fetch it
+      // through POST /messages/:id/view, which is what actually consumes the
+      // view. Sending the url here would let any client cache it forever.
+      const hasViewOnce = (doc.attachments || []).some((a) => a.viewOnce);
+      if (hasViewOnce) {
+        const safe = {
+          ...message,
+          attachments: message.attachments.map((a) => {
+            const raw = a.toObject ? a.toObject() : { ...a };
+            return raw.viewOnce
+              ? { ...raw, url: undefined, viewedBy: undefined, viewedCount: 0, spent: false }
+              : raw;
+          }),
+        };
+        io.to(roomKey(roomId)).emit("message:new", safe);
+        ack?.({ ok: true, message: safe });
+        return;
+      }
 
       io.to(roomKey(roomId)).emit("message:new", message);
       ack?.({ ok: true, message });

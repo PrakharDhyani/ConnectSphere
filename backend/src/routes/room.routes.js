@@ -24,7 +24,11 @@ import {
   setSlowMode,
   reportMember,
 } from "../controllers/room.controller.js";
-import { getRoomMessages, uploadRoomAttachments } from "../controllers/message.controller.js";
+import {
+  getRoomMessages,
+  uploadRoomAttachments,
+  viewOnceAttachment,
+} from "../controllers/message.controller.js";
 import { allowedChatMimeTypes, MAX_CHAT_FILE_BYTES } from "../services/storage.service.js";
 
 const router = Router();
@@ -79,6 +83,7 @@ router.post("/:id/slowmode", requireFullUser, setSlowMode);
 router.get("/:id", getRoom);
 router.get("/:id/messages", getRoomMessages);
 router.post("/:id/attachments", chatUploadFiles, uploadRoomAttachments);
+router.post("/:id/messages/:messageId/view", viewOnceAttachment);
 router.post("/:id/leave", leaveRoom);
 router.post("/:id/report", reportMember);
 

@@ -302,6 +302,75 @@ describe("chat attachments over sockets", () => {
     expect(res.message.attachments).toHaveLength(0);
   });
 
+  it("accepts a voice note with duration and waveform", async () => {
+    const { s, room } = await soloRoom("VoiceNote");
+    const res = await ack(s, "message:send", {
+      roomId: room.id,
+      text: "",
+      attachments: [{
+        kind: "audio", voice: true,
+        url: "http://localhost:9000/connectsphere/chat/x/note.webm",
+        mime: "audio/webm", durationMs: 4200,
+        waveform: [10, 50, 90, 30],
+      }],
+    });
+    expect(res.ok).toBe(true);
+    expect(res.message.attachments[0]).toMatchObject({ kind: "audio", voice: true, durationMs: 4200 });
+    expect(res.message.attachments[0].waveform).toEqual([10, 50, 90, 30]);
+  });
+
+  it("clamps a hostile waveform instead of storing it verbatim", async () => {
+    const { s, room } = await soloRoom("BadWave");
+    const res = await ack(s, "message:send", {
+      roomId: room.id,
+      text: "",
+      attachments: [{
+        kind: "audio", voice: true,
+        url: "http://localhost:9000/connectsphere/chat/x/n.webm",
+        // 500 values, wildly out of range, plus junk
+        waveform: [...Array(500).keys()].map((i) => (i % 2 ? 99999 : -50)),
+      }],
+    });
+    expect(res.ok).toBe(true);
+    const w = res.message.attachments[0].waveform;
+    expect(w.length).toBe(64);                      // capped
+    expect(Math.max(...w)).toBeLessThanOrEqual(100); // clamped
+    expect(Math.min(...w)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("never broadcasts a view-once url, and ignores client-supplied viewedBy", async () => {
+    const { s, room } = await soloRoom("ViewOnceSock");
+    const res = await ack(s, "message:send", {
+      roomId: room.id,
+      text: "",
+      attachments: [{
+        kind: "image",
+        url: "http://localhost:9000/connectsphere/chat/x/secret.png",
+        viewOnce: true,
+        viewedBy: ["deadbeefdeadbeefdeadbeef"], // must be ignored
+      }],
+    });
+    expect(res.ok).toBe(true);
+    const a = res.message.attachments[0];
+    expect(a.viewOnce).toBe(true);
+    expect(a.url).toBeUndefined();       // stripped from the broadcast
+    expect(a.viewedBy).toBeUndefined();  // never echoed back
+  });
+
+  it("ignores viewOnce on a non-visual attachment", async () => {
+    const { s, room } = await soloRoom("ViewOnceFile");
+    const res = await ack(s, "message:send", {
+      roomId: room.id,
+      text: "",
+      attachments: [{
+        kind: "file", url: "http://localhost:9000/connectsphere/chat/x/doc.pdf", viewOnce: true,
+      }],
+    });
+    expect(res.ok).toBe(true);
+    expect(res.message.attachments[0].viewOnce).toBeUndefined();
+    expect(res.message.attachments[0].url).toBeTruthy(); // still a normal file
+  });
+
   it("rejects a message that is empty after sanitisation", async () => {
     const { s, room } = await soloRoom("EmptyAfterClean");
     const res = await ack(s, "message:send", {

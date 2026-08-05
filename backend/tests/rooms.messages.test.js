@@ -211,3 +211,106 @@ describe("POST /api/rooms/:id/attachments", () => {
     expect(res.status).toBe(400);
   });
 });
+
+// View-once must be enforced by the SERVER — a client-side flag would be
+// theatre. These lock down "one open per viewer, then the url is gone".
+describe("view-once attachments", () => {
+  const VO_URL = "http://localhost:9000/connectsphere/chat/x/secret.png";
+
+  async function seedViewOnce() {
+    await request(h.app)
+      .post("/api/rooms/join")
+      .set("Authorization", `Bearer ${bob.token}`)
+      .send({ code: (await Room.findById(roomId)).code });
+
+    return Message.create({
+      room: roomId,
+      sender: alice.id,
+      text: "",
+      attachments: [{ kind: "image", url: VO_URL, mime: "image/png", viewOnce: true, viewedBy: [] }],
+    });
+  }
+
+  it("hides the url in history until it is opened", async () => {
+    await seedViewOnce();
+    const res = await request(h.app)
+      .get(`/api/rooms/${roomId}/messages`)
+      .set("Authorization", `Bearer ${bob.token}`);
+
+    const last = res.body.data.messages.at(-1);
+    expect(last.attachments[0].viewOnce).toBe(true);
+    expect(last.attachments[0].spent).toBe(false);
+    // The url IS present until viewed (the client needs it only via /view),
+    // but viewedBy must never leak.
+    expect(last.attachments[0].viewedBy).toBeUndefined();
+  });
+
+  it("returns the url once, then 410s on a second open", async () => {
+    const msg = await seedViewOnce();
+
+    const first = await request(h.app)
+      .post(`/api/rooms/${roomId}/messages/${msg._id}/view`)
+      .set("Authorization", `Bearer ${bob.token}`)
+      .send({ index: 0 });
+    expect(first.status).toBe(200);
+    expect(first.body.data.url).toBe(VO_URL);
+
+    const second = await request(h.app)
+      .post(`/api/rooms/${roomId}/messages/${msg._id}/view`)
+      .set("Authorization", `Bearer ${bob.token}`)
+      .send({ index: 0 });
+    expect(second.status).toBe(410);
+  });
+
+  it("redacts the url from history after that viewer opened it", async () => {
+    const msg = await seedViewOnce();
+    await request(h.app)
+      .post(`/api/rooms/${roomId}/messages/${msg._id}/view`)
+      .set("Authorization", `Bearer ${bob.token}`)
+      .send({ index: 0 });
+
+    const res = await request(h.app)
+      .get(`/api/rooms/${roomId}/messages`)
+      .set("Authorization", `Bearer ${bob.token}`);
+    const seen = res.body.data.messages.find((m) => m.id === msg._id.toString());
+    expect(seen.attachments[0].spent).toBe(true);
+    expect(seen.attachments[0].url).toBeUndefined();
+  });
+
+  it("the sender peeking does NOT consume the recipient's view", async () => {
+    const msg = await seedViewOnce();
+
+    const senderPeek = await request(h.app)
+      .post(`/api/rooms/${roomId}/messages/${msg._id}/view`)
+      .set("Authorization", `Bearer ${alice.token}`)
+      .send({ index: 0 });
+    expect(senderPeek.status).toBe(200);
+
+    // Bob can still open it for the first time.
+    const bobView = await request(h.app)
+      .post(`/api/rooms/${roomId}/messages/${msg._id}/view`)
+      .set("Authorization", `Bearer ${bob.token}`)
+      .send({ index: 0 });
+    expect(bobView.status).toBe(200);
+    expect(bobView.body.data.url).toBe(VO_URL);
+  });
+
+  it("rejects a non-member and a non-view-once index", async () => {
+    const msg = await seedViewOnce();
+    const carol = await registerUser(h.app, {
+      name: "Carol", email: `carol.vo.${Date.now()}@example.com`, password: "Password123",
+    });
+
+    const outsider = await request(h.app)
+      .post(`/api/rooms/${roomId}/messages/${msg._id}/view`)
+      .set("Authorization", `Bearer ${carol.token}`)
+      .send({ index: 0 });
+    expect(outsider.status).toBe(403);
+
+    const badIndex = await request(h.app)
+      .post(`/api/rooms/${roomId}/messages/${msg._id}/view`)
+      .set("Authorization", `Bearer ${bob.token}`)
+      .send({ index: 5 });
+    expect(badIndex.status).toBe(400);
+  });
+});

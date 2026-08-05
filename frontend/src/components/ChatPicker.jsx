@@ -12,7 +12,15 @@ import {
   fallbackTrending,
   providerLabel,
 } from "@/lib/gifs.js";
-import { STICKERS } from "@/components/stickers/Stickers.jsx";
+import {
+  ALL_STICKERS,
+  STICKER_PACKS,
+  getFavouriteStickers,
+  toggleFavouriteSticker,
+  getCustomStickers,
+  removeCustomSticker,
+} from "@/lib/stickerStore.js";
+import StickerCreator from "@/components/StickerCreator.jsx";
 import { preloadImage, clearImageQueueCache } from "@/lib/imageQueue.js";
 
 /**
@@ -25,7 +33,7 @@ import { preloadImage, clearImageQueueCache } from "@/lib/imageQueue.js";
  * that's the interaction every chat app trained users on — you pick a GIF, the
  * GIF is sent. Emoji are text, so they behave like text.
  */
-export default function ChatPicker({ onInsertEmoji, onSendAttachment, disabled }) {
+export default function ChatPicker({ onInsertEmoji, onSendAttachment, disabled, roomId }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("emoji");
   const panelRef = useRef(null);
@@ -111,8 +119,21 @@ export default function ChatPicker({ onInsertEmoji, onSendAttachment, disabled }
           )}
           {tab === "sticker" && (
             <StickerTab
+              roomId={roomId}
               onPick={(stickerId) => {
                 onSendAttachment({ kind: "sticker", stickerId });
+                setOpen(false);
+              }}
+              // A custom sticker is an uploaded image — send it as one, tagged
+              // so the bubble renders it sticker-sized rather than as a photo.
+              onPickCustom={(s) => {
+                onSendAttachment({
+                  kind: "image",
+                  url: s.url,
+                  name: s.name,
+                  mime: "image/png",
+                  isSticker: true,
+                });
                 setOpen(false);
               }}
             />
@@ -373,29 +394,161 @@ function GifTab({ onPick }) {
 
 // ── Stickers ───────────────────────────────────────────────────────────────
 
-function StickerTab({ onPick }) {
+function StickerTab({ onPick, onPickCustom, roomId }) {
+  const [shelf, setShelf] = useState("all"); // all | favourites | mine | <packId>
+  const [favourites, setFavourites] = useState(getFavouriteStickers);
+  const [custom, setCustom] = useState(getCustomStickers);
+  const [creating, setCreating] = useState(false);
+
+  const toggleFav = (id, e) => {
+    e.stopPropagation();
+    setFavourites(toggleFavouriteSticker(id));
+  };
+
+  const SHELVES = [
+    ["all", "All"],
+    ["favourites", `★ ${favourites.length || ""}`.trim()],
+    ["mine", `🪄 ${custom.length || ""}`.trim()],
+  ];
+
+  // Which built-in ids to show for the selected shelf.
+  let builtinIds = [];
+  if (shelf === "all") builtinIds = STICKER_PACKS.flatMap((p) => p.ids);
+  else if (shelf === "favourites") builtinIds = favourites;
+  else if (shelf !== "mine") builtinIds = STICKER_PACKS.find((p) => p.id === shelf)?.ids || [];
+
+  const showCustom = shelf === "all" || shelf === "mine";
+
   return (
     <div>
-      <div className="h-[248px] overflow-y-auto p-3">
-        <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-2">Animated stickers</p>
-        <div className="grid grid-cols-3 gap-2">
-          {Object.entries(STICKERS).map(([kind, s]) => (
-            <button
-              key={kind}
-              type="button"
-              onClick={() => onPick(kind)}
-              title={s.label}
-              className="flex flex-col items-center gap-0.5 rounded-xl border border-gray-800 hover:border-brand-500 bg-gray-950/50 p-2 transition-all hover:scale-105"
-            >
-              <s.Comp size={56} />
-              <span className="text-[10px] text-gray-400">{s.label}</span>
-            </button>
-          ))}
-        </div>
+      <div className="flex items-center gap-1 px-2 pt-2 pb-1 overflow-x-auto">
+        {SHELVES.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setShelf(id)}
+            className={`shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+              shelf === id ? "bg-brand-600/30 text-brand-200" : "text-gray-400 hover:bg-white/5"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        {STICKER_PACKS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => setShelf(p.id)}
+            className={`shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+              shelf === p.id ? "bg-brand-600/30 text-brand-200" : "text-gray-400 hover:bg-white/5"
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          title="Make a sticker from a photo"
+          className="shrink-0 ml-auto px-2 py-1 rounded-lg text-[11px] font-medium bg-gradient-to-r from-brand-600/40 to-fuchsia-600/40 text-brand-100 hover:brightness-125"
+        >
+          🪄 Make
+        </button>
       </div>
+
+      <div className="h-[236px] overflow-y-auto px-3 pb-2">
+        {showCustom && custom.length > 0 && (
+          <>
+            <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1.5 mt-1">My stickers</p>
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              {custom.map((s) => (
+                <div key={s.id} className="relative group">
+                  <button
+                    type="button"
+                    onClick={() => onPickCustom(s)}
+                    title={s.name}
+                    className="w-full rounded-xl border border-gray-800 hover:border-brand-500 bg-gray-950/50 p-1.5 transition-all hover:scale-105"
+                  >
+                    <img src={s.url} alt={s.name} className="w-full h-14 object-contain" loading="lazy" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setCustom(removeCustomSticker(s.id)); }}
+                    title="Remove from my stickers"
+                    className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-gray-900 border border-gray-700 text-[10px] text-gray-400 opacity-0 group-hover:opacity-100 hover:text-red-400"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {builtinIds.length > 0 && (
+          <>
+            {showCustom && custom.length > 0 && (
+              <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1.5">Packs</p>
+            )}
+            <div className="grid grid-cols-3 gap-2">
+              {builtinIds.map((kind) => {
+                const s = ALL_STICKERS[kind];
+                if (!s) return null;
+                const fav = favourites.includes(kind);
+                return (
+                  <div key={kind} className="relative group">
+                    <button
+                      type="button"
+                      onClick={() => onPick(kind)}
+                      title={s.label}
+                      className="w-full flex flex-col items-center gap-0.5 rounded-xl border border-gray-800 hover:border-brand-500 bg-gray-950/50 p-2 transition-all hover:scale-105"
+                    >
+                      <s.Comp size={54} />
+                      <span className="text-[10px] text-gray-400">{s.label}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => toggleFav(kind, e)}
+                      title={fav ? "Remove from favourites" : "Save to favourites"}
+                      className={`absolute top-0.5 right-0.5 w-5 h-5 rounded-full text-[10px] transition-opacity ${
+                        fav ? "text-amber-300 opacity-100" : "text-gray-600 opacity-0 group-hover:opacity-100 hover:text-amber-300"
+                      }`}
+                    >
+                      {fav ? "★" : "☆"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {builtinIds.length === 0 && (!showCustom || custom.length === 0) && (
+          <div className="h-full flex flex-col items-center justify-center gap-1.5 text-center">
+            <span className="text-2xl">{shelf === "mine" ? "🪄" : "★"}</span>
+            <p className="text-xs text-gray-400">
+              {shelf === "mine" ? "No custom stickers yet" : "No favourites yet"}
+            </p>
+            <p className="text-[10px] text-gray-600 max-w-[190px]">
+              {shelf === "mine"
+                ? "Tap “Make” to turn a photo into a sticker."
+                : "Tap ☆ on any sticker to pin it here."}
+            </p>
+          </div>
+        )}
+      </div>
+
       <p className="px-2.5 py-1 border-t border-gray-800 text-[10px] text-gray-600">
-        Vector art — animates at any size, nothing to download.
+        {Object.keys(ALL_STICKERS).length} animated stickers · vector art, nothing to download
       </p>
+
+      {creating && (
+        <StickerCreator
+          roomId={roomId}
+          onClose={() => setCreating(false)}
+          onCreated={() => setCustom(getCustomStickers())}
+        />
+      )}
     </div>
   );
 }

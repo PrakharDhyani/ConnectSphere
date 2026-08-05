@@ -11,6 +11,7 @@ import { useCaptions } from "@/hooks/useCaptions.js";
 import { useChatUploads } from "@/hooks/useChatUploads.js";
 import ChatPicker from "@/components/ChatPicker.jsx";
 import ChatAttachments, { fmtBytes } from "@/components/ChatAttachments.jsx";
+import VoiceComposer from "@/components/VoiceComposer.jsx";
 import { CaptionOverlay, CaptionControls } from "@/components/Captions.jsx";
 import VideoTile from "@/components/VideoTile.jsx";
 import BackgroundPicker from "@/components/BackgroundPicker.jsx";
@@ -191,6 +192,8 @@ export default function RoomPage() {
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
   const [dragging, setDragging] = useState(false);
+  // 👁️ When on, the NEXT photo/video you send can be opened only once.
+  const [viewOnce, setViewOnce] = useState(false);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
   // Drag events fire per-child-element, so a naive boolean flickers as the
@@ -332,6 +335,15 @@ export default function RoomPage() {
     uploads.clear();
     inputRef.current?.focus();
 
+    // View-once applies to visual media only, and is a one-shot mode: it
+    // switches itself off after sending so it can never surprise you later.
+    if (viewOnce) {
+      attachments = attachments.map((a) =>
+        a.kind === "image" || a.kind === "video" ? { ...a, viewOnce: true } : a
+      );
+      setViewOnce(false);
+    }
+
     const ack = await sendMessage(text, attachments);
     if (!ack?.ok) {
       setDraft(text);
@@ -347,6 +359,35 @@ export default function RoomPage() {
     if (!ack?.ok) {
       setSendError(ack?.error || "Not sent");
       setTimeout(() => setSendError(null), 4000);
+    }
+  }
+
+  /**
+   * A finished voice note: upload the recorded blob through the ordinary
+   * attachment endpoint, then send it as `kind: "audio"` with `voice: true`
+   * plus the waveform captured while recording.
+   */
+  async function sendVoiceNote({ blob, durationMs, waveform, mimeType }) {
+    setSendError(null);
+    try {
+      const ext = mimeType?.includes("mp4") ? "m4a" : mimeType?.includes("ogg") ? "ogg" : "webm";
+      const form = new FormData();
+      form.append("files", blob, `voice-note.${ext}`);
+      const res = await api.post(`/rooms/${roomId}/attachments`, form);
+      const uploaded = res.data.data.attachments?.[0];
+      if (!uploaded?.url) throw new Error("Upload failed");
+
+      const ack = await sendMessage("", [
+        { ...uploaded, kind: "audio", voice: true, durationMs, waveform },
+      ]);
+      if (!ack?.ok) throw new Error(ack?.error || "Not sent");
+    } catch (err) {
+      setSendError(
+        err.response?.status === 501
+          ? "File storage isn't configured on this server"
+          : err.message || "Could not send the voice note"
+      );
+      setTimeout(() => setSendError(null), 5000);
     }
   }
 
@@ -633,7 +674,7 @@ export default function RoomPage() {
                             {m.text}
                           </p>
                         ))}
-                      <ChatAttachments attachments={m.attachments} />
+                      <ChatAttachments attachments={m.attachments} roomId={roomId} messageId={m.id} />
                     </div>
                   </div>
                 </div>
@@ -721,9 +762,18 @@ export default function RoomPage() {
             {uploads.error && (
               <p className="mb-2 text-xs text-amber-300">⚠️ {uploads.error}</p>
             )}
+            {viewOnce && (
+              <p className="mb-2 flex items-center gap-1.5 text-[11px] text-amber-300">
+                👁️ View once is on — the next photo or video can be opened only once.
+                <button type="button" onClick={() => setViewOnce(false)} className="underline hover:text-amber-200">
+                  turn off
+                </button>
+              </p>
+            )}
 
             <div className="flex items-center gap-1 rounded-xl bg-gray-950 border border-gray-700 focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500/40 transition-colors px-1.5 py-1.5">
               <ChatPicker
+                roomId={roomId}
                 onInsertEmoji={(glyph) => { setDraft((d) => d + glyph); inputRef.current?.focus(); }}
                 onSendAttachment={sendAttachmentNow}
                 disabled={uploads.uploading}
@@ -737,6 +787,19 @@ export default function RoomPage() {
               >
                 📎
               </button>
+              {/* 👁️ One-time view — applies to the next photo/video you send. */}
+              <button
+                type="button"
+                onClick={() => setViewOnce((v) => !v)}
+                disabled={uploads.uploading}
+                title={viewOnce ? "View once is ON — media can be opened once" : "Send the next photo/video as view-once"}
+                className={`w-8 h-8 rounded-lg text-base leading-none transition-colors disabled:opacity-40 ${
+                  viewOnce ? "bg-amber-500/25 text-amber-300 ring-1 ring-amber-500/50" : "hover:bg-white/5"
+                }`}
+              >
+                {viewOnce ? "👁️" : "👁"}
+              </button>
+              <VoiceComposer onSend={sendVoiceNote} disabled={uploads.uploading} />
               <input
                 ref={fileInputRef}
                 type="file"

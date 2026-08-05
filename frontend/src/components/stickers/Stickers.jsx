@@ -153,31 +153,71 @@ export function KissSticker({ size = 96 }) {
 export function GunshotSticker({ size = 96 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 100 100">
+      <defs>
+        <linearGradient id="stk-gun-steel" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#94a3b8" />
+          <stop offset="45%" stopColor="#475569" />
+          <stop offset="100%" stopColor="#1e293b" />
+        </linearGradient>
+        <linearGradient id="stk-gun-grip" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#78350f" />
+          <stop offset="100%" stopColor="#451a03" />
+        </linearGradient>
+        <radialGradient id="stk-gun-fire" cx="80%" cy="50%" r="70%">
+          <stop offset="0%" stopColor="#fffbeb" />
+          <stop offset="40%" stopColor="#fde047" />
+          <stop offset="100%" stopColor="#f97316" />
+        </radialGradient>
+      </defs>
       <style>{`
-        @keyframes stk-gun-recoil { 0%,55%,100% { transform: rotate(0deg) translateX(0) } 60% { transform: rotate(-14deg) translateX(4px) } 72% { transform: rotate(4deg) } }
-        @keyframes stk-gun-flash { 0%,55%,90%,100% { opacity: 0; transform: scale(0.3) } 60%,74% { opacity: 1; transform: scale(1.15) } }
-        @keyframes stk-gun-bang { 0%,58%,100% { opacity: 0; transform: scale(0.4) rotate(-8deg) } 64%,86% { opacity: 1; transform: scale(1) rotate(-8deg) } }
-        .stk-gun-body { animation: stk-gun-recoil 1.4s ease-in-out infinite; transform-origin: 46px 62px; }
-        .stk-gun-fl { animation: stk-gun-flash 1.4s ease-out infinite; transform-origin: 20px 47px; }
-        .stk-gun-bg { animation: stk-gun-bang 1.4s ease-out infinite; transform-origin: 66px 26px; }
+        @keyframes stk-gun-recoil { 0%,55%,100% { transform: rotate(0deg) translateX(0) } 60% { transform: rotate(-16deg) translateX(5px) } 74% { transform: rotate(5deg) translateX(-1px) } 86% { transform: rotate(-2deg) } }
+        @keyframes stk-gun-flash { 0%,55%,88%,100% { opacity: 0; transform: scale(.25) } 60%,72% { opacity: 1; transform: scale(1.1) } }
+        @keyframes stk-gun-bang { 0%,58%,100% { opacity: 0; transform: scale(.35) rotate(-10deg) } 66%,86% { opacity: 1; transform: scale(1) rotate(-10deg) } }
+        @keyframes stk-gun-smoke { 0%,60%,100% { opacity: 0; transform: translate(0,0) scale(.4) } 70% { opacity: .5 } 95% { opacity: 0; transform: translate(-10px,-16px) scale(1.5) } }
+        @keyframes stk-gun-shell { 0%,58%,100% { opacity: 0; transform: translate(0,0) rotate(0deg) } 64% { opacity: 1 } 92% { opacity: 0; transform: translate(16px,-6px) rotate(220deg) } }
+        .stk-gun-body { animation: stk-gun-recoil 1.5s ease-in-out infinite; transform-origin: 52px 64px; }
+        .stk-gun-fl { animation: stk-gun-flash 1.5s ease-out infinite; transform-origin: 20px 48px; }
+        .stk-gun-bg { animation: stk-gun-bang 1.5s ease-out infinite; transform-origin: 68px 24px; }
+        .stk-gun-sm { animation: stk-gun-smoke 1.5s ease-out infinite; }
+        .stk-gun-sh { animation: stk-gun-shell 1.5s ease-out infinite; }
       `}</style>
-      {/* muzzle flash */}
+
+      {/* smoke puffs */}
+      <circle className="stk-gun-sm" cx="20" cy="44" r="5" fill="#cbd5e1" />
+      <circle className="stk-gun-sm" cx="14" cy="50" r="3.6" fill="#e2e8f0" style={{ animationDelay: ".06s" }} />
+
+      {/* muzzle flash — layered star + core for depth */}
       <g className="stk-gun-fl">
-        <path d="M22 47 L8 40 L18 47 L4 47 L18 50 L8 56 L22 50 Z" fill="#fbbf24" stroke="#f59e0b" strokeWidth="1" />
-        <circle cx="21" cy="48" r="4" fill="#fef08a" />
+        <path d="M24 48 L6 38 L16 48 L2 48 L16 52 L6 60 Z" fill="url(#stk-gun-fire)" />
+        <path d="M23 48 L12 42 L18 48 L11 54 Z" fill="#fffbeb" />
+        <circle cx="23" cy="48" r="4.5" fill="#fff" opacity=".95" />
       </g>
-      {/* pistol (pointing left) */}
+
+      {/* ejected shell */}
+      <rect className="stk-gun-sh" x="56" y="38" width="4.5" height="8" rx="1.6" fill="#fbbf24" stroke="#b45309" strokeWidth=".8" />
+
       <g className="stk-gun-body">
-        <rect x="24" y="42" width="44" height="13" rx="4" fill="#334155" stroke="#0f172a" strokeWidth="2" />
-        <rect x="24" y="42" width="44" height="5" rx="2.5" fill="#64748b" />
-        <rect x="52" y="52" width="13" height="26" rx="4" transform="rotate(-12 58 52)" fill="#475569" stroke="#0f172a" strokeWidth="2" />
-        <path d="M44 55 q2 8 8 9" stroke="#0f172a" strokeWidth="3" fill="none" strokeLinecap="round" />
-        <rect x="40" y="53" width="14" height="4" rx="2" fill="#1e293b" />
+        {/* grip */}
+        <path d="M58 56 l14 0 l-6 26 a4 4 0 0 1 -4 3 h-6 a3 3 0 0 1 -3 -4 z" fill="url(#stk-gun-grip)" stroke="#1c1917" strokeWidth="2" strokeLinejoin="round" />
+        <path d="M60 62 h9 M59 68 h9 M58 74 h8" stroke="#1c1917" strokeWidth="1.4" opacity=".5" strokeLinecap="round" />
+        {/* trigger guard */}
+        <path d="M44 58 a10 10 0 0 0 10 8" stroke="#1e293b" strokeWidth="3.4" fill="none" strokeLinecap="round" />
+        <path d="M48 58 q1 5 4 6" stroke="#0f172a" strokeWidth="2.6" fill="none" strokeLinecap="round" />
+        {/* frame + slide */}
+        <rect x="22" y="44" width="50" height="14" rx="3.5" fill="url(#stk-gun-steel)" stroke="#0f172a" strokeWidth="2" />
+        <rect x="24" y="45.5" width="46" height="4" rx="2" fill="#94a3b8" opacity=".75" />
+        <rect x="30" y="52" width="24" height="2.4" rx="1.2" fill="#0f172a" opacity=".45" />
+        {/* sights */}
+        <rect x="26" y="41.5" width="4" height="3.5" rx="1" fill="#0f172a" />
+        <rect x="64" y="41.5" width="5" height="3.5" rx="1" fill="#0f172a" />
+        {/* barrel opening */}
+        <circle cx="24" cy="51" r="2.6" fill="#020617" />
       </g>
+
       {/* BANG! */}
       <g className="stk-gun-bg">
-        <path d="M66 14 l4 8 8-6 -2 9 10 1 -8 6 7 6 -10-1 1 10 -7-7 -5 9 -1-10 -9 4 6-8 -9-3 10-3 -4-9 8 4 z" fill="#f59e0b" stroke="#b45309" strokeWidth="1.5" />
-        <text x="66" y="30" textAnchor="middle" fontSize="11" fontWeight="900" fill="#7c2d12" transform="rotate(-8 66 26)">BANG</text>
+        <path d="M68 12 l4 8 8-6 -2 9 10 1 -8 6 7 6 -10-1 1 10 -7-7 -5 9 -1-10 -9 4 6-8 -9-3 10-3 -4-9 8 4 z" fill="#f59e0b" stroke="#b45309" strokeWidth="1.6" strokeLinejoin="round" />
+        <text x="68" y="28" textAnchor="middle" fontSize="11" fontWeight="900" fill="#7c2d12" transform="rotate(-10 68 24)">BANG</text>
       </g>
     </svg>
   );

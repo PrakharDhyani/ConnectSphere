@@ -2349,6 +2349,76 @@ over REST and then re-validating the descriptors at the socket boundary means
 the trust decision lives in exactly one function, and the same rule protects
 uploads, GIFs and stickers with three different policies.
 
+### WhatsApp-grade chat — sticker studio, voice notes, view-once media
+Three features, each riding rails that already existed.
+
+**Stickers: 6 → 18, plus a studio.**
+- Pack #2 is 12 new animated SVGs at a deliberately higher fidelity than pack
+  #1: gradients and inner highlights so nothing reads flat, *secondary motion*
+  (the rocket has exhaust and speed stars, the trophy has orbiting sparkles,
+  the bulb flickers on a separate cycle from its rays), and easing via
+  `keySplines` rather than linear interpolation. The old `gunshot` sticker was
+  visibly flatter than the new work, so it was rebuilt too — gradient steel,
+  wood grip, trigger guard, ejecting shell, smoke.
+- *The id-collision trap:* every animation/gradient id is namespaced
+  (`stk2-*`). Two SVGs on one page share a document, so a duplicate keyframe or
+  gradient id silently hijacks the other sticker's animation. A check asserts
+  all ids are namespaced and unique.
+- *Save & favourite* (`lib/stickerStore.js`): ☆ pins a built-in to your
+  favourites shelf, and ＋ on a received sticker copies it into your tray.
+  Both live in localStorage — they are per-person UI preferences, not shared
+  room state, so this needed **zero new endpoints and no migration**. The
+  uploaded image itself is durable in MinIO; only the "this is in my tray"
+  pointer is local.
+- *Sticker studio* (`lib/stickerMaker.js`): photo → square crop (drag/zoom) →
+  **background removed on-device** by the same MediaPipe selfie segmenter
+  `bgFilter.js` already loads for call backgrounds → white outline + drop
+  shadow → 512×512 PNG uploaded through the ordinary attachment endpoint. The
+  outline is a cheap trick: draw the silhouette repeatedly at small offsets in
+  white (`source-in` recolours the alpha), which dilates the shape without a
+  per-pixel edge walk. If the model can't load, it offers the plain crop —
+  a sticker with a background beats no sticker.
+
+**Voice notes.** MediaRecorder (the API `lib/recorder.js` already uses for
+calls) plus a WebAudio `AnalyserNode` for the live level meter. The peak array
+captured *while recording* is downsampled to 48 bars and sent **in the message
+document**, so the receiving bubble draws the real shape of the audio without
+downloading and decoding the file first. Pause/resume tracks paused time
+separately so the duration stays honest. Backend cost: zero new endpoints —
+a voice note is `kind: "audio"` with `voice: true`.
+
+**View-once media — enforced by the server, not the client.** A flag the
+client could ignore would be theatre, so:
+- the url is **stripped from the socket broadcast** entirely (otherwise any
+  client could cache it forever);
+- opening it is a `POST /messages/:id/view` that returns the url **exactly
+  once per viewer** and records the view with `$addToSet` (idempotent under a
+  double-tap race);
+- the history endpoint runs `redactForViewer`, so a spent link can never come
+  back out of `GET /messages`;
+- `viewedBy` is server-owned — the sanitiser forces it to `[]` and never
+  echoes it back, so the roster of who opened your photo never leaks;
+- the **sender peeking does not consume the recipient's view**, but can't
+  re-open it after someone else has.
+
+**Deferred deliberately:** disappearing-message timers (24h/7d/30d/90d). The
+right scope for them is a 1:1 DM, where both people opt in — a room-wide timer
+set by one owner can destroy a group's shared history. Revisit when DMs land.
+
+**Verification:** 267 tests green (up from 258). All 18 stickers were rendered
+in headless Chrome and screenshotted — which caught two that looked wrong:
+`party` was an empty box in a still frame (its confetti was mid-flight, so a
+static spray was layered underneath the animated one), and `gunshot` looked
+flat beside the new pack. Live end-to-end against the running server + MinIO:
+13 checks covering voice upload → waveform persistence → view-once broadcast
+redaction → first open 200 → second open 410 → history redaction.
+
+**Interview takeaway:** "view once" is a *server* feature wearing a client
+feature's clothes. Every one of the four leak paths (broadcast, history,
+re-open, viewer roster) had to be closed independently — and the test that
+proves it is the one asserting the second open returns 410, not the one
+asserting the button disappears.
+
 ---
 
 ## Current Status / Next Steps
@@ -2410,6 +2480,9 @@ toasts when someone starts a call/board/game), and **mic on every tab**
 (audio-only "Join voice" + a persistent VoiceBar). Verified: ready-up gate.
 
 **Next:**
+0. **Direct messages (1:1)** — the prerequisite for disappearing-message
+   timers (24h/7d/30d/90d), which belong in a two-person conversation both
+   parties opt into rather than a room-wide switch one owner controls.
 1. **Friends system** (requests, friends list, invite friends to a room/activity) —
    the one deferred item; a standalone persistent subsystem, its own build.
 2. **Manual browser tests** across all activities (2 tabs) + guest link.
@@ -2433,4 +2506,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-05 (rich chat pass: emoji picker with search, three-layer GIF sourcing — KLIPY → OtakuGIFs → built-in SVG cards after Tenor's API shutdown — animated stickers, and file/image/video uploads to MinIO — 258 tests green)*
+*Last updated: 2026-08-06 (WhatsApp-grade chat: 18 animated stickers + sticker studio with on-device background removal, favourites/save, voice notes with real waveforms, and server-enforced view-once media — 267 tests green. Disappearing-message timers deferred to DMs.)*
