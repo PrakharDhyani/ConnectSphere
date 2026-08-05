@@ -64,6 +64,11 @@ const roomSchema = new Schema(
       {
         user: { type: Schema.Types.ObjectId, ref: "User" },
         name: String,
+        // Why they were banned — usually the house rule they broke. Shown to
+        // the owner in the ban list and to the user when they are removed, so
+        // moderation is explainable rather than arbitrary.
+        reason: { type: String, maxlength: 300 },
+        at: { type: Date, default: Date.now },
       },
     ],
     // Slow-mode: non-owner members may send at most one chat message per this
@@ -73,6 +78,28 @@ const roomSchema = new Schema(
       default: 0,
       min: 0,
       max: 120,
+    },
+
+    /**
+     * House rules the owner writes. Shown to every member, and quoted back
+     * when someone is kicked or banned ("rule 3: no spoilers") so moderation
+     * is explainable rather than arbitrary.
+     *
+     * `updatedAt` drives the "rules changed — please re-read" prompt: a client
+     * stores the version it last acknowledged, so editing the rules re-prompts
+     * everyone without needing per-user rows in the database.
+     */
+    rules: {
+      items: {
+        type: [{ type: String, trim: true, maxlength: 200 }],
+        default: undefined,
+        validate: {
+          validator: (r) => !r || r.length <= 20,
+          message: "At most 20 rules",
+        },
+      },
+      updatedAt: { type: Date },
+      updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
     },
   },
   { timestamps: true }

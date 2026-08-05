@@ -91,16 +91,51 @@ const messageSchema = new Schema(
         message: "Too many attachments (max 10)",
       },
     },
+
+    // ── Message actions ────────────────────────────────────────────────────
+    // Edited text keeps the original id/timestamp so replies and pins survive.
+    editedAt: { type: Date },
+
+    // Pinned messages surface in a room-wide bar. Who pinned it is kept so the
+    // UI can say "pinned by X" and so an unpin can be attributed.
+    pinnedAt: { type: Date },
+    pinnedBy: { type: Schema.Types.ObjectId, ref: "User" },
+
+    // "Delete for everyone" is a TOMBSTONE, not a document removal: the row
+    // stays so the conversation keeps its shape (and so a deleted message
+    // can't be silently re-inserted), but text/attachments are wiped.
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "User" },
+
+    // "Delete for me" is per-user and never affects anyone else's view.
+    hiddenFor: {
+      type: [{ type: Schema.Types.ObjectId, ref: "User" }],
+      default: undefined,
+    },
+
+    // Forwarding keeps a breadcrumb so a screenshot-worthy message can't be
+    // laundered into looking original.
+    forwardedFrom: {
+      roomId: { type: Schema.Types.ObjectId, ref: "Room" },
+      roomName: { type: String, maxlength: 100 },
+      senderName: { type: String, maxlength: 100 },
+    },
   },
   { timestamps: true }
 );
 
 messageSchema.pre("validate", function ensureContent(next) {
+  // A tombstone legitimately has neither text nor attachments.
+  if (this.deletedAt) return next();
   if (!this.text && !(this.attachments?.length > 0)) {
     return next(new Error("A message needs text or an attachment"));
   }
   next();
 });
+
+// The pinned-messages bar queries "pinned in THIS room, newest first".
+// Sparse: the vast majority of messages are never pinned.
+messageSchema.index({ room: 1, pinnedAt: -1 }, { sparse: true });
 
 // History is always "latest N in THIS room" — a compound index on
 // (room, createdAt desc) makes that query hit the index instead of scanning.

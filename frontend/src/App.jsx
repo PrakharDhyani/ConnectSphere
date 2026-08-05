@@ -9,6 +9,7 @@ import { useNotify } from "@/stores/notify.store.js";
 import ProtectedRoute from "@/components/ProtectedRoute.jsx";
 import PublicOnlyRoute from "@/components/PublicOnlyRoute.jsx";
 import Toaster from "@/components/Toaster.jsx";
+import { IncomingCallToast } from "@/components/CallInvite.jsx";
 
 import HomePage from "@/pages/HomePage.jsx";
 import LoginPage from "@/pages/LoginPage.jsx";
@@ -74,6 +75,9 @@ export default function App() {
   return (
     <>
       <Toaster />
+      {/* 📞 Someone rang you into a call — app-wide, so it reaches you on any
+          page (and specifically when you have muted that room). */}
+      <IncomingCallToast onAccept={(ring) => navigate(`/room/${ring.roomId}`)} />
       <Routes>
         <Route path="/" element={<HomePage />} />
 

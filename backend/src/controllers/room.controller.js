@@ -46,8 +46,15 @@ function toRoomDetail(room, userId) {
     createdAt: room.createdAt,
     memberCount: room.members.length,
     slowModeSec: room.slowModeSec || 0,
+    visibility: room.visibility || "private",
+    // House rules are visible to EVERY member (that is the point) — only
+    // editing them is owner-gated.
+    rules: room.rules?.items || [],
+    rulesUpdatedAt: room.rules?.updatedAt,
     // The ban list is owner-only information (needed for the unban UI).
-    banned: isOwner ? (room.banned || []).map((b) => ({ id: b.user, name: b.name })) : undefined,
+    banned: isOwner
+      ? (room.banned || []).map((b) => ({ id: b.user, name: b.name, reason: b.reason, at: b.at }))
+      : undefined,
     members: room.members.map((m) => ({
       id: m._id,
       name: m.name,
@@ -61,11 +68,17 @@ function toRoomDetail(room, userId) {
 
 // Shared kick mechanics: drop membership, force their sockets out of the
 // socket.io room (so games/chat stop instantly), and tell their clients.
-async function ejectFromRoom(room, userId) {
+async function ejectFromRoom(room, userId, reason) {
   room.members = room.members.filter((m) => m.toString() !== userId);
   await room.save();
   const rk = roomKey(room._id);
-  io?.to(`user:${userId}`).emit("room:kicked", { roomId: room._id.toString(), roomName: room.name });
+  io?.to(`user:${userId}`).emit("room:kicked", {
+    roomId: room._id.toString(),
+    roomName: room.name,
+    // Telling someone WHY they were removed is the difference between
+    // moderation and a mystery.
+    reason: reason || undefined,
+  });
   io?.in(`user:${userId}`).socketsLeave(rk);
   io?.to(rk).emit("room:members-changed", { roomId: room._id.toString() });
 }
@@ -84,9 +97,9 @@ function assertOwnerAction(room, req, targetId) {
 export async function kickMember(req, res, next) {
   try {
     const room = await loadRoom(req.params.id);
-    const { userId } = req.body;
+    const { userId, reason } = req.body;
     assertOwnerAction(room, req, userId);
-    await ejectFromRoom(room, userId);
+    await ejectFromRoom(room, userId, String(reason || "").slice(0, 300));
     res.json({ success: true, message: "Member removed" });
   } catch (error) {
     next(error);
@@ -98,15 +111,47 @@ export async function kickMember(req, res, next) {
 export async function banMember(req, res, next) {
   try {
     const room = await loadRoom(req.params.id, { populateMembers: true });
-    const { userId } = req.body;
+    const { userId, reason } = req.body;
     assertOwnerAction(room, req, userId);
     const target = room.members.find((m) => m._id.toString() === userId);
+    const why = String(reason || "").slice(0, 300);
     if (!room.banned.some((b) => b.user?.toString() === userId)) {
-      room.banned.push({ user: userId, name: target?.name || "Unknown" });
+      room.banned.push({ user: userId, name: target?.name || "Unknown", reason: why, at: new Date() });
     }
     room.members = room.members.map((m) => m._id); // depopulate for eject's save
-    await ejectFromRoom(room, userId);
+    await ejectFromRoom(room, userId, why);
     res.json({ success: true, message: "Member banned" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PUT /:id/rules  { items: string[] }
+ *
+ * Owner writes the house rules. Bumping `updatedAt` is what re-prompts
+ * members to re-read them — the client stores the version it acknowledged, so
+ * this needs no per-user rows.
+ */
+export async function setRoomRules(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id);
+    if (room.owner.toString() !== req.user.id) throw forbidden("Only the room owner can do that");
+
+    const items = (Array.isArray(req.body.items) ? req.body.items : [])
+      .map((r) => String(r || "").trim().slice(0, 200))
+      .filter(Boolean)
+      .slice(0, 20);
+
+    room.rules = { items: items.length ? items : undefined, updatedAt: new Date(), updatedBy: req.user.id };
+    await room.save();
+
+    io?.to(roomKey(room._id)).emit("room:rules-changed", {
+      roomId: room._id.toString(),
+      rules: items,
+      updatedAt: room.rules.updatedAt,
+    });
+    res.json({ success: true, data: { rules: items, updatedAt: room.rules.updatedAt } });
   } catch (error) {
     next(error);
   }

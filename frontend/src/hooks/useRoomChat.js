@@ -18,6 +18,7 @@ export function useRoomChat(roomId) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(null);
   const [recorders, setRecorders] = useState([]); // [{id,name}] currently recording
+  const [pinned, setPinned] = useState([]);       // [{id,text,...}] pinned in this room
   const typingTimer = useRef(null);
 
   useEffect(() => {
@@ -27,10 +28,44 @@ export function useRoomChat(roomId) {
 
     api
       .get(`/rooms/${roomId}/messages`)
-      .then((res) => active && setMessages(res.data.data.messages))
+      .then((res) => {
+        if (!active) return;
+        const list = res.data.data.messages;
+        setMessages(list);
+        // Seed the pin bar from history rather than a second request.
+        setPinned(
+          list
+            .filter((m) => m.pinnedAt && !m.deletedAt)
+            .sort((a, b) => new Date(b.pinnedAt) - new Date(a.pinnedAt))
+            .slice(0, 5)
+            .map((m) => ({ id: m.id, text: m.text, hasAttachments: (m.attachments?.length || 0) > 0 }))
+        );
+      })
       .catch(() => {});
 
     const onNew = (m) => m.roomId === roomId && setMessages((prev) => [...prev, m]);
+
+    // Message actions mutate an existing row rather than appending — patch it
+    // in place so scroll position and grouping survive.
+    const patch = (id, fields) =>
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...fields } : m)));
+
+    const onEdited = (p) => p.roomId === roomId && patch(p.id, { text: p.text, editedAt: p.editedAt });
+    const onDeleted = (p) => {
+      if (p.roomId !== roomId) return;
+      // A tombstone stays in place so the conversation keeps its shape.
+      patch(p.id, { deletedAt: new Date().toISOString(), text: "", attachments: [], byOwner: p.byOwner });
+    };
+    const onPinned = (p) => {
+      if (p.roomId !== roomId) return;
+      patch(p.id, { pinnedAt: p.pinned ? new Date().toISOString() : null });
+      setPinned((prev) => {
+        const without = prev.filter((x) => x.id !== p.id);
+        return p.pinned
+          ? [{ id: p.id, text: p.text, hasAttachments: p.hasAttachments, pinnedBy: p.pinnedBy }, ...without].slice(0, 5)
+          : without;
+      });
+    };
     const onPresence = (p) => p.roomId === roomId && setPresence(p.users);
     const onTyping = (t) => {
       if (t.roomId !== roomId) return;
@@ -42,6 +77,9 @@ export function useRoomChat(roomId) {
     const onRecording = (p) => p.roomId === roomId && setRecorders(p.recorders || []);
 
     socket.on("message:new", onNew);
+    socket.on("message:edited", onEdited);
+    socket.on("message:deleted", onDeleted);
+    socket.on("message:pinned", onPinned);
     socket.on("presence:update", onPresence);
     socket.on("typing", onTyping);
     socket.on("recording:changed", onRecording);
@@ -68,6 +106,9 @@ export function useRoomChat(roomId) {
       socket.emit("room:leave", roomId, () => {});
       socket.off("connect", join);
       socket.off("message:new", onNew);
+      socket.off("message:edited", onEdited);
+      socket.off("message:deleted", onDeleted);
+      socket.off("message:pinned", onPinned);
       socket.off("presence:update", onPresence);
       socket.off("typing", onTyping);
       socket.off("recording:changed", onRecording);
@@ -88,5 +129,33 @@ export function useRoomChat(roomId) {
 
   const notifyTyping = useCallback(() => getSocket().emit("typing", roomId), [roomId]);
 
-  return { messages, presence, typingName, ready, error, recorders, sendMessage, notifyTyping };
+  // ── Message actions ────────────────────────────────────────────────────
+  // Each resolves with the server's ack so the caller can surface an error.
+  // The optimistic UI comes from the broadcast events above, not from here —
+  // the server is the one that decides whether an action was allowed.
+  const emit = useCallback(
+    (event, payload) => new Promise((resolve) => getSocket().emit(event, { roomId, ...payload }, resolve)),
+    [roomId]
+  );
+
+  const editMessage = useCallback((messageId, text) => emit("message:edit", { messageId, text }), [emit]);
+  const pinMessage = useCallback((messageId, pinned) => emit("message:pin", { messageId, pinned }), [emit]);
+  const forwardMessage = useCallback((messageId, toRoomId) => emit("message:forward", { messageId, toRoomId }), [emit]);
+
+  const deleteMessage = useCallback(
+    async (messageId, scope) => {
+      const ack = await emit("message:delete", { messageId, scope });
+      // "Delete for me" has no broadcast (nobody else is affected), so the
+      // local list is pruned here.
+      if (ack?.ok && scope === "me") setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      return ack;
+    },
+    [emit]
+  );
+
+  return {
+    messages, presence, typingName, ready, error, recorders, pinned,
+    sendMessage, notifyTyping,
+    editMessage, deleteMessage, pinMessage, forwardMessage,
+  };
 }

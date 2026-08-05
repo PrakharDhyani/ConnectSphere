@@ -286,8 +286,18 @@ export function registerChatHandlers(io, socket) {
       }
       socket.join(roomKey(roomId));
       await broadcastPresence(io, roomId);
-      // Late joiners must learn about in-progress recordings immediately.
-      ack?.({ ok: true, recorders: recorderList(roomId) });
+      // Late joiners must learn about in-progress recordings AND an ongoing
+      // call immediately — otherwise the "N in call" banner only appears if
+      // someone happens to join or leave the call while you are watching.
+      // Imported lazily: media.handlers imports roomKey from this module, so a
+      // top-level import here would be a cycle.
+      const { callParticipants } = await import("./media.handlers.js");
+      const participants = callParticipants(roomId);
+      ack?.({
+        ok: true,
+        recorders: recorderList(roomId),
+        call: { active: participants.length > 0, participants, count: participants.length },
+      });
     } catch (err) {
       logger.error("room:join failed:", err);
       ack?.({ ok: false, error: "Could not join room" });
@@ -388,6 +398,200 @@ export function registerChatHandlers(io, socket) {
     } catch (err) {
       logger.error("message:send failed:", err);
       ack?.({ ok: false, error: "Could not send message" });
+    }
+  });
+
+  // ── Message actions ──────────────────────────────────────────────────────
+  // Ownership rules, in one place so every action agrees:
+  //   edit           → author only, and never a deleted message
+  //   delete for me  → anyone, affects only their own view
+  //   delete for all → author, or the room owner (moderation)
+  //   pin / unpin    → room owner only (it is a room-wide surface)
+  //   forward        → anyone, but only OUT OF a public room (see below)
+  async function loadForAction(roomId, messageId, ack) {
+    if (!roomId || !messageId) {
+      ack?.({ ok: false, error: "Missing message" });
+      return null;
+    }
+    if (!(await canAccessRoom(socket.user, roomId))) {
+      ack?.({ ok: false, error: "You are not a member of this room" });
+      return null;
+    }
+    const message = await Message.findOne({ _id: messageId, room: roomId });
+    if (!message) {
+      ack?.({ ok: false, error: "Message not found" });
+      return null;
+    }
+    return message;
+  }
+
+  const isAuthor = (m) => m.sender.toString() === socket.user.id;
+  const isRoomOwner = async (roomId) => {
+    const room = await Room.findById(roomId).select("owner").lean();
+    return room?.owner?.toString() === socket.user.id;
+  };
+
+  socket.on("message:edit", async ({ roomId, messageId, text } = {}, ack) => {
+    try {
+      if (!allow(socket, "msgedit", 20, 10_000)) return ack?.({ ok: false, error: "Slow down a moment" });
+      const message = await loadForAction(roomId, messageId, ack);
+      if (!message) return;
+
+      if (!isAuthor(message)) return ack?.({ ok: false, error: "You can only edit your own messages" });
+      if (message.deletedAt) return ack?.({ ok: false, error: "That message was deleted" });
+
+      const next = (text || "").trim();
+      if (!next) return ack?.({ ok: false, error: "Message cannot be empty" });
+      if (next.length > 2000) return ack?.({ ok: false, error: "Message is too long (max 2000)" });
+      // Editing only ever changes TEXT — attachments are immutable, otherwise
+      // an innocuous photo could be swapped for something else after the fact.
+      message.text = next;
+      message.editedAt = new Date();
+      await message.save();
+
+      io.to(roomKey(roomId)).emit("message:edited", {
+        roomId, id: message._id.toString(), text: message.text, editedAt: message.editedAt,
+      });
+      ack?.({ ok: true });
+    } catch (err) {
+      logger.error("message:edit failed:", err);
+      ack?.({ ok: false, error: "Could not edit that message" });
+    }
+  });
+
+  socket.on("message:delete", async ({ roomId, messageId, scope = "me" } = {}, ack) => {
+    try {
+      const message = await loadForAction(roomId, messageId, ack);
+      if (!message) return;
+
+      if (scope === "everyone") {
+        const owner = await isRoomOwner(roomId);
+        if (!isAuthor(message) && !owner) {
+          return ack?.({ ok: false, error: "You can only delete your own messages" });
+        }
+        // Tombstone: keep the row, wipe the content.
+        message.text = "";
+        message.attachments = undefined;
+        message.deletedAt = new Date();
+        message.deletedBy = socket.user.id;
+        await message.save();
+
+        io.to(roomKey(roomId)).emit("message:deleted", {
+          roomId, id: message._id.toString(), scope: "everyone",
+          byOwner: !isAuthor(message),
+        });
+        return ack?.({ ok: true });
+      }
+
+      // scope === "me": per-user hide, nobody else is affected.
+      await Message.updateOne({ _id: messageId }, { $addToSet: { hiddenFor: socket.user.id } });
+      ack?.({ ok: true, scope: "me" });
+    } catch (err) {
+      logger.error("message:delete failed:", err);
+      ack?.({ ok: false, error: "Could not delete that message" });
+    }
+  });
+
+  socket.on("message:pin", async ({ roomId, messageId, pinned = true } = {}, ack) => {
+    try {
+      const message = await loadForAction(roomId, messageId, ack);
+      if (!message) return;
+      if (!(await isRoomOwner(roomId))) {
+        return ack?.({ ok: false, error: "Only the room owner can pin messages" });
+      }
+      if (message.deletedAt) return ack?.({ ok: false, error: "That message was deleted" });
+
+      if (pinned) {
+        // Keep the bar readable — cap the pins and drop the oldest.
+        const count = await Message.countDocuments({ room: roomId, pinnedAt: { $ne: null } });
+        if (count >= 5 && !message.pinnedAt) {
+          const oldest = await Message.findOne({ room: roomId, pinnedAt: { $ne: null } }).sort({ pinnedAt: 1 });
+          if (oldest) {
+            oldest.pinnedAt = undefined;
+            oldest.pinnedBy = undefined;
+            await oldest.save();
+            io.to(roomKey(roomId)).emit("message:pinned", {
+              roomId, id: oldest._id.toString(), pinned: false,
+            });
+          }
+        }
+        message.pinnedAt = new Date();
+        message.pinnedBy = socket.user.id;
+      } else {
+        message.pinnedAt = undefined;
+        message.pinnedBy = undefined;
+      }
+      await message.save();
+
+      io.to(roomKey(roomId)).emit("message:pinned", {
+        roomId, id: message._id.toString(), pinned: Boolean(pinned),
+        pinnedBy: pinned ? { id: socket.user.id, name: socket.user.name } : undefined,
+        text: message.text,
+        hasAttachments: (message.attachments?.length || 0) > 0,
+      });
+      ack?.({ ok: true });
+    } catch (err) {
+      logger.error("message:pin failed:", err);
+      ack?.({ ok: false, error: "Could not pin that message" });
+    }
+  });
+
+  /**
+   * Forward a message into another room.
+   *
+   * The SOURCE room must be public. Rationale: a private room is a closed
+   * circle, and letting its contents be re-broadcast elsewhere would turn
+   * every private conversation into something quotable without consent.
+   * Public rooms are already open, so forwarding out of them leaks nothing.
+   * The DESTINATION must be a room the forwarder actually belongs to.
+   */
+  socket.on("message:forward", async ({ roomId, messageId, toRoomId } = {}, ack) => {
+    try {
+      if (!allow(socket, "msgfwd", 10, 10_000)) return ack?.({ ok: false, error: "Slow down a moment" });
+      const message = await loadForAction(roomId, messageId, ack);
+      if (!message) return;
+      if (message.deletedAt) return ack?.({ ok: false, error: "That message was deleted" });
+
+      const source = await Room.findById(roomId).select("visibility name").lean();
+      if (source?.visibility !== "public") {
+        return ack?.({ ok: false, error: "Messages can only be forwarded out of public rooms" });
+      }
+      if (!toRoomId || toRoomId === roomId) return ack?.({ ok: false, error: "Pick a different room" });
+      if (!(await canAccessRoom(socket.user, toRoomId))) {
+        return ack?.({ ok: false, error: "You are not a member of that room" });
+      }
+
+      const original = await Message.findById(messageId).populate("sender", "name").lean();
+      const copy = await Message.create({
+        room: toRoomId,
+        sender: socket.user.id,
+        text: original.text,
+        ...(original.attachments?.length
+          // View-once media must NOT survive a forward — that would be an
+          // obvious way to defeat it.
+          ? { attachments: original.attachments.filter((a) => !a.viewOnce) }
+          : {}),
+        forwardedFrom: {
+          roomId,
+          roomName: source.name,
+          senderName: original.sender?.name || "Guest",
+        },
+      });
+
+      const payload = {
+        id: copy._id.toString(),
+        roomId: toRoomId,
+        text: copy.text,
+        attachments: copy.attachments || [],
+        forwardedFrom: copy.forwardedFrom,
+        createdAt: copy.createdAt,
+        sender: { id: socket.user.id, name: socket.user.name, avatarUrl: socket.user.avatarUrl },
+      };
+      io.to(roomKey(toRoomId)).emit("message:new", payload);
+      ack?.({ ok: true, message: payload });
+    } catch (err) {
+      logger.error("message:forward failed:", err);
+      ack?.({ ok: false, error: "Could not forward that message" });
     }
   });
 

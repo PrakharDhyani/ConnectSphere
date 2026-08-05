@@ -12,6 +12,10 @@ import { useChatUploads } from "@/hooks/useChatUploads.js";
 import ChatPicker from "@/components/ChatPicker.jsx";
 import ChatAttachments, { fmtBytes } from "@/components/ChatAttachments.jsx";
 import VoiceComposer from "@/components/VoiceComposer.jsx";
+import MessageActions from "@/components/MessageActions.jsx";
+import CallBanner, { useCallState } from "@/components/CallBanner.jsx";
+import { InviteToCall } from "@/components/CallInvite.jsx";
+import RoomRules, { RulesPrompt, useRulesAck } from "@/components/RoomRules.jsx";
 import { CaptionOverlay, CaptionControls } from "@/components/Captions.jsx";
 import VideoTile from "@/components/VideoTile.jsx";
 import BackgroundPicker from "@/components/BackgroundPicker.jsx";
@@ -194,6 +198,8 @@ export default function RoomPage() {
   const [dragging, setDragging] = useState(false);
   // 👁️ When on, the NEXT photo/video you send can be opened only once.
   const [viewOnce, setViewOnce] = useState(false);
+  const [editingMsg, setEditingMsg] = useState(null);   // { id, text } being edited
+  const [forwarding, setForwarding] = useState(null);   // message being forwarded
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
   // Drag events fire per-child-element, so a naive boolean flickers as the
@@ -224,12 +230,17 @@ export default function RoomPage() {
     retry: false,
   });
 
-  const { messages, presence, typingName, error: chatError, recorders, sendMessage, notifyTyping } =
-    useRoomChat(room ? roomId : null);
+  const {
+    messages, presence, typingName, error: chatError, recorders, pinned,
+    sendMessage, notifyTyping, editMessage, deleteMessage, pinMessage, forwardMessage,
+  } = useRoomChat(room ? roomId : null);
 
   const call = useMediaRoom(room ? roomId : null);
   const captions = useCaptions(room ? roomId : null, { active: call.inCall });
   const uploads = useChatUploads(roomId);
+  const rulesAck = useRulesAck(roomId, room?.rulesUpdatedAt, (room?.rules?.length || 0) > 0);
+  // The roster also drives the in-call "Invite" picker, so it is read here too.
+  const callState = useCallState(room ? roomId : null, { inCall: call.inCall });
 
   // Activity notifications: someone started a call/board/game in this room.
   useEffect(() => {
@@ -257,15 +268,21 @@ export default function RoomPage() {
     const onKicked = (p) => {
       if (p.roomId !== roomId) return;
       queryClient.invalidateQueries({ queryKey: ["rooms"] });
-      navigate("/dashboard", { state: { message: `You were removed from “${p.roomName || "the room"}” by its owner.` } });
+      // Say WHY when the owner gave a reason — usually the house rule broken.
+      const why = p.reason ? ` Reason: ${p.reason}` : "";
+      navigate("/dashboard", {
+        state: { message: `You were removed from “${p.roomName || "the room"}” by its owner.${why}` },
+      });
     };
     socket.on("room:updated", refresh);
     socket.on("room:members-changed", refresh);
+    socket.on("room:rules-changed", refresh);
     socket.on("room:closed", onClosed);
     socket.on("room:kicked", onKicked);
     return () => {
       socket.off("room:updated", refresh);
       socket.off("room:members-changed", refresh);
+      socket.off("room:rules-changed", refresh);
       socket.off("room:closed", onClosed);
       socket.off("room:kicked", onKicked);
     };
@@ -419,6 +436,28 @@ export default function RoomPage() {
     } catch (err) {
       setActionError(err.response?.data?.error?.message || "Action failed");
     }
+  };
+
+  /**
+   * Kick/ban with a REASON, offering the house rules as the shortlist. An
+   * unexplained removal feels arbitrary; "rule 3: no spoilers" does not.
+   */
+  const modWithReason = (action, u) => {
+    const rules = room.rules || [];
+    const menu = rules.length
+      ? `\n\nHouse rules:\n${rules.map((r, i) => `${i + 1}. ${r}`).join("\n")}\n\nType a rule number or your own reason:`
+      : "\n\nReason (optional):";
+    const answer = window.prompt(
+      `${action === "ban" ? "BAN" : "Kick"} ${u.name}?${menu}`,
+      ""
+    );
+    if (answer === null) return; // cancelled
+    const asNumber = Number(answer.trim());
+    const reason =
+      Number.isInteger(asNumber) && asNumber >= 1 && asNumber <= rules.length
+        ? `Rule ${asNumber}: ${rules[asNumber - 1]}`
+        : answer.trim();
+    modAction(`/${action}`, { userId: u.id, reason });
   };
   const reportUser = async (u) => {
     const reason = window.prompt(`Report ${u.name} — what happened? (optional)`);
@@ -574,6 +613,40 @@ export default function RoomPage() {
             </div>
           </div>
 
+          {/* 📞 A call is running — tell everyone who is not already in it. */}
+          <CallBanner call={call} roomId={roomId} onJoin={() => call.joinCall()} />
+
+          {/* 📜 Rules changed (or you have never read them) — read before chatting. */}
+          {room.rules?.length > 0 && !rulesAck.acknowledged && (
+            <RulesPrompt rules={room.rules} onAccept={rulesAck.acknowledge} />
+          )}
+
+          {/* 📌 Pinned messages — tap to jump to the original. */}
+          {pinned?.length > 0 && (
+            <div className="flex items-start gap-2 px-4 py-2 bg-amber-950/20 border-b border-amber-900/40">
+              <span className="text-amber-400 text-sm shrink-0 pt-0.5">📌</span>
+              <div className="min-w-0 flex-1 space-y-0.5">
+                {pinned.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => {
+                      const el = document.getElementById(`msg-${p.id}`);
+                      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      el?.classList.add("ring-2", "ring-amber-500/60", "rounded-lg");
+                      setTimeout(() => el?.classList.remove("ring-2", "ring-amber-500/60", "rounded-lg"), 1800);
+                    }}
+                    className="block w-full text-left text-[11px] text-amber-100/85 hover:text-amber-100 truncate"
+                  >
+                    {p.text || (p.hasAttachments ? "📎 Attachment" : "Message")}
+                  </button>
+                ))}
+              </div>
+              {room.isOwner && (
+                <span className="text-[9px] text-amber-500/70 shrink-0 pt-0.5">owner can unpin</span>
+              )}
+            </div>
+          )}
+
           {/* Transparency banner: EVERYONE in the room sees who is recording. */}
           {recorders?.length > 0 && (
             <div className="flex items-center justify-center gap-2 px-4 py-1.5 bg-red-950/60 border-b border-red-900 text-sm text-red-300">
@@ -616,6 +689,13 @@ export default function RoomPage() {
                   <Button variant="secondary" onClick={call.startScreenShare}>🖥️ Share screen</Button>
                 )}
                 <BackgroundPicker call={call} />
+                {/* Ring people into this call — reaches muted members. */}
+                <InviteToCall
+                  roomId={roomId}
+                  members={room.members}
+                  participants={callState.participants}
+                  me={me}
+                />
                 <CaptionControls captions={captions} />
                 <RecordButton call={call} roomId={roomId} roomName={room.name} nameFor={nameFor} />
               </div>
@@ -647,9 +727,9 @@ export default function RoomPage() {
                 prev.sender.id === m.sender?.id &&
                 time - new Date(prev.createdAt) < GROUP_WINDOW_MS;
               return (
-                <div key={m.id}>
+                <div key={m.id} id={`msg-${m.id}`}>
                   {newDay && <DayDivider date={time} />}
-                  <div className={`group flex gap-3 px-2 rounded-lg hover:bg-white/[0.04] transition-colors ${grouped ? "py-0.5" : "mt-2.5 py-1"}`}>
+                  <div className={`group flex gap-3 px-2 rounded-lg hover:bg-white/[0.04] transition-colors ${grouped ? "py-0.5" : "mt-2.5 py-1"} ${m.pinnedAt ? "bg-amber-950/10 border-l-2 border-amber-600/60" : ""}`}>
                     {grouped ? (
                       <span className="w-9 shrink-0 text-right text-[10px] text-gray-600 tabular-nums select-none opacity-0 group-hover:opacity-100 pt-1">
                         {fmtTime(time)}
@@ -664,18 +744,76 @@ export default function RoomPage() {
                             {mine ? "You" : m.sender?.name || "Guest"}
                           </span>
                           <span className="ml-2 text-[11px] text-gray-500 tabular-nums">{fmtTime(time)}</span>
+                          {m.pinnedAt && <span className="ml-1.5 text-[10px] text-amber-400">📌 pinned</span>}
                         </p>
                       )}
-                      {m.text &&
+
+                      {/* Forwarded breadcrumb — a forwarded message must never
+                          be able to pass itself off as original. */}
+                      {m.forwardedFrom && (
+                        <p className="text-[10px] text-gray-500 italic mb-0.5">
+                          ↪️ Forwarded from {m.forwardedFrom.senderName} in {m.forwardedFrom.roomName}
+                        </p>
+                      )}
+
+                      {m.deletedAt ? (
+                        <p className="text-sm text-gray-600 italic">🚫 This message was deleted</p>
+                      ) : editingMsg?.id === m.id ? (
+                        <form
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            const next = editingMsg.text.trim();
+                            if (!next) return;
+                            const ack = await editMessage(m.id, next);
+                            if (!ack?.ok) { setSendError(ack?.error || "Could not edit"); setTimeout(() => setSendError(null), 4000); }
+                            setEditingMsg(null);
+                          }}
+                          className="flex gap-1.5 items-center py-0.5"
+                        >
+                          <input
+                            autoFocus
+                            value={editingMsg.text}
+                            maxLength={2000}
+                            onChange={(e) => setEditingMsg({ ...editingMsg, text: e.target.value })}
+                            onKeyDown={(e) => e.key === "Escape" && setEditingMsg(null)}
+                            className="flex-1 px-2 py-1 rounded bg-gray-950 border border-brand-600 text-white text-sm focus:outline-none"
+                          />
+                          <button type="submit" className="text-xs text-brand-300 hover:text-brand-200">save</button>
+                          <button type="button" onClick={() => setEditingMsg(null)} className="text-xs text-gray-500 hover:text-gray-300">cancel</button>
+                        </form>
+                      ) : (
+                        m.text &&
                         (isJumboEmoji(m.text) ? (
                           <p className="text-4xl leading-tight py-0.5">{m.text}</p>
                         ) : (
                           <p className="text-sm text-gray-200 break-words whitespace-pre-wrap leading-relaxed">
                             {m.text}
+                            {m.editedAt && <span className="ml-1.5 text-[10px] text-gray-500">(edited)</span>}
                           </p>
-                        ))}
-                      <ChatAttachments attachments={m.attachments} roomId={roomId} messageId={m.id} />
+                        ))
+                      )}
+                      {!m.deletedAt && (
+                        <ChatAttachments attachments={m.attachments} roomId={roomId} messageId={m.id} />
+                      )}
                     </div>
+
+                    {!m.deletedAt && (
+                      <div className="shrink-0 pt-0.5">
+                        <MessageActions
+                          message={m}
+                          isMine={mine}
+                          isOwner={room.isOwner}
+                          isPublicRoom={room.visibility === "public"}
+                          onEdit={() => setEditingMsg({ id: m.id, text: m.text })}
+                          onPin={(pin) => pinMessage(m.id, pin)}
+                          onForward={() => setForwarding(m)}
+                          onDelete={async (scope) => {
+                            const ack = await deleteMessage(m.id, scope);
+                            if (!ack?.ok) { setSendError(ack?.error || "Could not delete"); setTimeout(() => setSendError(null), 4000); }
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -860,14 +998,14 @@ export default function RoomPage() {
                           <>
                             <button
                               title={`Kick ${u.name}`}
-                              onClick={() => modAction("/kick", { userId: u.id }, `Kick ${u.name}? They can rejoin with the code.`)}
+                              onClick={() => modWithReason("kick", u)}
                               className="text-xs px-1 rounded hover:bg-gray-800 text-gray-500 hover:text-amber-400"
                             >
                               🚪
                             </button>
                             <button
                               title={`Ban ${u.name}`}
-                              onClick={() => modAction("/ban", { userId: u.id }, `BAN ${u.name}? They will not be able to rejoin.`)}
+                              onClick={() => modWithReason("ban", u)}
                               className="text-xs px-1 rounded hover:bg-gray-800 text-gray-500 hover:text-red-400"
                             >
                               🚫
@@ -888,6 +1026,13 @@ export default function RoomPage() {
               })}
             </ul>
           </div>
+
+          {/* 📜 House rules — everyone reads, owner edits */}
+          <RoomRules
+            room={room}
+            roomId={roomId}
+            onChanged={() => queryClient.invalidateQueries({ queryKey: ["room", roomId] })}
+          />
 
           {/* Slow mode (owner sets it; everyone sees when it's on) */}
           <div className="border-t border-gray-800 pt-3">
@@ -919,11 +1064,18 @@ export default function RoomPage() {
               <p className="text-xs uppercase tracking-wide text-gray-500 mb-1.5">🚫 Banned</p>
               <ul className="space-y-1">
                 {room.banned.map((b) => (
-                  <li key={b.id} className="flex items-center justify-between text-xs text-gray-400">
-                    <span className="truncate">{b.name}</span>
+                  <li key={b.id} className="flex items-start justify-between gap-2 text-xs text-gray-400">
+                    <span className="min-w-0">
+                      <span className="block truncate">{b.name}</span>
+                      {b.reason && (
+                        <span className="block text-[10px] text-gray-600 truncate" title={b.reason}>
+                          {b.reason}
+                        </span>
+                      )}
+                    </span>
                     <button
                       onClick={() => modAction("/unban", { userId: b.id })}
-                      className="text-gray-500 hover:text-green-400"
+                      className="text-gray-500 hover:text-green-400 shrink-0"
                     >
                       unban
                     </button>
@@ -958,6 +1110,69 @@ export default function RoomPage() {
             <p className="text-xs text-gray-600 pt-1">🎥 Video calls attach to this room next.</p>
           </div>
         </aside>
+      </div>
+
+      {/* ↪️ Forward picker — only offered in public rooms (server enforces it too). */}
+      {forwarding && (
+        <ForwardDialog
+          message={forwarding}
+          onClose={() => setForwarding(null)}
+          onForward={async (toRoomId) => {
+            const ack = await forwardMessage(forwarding.id, toRoomId);
+            setForwarding(null);
+            setSendError(ack?.ok ? null : ack?.error || "Could not forward");
+            if (!ack?.ok) setTimeout(() => setSendError(null), 4000);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Pick a destination room to forward into. Lists the rooms you belong to,
+ * minus the one you are in. The server re-checks both that the SOURCE is
+ * public and that you are a member of the DESTINATION.
+ */
+function ForwardDialog({ message, onClose, onForward }) {
+  const { roomId } = useParams();
+  const { data: rooms, isLoading } = useQuery({
+    queryKey: ["rooms"],
+    queryFn: async () => (await api.get("/rooms")).data.data.rooms,
+  });
+  const targets = (rooms || []).filter((r) => r.id !== roomId);
+
+  return (
+    <div className="fixed inset-0 z-[110] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xs rounded-2xl border border-gray-700 bg-gray-900 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+          <h3 className="text-sm font-semibold text-white">↪️ Forward to…</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-200 text-sm">✕</button>
+        </div>
+
+        <p className="px-4 py-2 text-[11px] text-gray-500 border-b border-gray-800 truncate">
+          “{message.text || "📎 Attachment"}”
+        </p>
+
+        <div className="max-h-64 overflow-y-auto p-2">
+          {isLoading && <p className="text-xs text-gray-500 text-center py-4">Loading rooms…</p>}
+          {!isLoading && targets.length === 0 && (
+            <p className="text-xs text-gray-500 text-center py-4">You&apos;re not in any other rooms.</p>
+          )}
+          {targets.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => onForward(r.id)}
+              className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left hover:bg-white/5 transition-colors"
+            >
+              <span className="text-base">{r.visibility === "public" ? "🌐" : "🔒"}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs text-gray-200 truncate">{r.name}</span>
+                <span className="block text-[10px] text-gray-600">{r.memberCount} members</span>
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

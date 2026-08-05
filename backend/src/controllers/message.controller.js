@@ -35,7 +35,9 @@ export async function getRoomMessages(req, res, next) {
     }
 
     const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
-    const filter = { room: id };
+    // "Delete for me" is a per-user hide — filter those out at the query level
+    // so they never reach the client that hid them.
+    const filter = { room: id, hiddenFor: { $ne: req.user.id } };
     if (req.query.before) {
       const before = new Date(req.query.before);
       if (!Number.isNaN(before.getTime())) filter.createdAt = { $lt: before };
@@ -55,8 +57,12 @@ export async function getRoomMessages(req, res, next) {
       text: d.text,
       // View-once media is stripped per viewer — a spent link must never come
       // back out of the history endpoint.
-      attachments: redactForViewer(d, req.user.id),
+      attachments: d.deletedAt ? [] : redactForViewer(d, req.user.id),
       createdAt: d.createdAt,
+      editedAt: d.editedAt,
+      deletedAt: d.deletedAt,
+      pinnedAt: d.pinnedAt,
+      forwardedFrom: d.forwardedFrom,
       sender: d.sender
         ? { id: d.sender._id, name: d.sender.name, avatarUrl: d.sender.avatarUrl }
         : null,

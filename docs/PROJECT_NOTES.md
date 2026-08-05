@@ -2419,6 +2419,75 @@ re-open, viewer roster) had to be closed independently — and the test that
 proves it is the one asserting the second open returns 410, not the one
 asserting the button disappears.
 
+### Message actions, house rules, and call presence
+Three features, all of which are really *permission* features wearing UI.
+
+**Message actions — edit · copy · pin · forward · delete.** Every one is a
+question of "who may do this to whose message", so the rules live in one
+readable block in `chat.handlers.js` rather than scattered across handlers:
+edit is author-only; delete-for-everyone is author **or room owner**
+(moderation); pin is owner-only because the pin bar is a room-wide surface;
+delete-for-me is anyone, affecting only their own view.
+
+- *Delete for everyone is a **tombstone**, not a document removal.* The row
+  stays with its text and attachments wiped. Two reasons: the conversation
+  keeps its shape (grouping, day dividers and "X replied" don't reshuffle
+  around a hole), and a deleted id can never be silently reused. History
+  returns `deletedAt` and the client renders "🚫 This message was deleted".
+- *Delete for me* is a per-user `hiddenFor` array filtered **at the query
+  level**, so a hidden message never reaches the client that hid it — no
+  client-side filtering to forget.
+- *Editing only ever changes text.* Attachments are immutable, because an
+  innocuous photo being swapped for something else after the fact is exactly
+  the kind of trick an edit feature invites.
+- *Forwarding is restricted to **public source rooms***, which is the one
+  genuinely interesting rule here. A private room is a closed circle; letting
+  its contents be re-broadcast elsewhere would make every private
+  conversation quotable without consent. Public rooms are already open, so
+  forwarding out of them leaks nothing. The forward also carries a
+  `forwardedFrom` breadcrumb (original room + sender), so a forwarded message
+  can't pass itself off as original — and **view-once media is stripped from
+  a forward**, since re-sending it would be the obvious way to defeat it.
+
+**House rules + explainable moderation.** The owner writes up to 20 rules;
+every member can read them. `rules.updatedAt` versions the "please re-read"
+prompt — the client stores the timestamp it acknowledged, so editing the rules
+re-prompts everyone with **zero per-user rows in the database**. Kick and ban
+now take a `reason`, and the kick dialog offers the house rules as a
+numbered shortlist ("3" becomes "Rule 3: No spoilers"). The reason travels on
+the `room:kicked` event, so the person removed is told *why* rather than just
+vanishing from the room.
+
+**Call presence — "N people are in this call · tap to join".** The mediasoup
+peer map already knew who was connected; it just never told anyone. Attaching
+identity to each peer makes a roster cheap to build, and `broadcastCallState`
+sends it to the **whole room**, not just call participants — the people who
+need the banner are precisely the ones *not* in the call. The roster arrives
+two ways deliberately: a `call:state` broadcast on every join/leave, **and**
+on the `room:join` ack, because otherwise a banner would only appear if
+someone happened to join or leave while you were watching.
+
+**Ring-to-invite (the Teams gesture).** `call:ring` is a **direct per-user
+event**, not a room broadcast — the entire point is to reach someone who has
+muted the room and would never see the banner. That's also why it's the one
+notification allowed to bypass a mute, and why it is fenced: rate-limited to
+6/minute, the caller must actually be in the call, and targets must already
+be room members. Anyone with no live socket gets a Web Push instead, since an
+explicit invite should reach you with the tab closed.
+
+**Verification:** 282 tests green (up from 267 — 15 new), plus 20 live checks
+against the running server covering every permission boundary: member can't
+edit another's message, can't pin, can't set rules (403); owner *can* delete a
+member's message; forward out of a private room is refused; delete-for-me
+hides it from one person and not the other; the ban reason reaches both the
+ban list and the `room:kicked` event.
+
+*One test-harness lesson:* salting display names to avoid uniqueness
+collisions broke two **existing** tests that asserted exact names
+(`expect(cap.name).toBe("CapOwner")`). The fix was a separate `regUnique()`
+helper rather than changing `reg()` for everyone — a shared test helper is an
+API, and widening it silently is as breaking as changing production code.
+
 ---
 
 ## Current Status / Next Steps
@@ -2506,4 +2575,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-06 (WhatsApp-grade chat: 18 animated stickers + sticker studio with on-device background removal, favourites/save, voice notes with real waveforms, and server-enforced view-once media — 267 tests green. Disappearing-message timers deferred to DMs.)*
+*Last updated: 2026-08-06 (message actions — edit/copy/pin/forward/delete — house rules with explainable moderation, live "N in call" banner, and Teams-style ring-to-invite that reaches muted members — 282 tests green. Disappearing-message timers still deferred to DMs.)*

@@ -22,6 +22,7 @@ import {
   banMember,
   unbanMember,
   setSlowMode,
+  setRoomRules,
   reportMember,
 } from "../controllers/room.controller.js";
 import {
@@ -78,6 +79,7 @@ router.post("/:id/kick", requireFullUser, kickMember);
 router.post("/:id/ban", requireFullUser, banMember);
 router.post("/:id/unban", requireFullUser, unbanMember);
 router.post("/:id/slowmode", requireFullUser, setSlowMode);
+router.put("/:id/rules", requireFullUser, setRoomRules);
 
 // Allowed for scoped guests too (access is gated per-room inside the handlers).
 router.get("/:id", getRoom);

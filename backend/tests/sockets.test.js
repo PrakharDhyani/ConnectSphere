@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "@jest/globals";
+﻿import { describe, it, expect, beforeAll, afterAll, afterEach } from "@jest/globals";
 import http from "http";
 import request from "supertest";
 import { io as ioClient } from "socket.io-client";
 import { startHarness } from "./helpers/harness.js";
 
 // Boots the REAL app + Socket.io server on an ephemeral port and drives it with
-// real socket.io-client connections — the first automated coverage of the
+// real socket.io-client connections â€” the first automated coverage of the
 // real-time layer (auth, chat, whiteboard, game lobby).
 const h = startHarness();
 
@@ -36,6 +36,12 @@ async function reg(name) {
   const res = await request(h.app).post("/api/auth/register").send({ name, email, password: "Password123" });
   return { token: res.body.data.accessToken, id: res.body.data.user.id };
 }
+
+// Display names are unique in this app, so a helper that registers the SAME
+// logical person in several tests needs a salt. Kept separate from reg() so
+// existing tests that assert an exact name keep working.
+const uniq = (name) => `${name}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+const regUnique = (name) => reg(uniq(name));
 async function createRoom(token, name = "Room") {
   const res = await request(h.app).post("/api/rooms").set("Authorization", `Bearer ${token}`).send({ name });
   return res.body.data.room;
@@ -100,7 +106,7 @@ describe("chat over sockets", () => {
   });
 });
 
-// Attachment descriptors arrive over the socket, so they are UNTRUSTED input —
+// Attachment descriptors arrive over the socket, so they are UNTRUSTED input â€”
 // these lock down sanitizeAttachments (chat.handlers.js).
 describe("chat attachments over sockets", () => {
   async function soloRoom(label) {
@@ -172,7 +178,7 @@ describe("chat attachments over sockets", () => {
     }
   });
 
-  // A suffix rule is only safe if it anchors on a dot — "evilklipy.com" and
+  // A suffix rule is only safe if it anchors on a dot â€” "evilklipy.com" and
   // "klipy.com.evil.net" must both lose.
   it("cannot be fooled by lookalike domains", async () => {
     const { s, room } = await soloRoom("Lookalike");
@@ -210,7 +216,7 @@ describe("chat attachments over sockets", () => {
   });
 
   // The built-in GIF ids exist in TWO places (backend whitelist + frontend
-  // registry). They drift silently unless something checks — a picked GIF
+  // registry). They drift silently unless something checks â€” a picked GIF
   // would just vanish on send. This is that check.
   it("backend LOCAL_GIF_IDS matches the frontend registry exactly", async () => {
     const { readFileSync } = await import("node:fs");
@@ -233,8 +239,8 @@ describe("chat attachments over sockets", () => {
     );
 
     expect(frontendIds.size).toBeGreaterThan(0);
-    expect([...frontendIds].filter((id) => !backendIds.has(id))).toEqual([]); // frontend-only → would be rejected
-    expect([...backendIds].filter((id) => !frontendIds.has(id))).toEqual([]); // backend-only → dead entry
+    expect([...frontendIds].filter((id) => !backendIds.has(id))).toEqual([]); // frontend-only â†’ would be rejected
+    expect([...backendIds].filter((id) => !frontendIds.has(id))).toEqual([]); // backend-only â†’ dead entry
   });
 
   // The frontend's OtakuGIFs reaction names must be real upstream categories,
@@ -258,7 +264,7 @@ describe("chat attachments over sockets", () => {
       });
       upstream = new Set((await res.json()).reactions);
     } catch {
-      console.warn("OtakuGIFs unreachable — skipping upstream name check");
+      console.warn("OtakuGIFs unreachable â€” skipping upstream name check");
       return;
     }
     expect(names.filter((n) => !upstream.has(n))).toEqual([]);
@@ -269,7 +275,7 @@ describe("chat attachments over sockets", () => {
     const res = await ack(s, "message:send", {
       roomId: room.id,
       text: "",
-      // A malicious client sends both an id AND an inline svg payload — the id
+      // A malicious client sends both an id AND an inline svg payload â€” the id
       // must win and the payload must never be persisted.
       attachments: [
         { kind: "gif", gifId: "lg-lol", name: "LOL", url: "data:image/svg+xml,<svg onload=alert(1)>" },
@@ -394,6 +400,162 @@ describe("chat attachments over sockets", () => {
   });
 });
 
+// Message actions are all permission decisions, so these lock down WHO may do
+// WHAT â€” the part a client could otherwise just lie about.
+describe("message actions over sockets", () => {
+  async function twoPersonRoom(label, { visibility } = {}) {
+    const owner = await regUnique(`${label}Own`);
+    // Room names are unique too â€” salt them so re-runs don't collide.
+    const roomName = `${label}Room_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const room = await createRoom(owner.token, roomName);
+    if (visibility === "public") {
+      // Visibility isn't settable via PATCH, so flip it directly â€” this test
+      // is about forwarding rules, not about how a room becomes public.
+      const { Room } = await import("../src/models/Room.js");
+      await Room.updateOne({ _id: room.id }, { visibility: "public" });
+    }
+    const member = await regUnique(`${label}Mem`);
+    await request(h.app).post("/api/rooms/join")
+      .set("Authorization", `Bearer ${member.token}`).send({ code: room.code });
+
+    const os = await connect(owner.token);
+    const ms = await connect(member.token);
+    await ack(os, "room:join", room.id);
+    await ack(ms, "room:join", room.id);
+    return { owner, member, room, os, ms };
+  }
+
+  const say = (s, roomId, text) => ack(s, "message:send", { roomId, text });
+
+  it("edits your own message and broadcasts it", async () => {
+    const { room, os, ms } = await twoPersonRoom("Edit");
+    const sent = await say(os, room.id, "helo");
+    const heard = once(ms, "message:edited");
+    const res = await ack(os, "message:edit", { roomId: room.id, messageId: sent.message.id, text: "hello" });
+    expect(res.ok).toBe(true);
+    const ev = await heard;
+    expect(ev.text).toBe("hello");
+    expect(ev.editedAt).toBeTruthy();
+  });
+
+  it("refuses to edit someone else's message", async () => {
+    const { room, os, ms } = await twoPersonRoom("EditOther");
+    const sent = await say(os, room.id, "mine");
+    const res = await ack(ms, "message:edit", { roomId: room.id, messageId: sent.message.id, text: "hacked" });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/your own/i);
+  });
+
+  it("delete-for-everyone tombstones the message for the author", async () => {
+    const { room, os, ms } = await twoPersonRoom("DelAll");
+    const sent = await say(os, room.id, "oops");
+    const heard = once(ms, "message:deleted");
+    const res = await ack(os, "message:delete", { roomId: room.id, messageId: sent.message.id, scope: "everyone" });
+    expect(res.ok).toBe(true);
+    expect((await heard).scope).toBe("everyone");
+  });
+
+  it("lets the ROOM OWNER delete a member's message (moderation)", async () => {
+    const { room, os, ms } = await twoPersonRoom("DelMod");
+    const sent = await say(ms, room.id, "spam spam");
+    const res = await ack(os, "message:delete", { roomId: room.id, messageId: sent.message.id, scope: "everyone" });
+    expect(res.ok).toBe(true);
+  });
+
+  it("refuses delete-for-everyone by a non-author, non-owner", async () => {
+    const { room, os, ms, member } = await twoPersonRoom("DelNo");
+    const third = await regUnique("DelThird");
+    await request(h.app).post("/api/rooms/join")
+      .set("Authorization", `Bearer ${third.token}`).send({ code: room.code });
+    const ts = await connect(third.token);
+    await ack(ts, "room:join", room.id);
+
+    const sent = await say(ms, room.id, "not yours");
+    const res = await ack(ts, "message:delete", { roomId: room.id, messageId: sent.message.id, scope: "everyone" });
+    expect(res.ok).toBe(false);
+    expect(member).toBeTruthy();
+  });
+
+  it("delete-for-me hides it only from that user's history", async () => {
+    const { room, os, ms, owner, member } = await twoPersonRoom("DelMe");
+    const sent = await say(os, room.id, "just for me");
+    const res = await ack(ms, "message:delete", { roomId: room.id, messageId: sent.message.id, scope: "me" });
+    expect(res.ok).toBe(true);
+
+    const hidden = await request(h.app).get(`/api/rooms/${room.id}/messages`)
+      .set("Authorization", `Bearer ${member.token}`);
+    expect(hidden.body.data.messages.some((m) => m.id === sent.message.id)).toBe(false);
+
+    const visible = await request(h.app).get(`/api/rooms/${room.id}/messages`)
+      .set("Authorization", `Bearer ${owner.token}`);
+    expect(visible.body.data.messages.some((m) => m.id === sent.message.id)).toBe(true);
+  });
+
+  it("only the room owner can pin", async () => {
+    const { room, os, ms } = await twoPersonRoom("Pin");
+    const sent = await say(os, room.id, "important");
+
+    const denied = await ack(ms, "message:pin", { roomId: room.id, messageId: sent.message.id, pinned: true });
+    expect(denied.ok).toBe(false);
+
+    const heard = once(ms, "message:pinned");
+    const allowed = await ack(os, "message:pin", { roomId: room.id, messageId: sent.message.id, pinned: true });
+    expect(allowed.ok).toBe(true);
+    expect((await heard).pinned).toBe(true);
+  });
+
+  it("refuses to forward OUT OF a private room", async () => {
+    const { room, os } = await twoPersonRoom("FwdPriv");
+    const other = await createRoom((await regUnique("FwdDest")).token, uniq("FwdDestRoom"));
+    const sent = await say(os, room.id, "secret");
+    const res = await ack(os, "message:forward", { roomId: room.id, messageId: sent.message.id, toRoomId: other.id });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/public/i);
+  });
+
+  it("forwards out of a PUBLIC room and tags the origin", async () => {
+    const { room, os, owner } = await twoPersonRoom("FwdPub", { visibility: "public" });
+    const dest = await createRoom(owner.token, `FwdPubDest_${Date.now()}`);
+    const sent = await say(os, room.id, "shareable");
+
+    const res = await ack(os, "message:forward", { roomId: room.id, messageId: sent.message.id, toRoomId: dest.id });
+    expect(res.ok).toBe(true);
+    expect(res.message.text).toBe("shareable");
+    expect(res.message.forwardedFrom?.roomName).toContain("FwdPubRoom");
+    expect(res.message.forwardedFrom?.roomId).toBe(room.id);
+  });
+});
+
+describe("call presence + ring", () => {
+  it("reports an empty call and refuses to ring when not in it", async () => {
+    const owner = await regUnique("RingOwn");
+    const room = await createRoom(owner.token);
+    const mate = await regUnique("RingMate");
+    await request(h.app).post("/api/rooms/join")
+      .set("Authorization", `Bearer ${mate.token}`).send({ code: room.code });
+
+    const s = await connect(owner.token);
+    await ack(s, "room:join", room.id);
+
+    const state = await ack(s, "call:get", room.id);
+    expect(state.active).toBe(false);
+    expect(state.count).toBe(0);
+
+    // Not in the call â†’ cannot ring anyone.
+    const rung = await ack(s, "call:ring", { roomId: room.id, userIds: [mate.id] });
+    expect(rung.error).toMatch(/join the call/i);
+  });
+
+  it("room:join reports current call state to a late joiner", async () => {
+    const owner = await regUnique("LateOwn");
+    const room = await createRoom(owner.token);
+    const s = await connect(owner.token);
+    const joined = await ack(s, "room:join", room.id);
+    expect(joined.ok).toBe(true);
+    expect(joined.call).toEqual({ active: false, participants: [], count: 0 });
+  });
+});
+
 describe("whiteboard over sockets", () => {
   it("syncs an update to another viewer and rejects non-members", async () => {
     const owner = await reg("WbOwner");
@@ -422,7 +584,7 @@ describe("whiteboard over sockets", () => {
 });
 
 describe("polls over sockets", () => {
-  it("runs a full create → vote → retract → close cycle", async () => {
+  it("runs a full create â†’ vote â†’ retract â†’ close cycle", async () => {
     const owner = await reg("PollOwner");
     const room = await createRoom(owner.token);
     const member = await reg("PollMember");
@@ -518,11 +680,11 @@ describe("game lobby over sockets", () => {
     s2.emit("game:join", { roomId: room.id });
     await new Promise((r) => setTimeout(r, 150));
 
-    // not ready → start blocked
+    // not ready â†’ start blocked
     let res = await ack(s1, "game:start", { roomId: room.id, rounds: 1 });
     expect(res.error).toBeTruthy();
 
-    // both ready → start ok
+    // both ready â†’ start ok
     s1.emit("game:ready", { roomId: room.id, ready: true });
     s2.emit("game:ready", { roomId: room.id, ready: true });
     await new Promise((r) => setTimeout(r, 150));

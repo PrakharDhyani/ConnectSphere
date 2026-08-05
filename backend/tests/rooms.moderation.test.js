@@ -29,6 +29,56 @@ beforeEach(async () => {
   await request(h.app).post("/api/rooms/join").set(auth(bystander.token)).send({ code });
 });
 
+describe("room rules", () => {
+  it("owner sets rules; every member can read them", async () => {
+    const res = await request(h.app)
+      .put(`/api/rooms/${roomId}/rules`)
+      .set(auth(owner.token))
+      .send({ items: ["Be kind", "No spoilers", "  "] }); // blank is dropped
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.rules).toEqual(["Be kind", "No spoilers"]);
+
+    const asMember = await request(h.app).get(`/api/rooms/${roomId}`).set(auth(troll.token));
+    expect(asMember.body.data.room.rules).toEqual(["Be kind", "No spoilers"]);
+    expect(asMember.body.data.room.rulesUpdatedAt).toBeTruthy();
+  });
+
+  it("non-owners cannot set rules", async () => {
+    const res = await request(h.app)
+      .put(`/api/rooms/${roomId}/rules`)
+      .set(auth(troll.token))
+      .send({ items: ["My rules now"] });
+    expect(res.status).toBe(403);
+  });
+
+  it("caps at 20 rules and 200 chars each", async () => {
+    const res = await request(h.app)
+      .put(`/api/rooms/${roomId}/rules`)
+      .set(auth(owner.token))
+      .send({ items: [...Array(30).keys()].map((i) => `rule ${i} ${"x".repeat(400)}`) });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.rules).toHaveLength(20);
+    expect(res.body.data.rules.every((r) => r.length <= 200)).toBe(true);
+  });
+
+  it("records the reason on a ban and shows it to the owner only", async () => {
+    await request(h.app)
+      .post(`/api/rooms/${roomId}/ban`)
+      .set(auth(owner.token))
+      .send({ userId: troll.id, reason: "Rule 2: No spoilers" });
+
+    const asOwner = await request(h.app).get(`/api/rooms/${roomId}`).set(auth(owner.token));
+    const entry = asOwner.body.data.room.banned.find((b) => b.id === troll.id);
+    expect(entry.reason).toBe("Rule 2: No spoilers");
+
+    // The ban list (and its reasons) stays owner-only information.
+    const asOther = await request(h.app).get(`/api/rooms/${roomId}`).set(auth(bystander.token));
+    expect(asOther.body.data.room.banned).toBeUndefined();
+  });
+});
+
 describe("kick", () => {
   it("owner kicks a member; they lose access but may rejoin by code", async () => {
     const res = await request(h.app).post(`/api/rooms/${roomId}/kick`).set(auth(owner.token)).send({ userId: troll.id });
