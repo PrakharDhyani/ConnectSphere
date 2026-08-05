@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as mediasoupClient from "mediasoup-client";
 import { connectSocket, getSocket } from "@/lib/socket.js";
+import { createBackgroundPipeline } from "@/lib/bgFilter.js";
 
 const emitAck = (socket, ev, arg) => new Promise((resolve) => socket.emit(ev, arg, resolve));
 const bucketKey = (socketId, source) => `${socketId}:${source === "screen" ? "screen" : "camera"}`;
@@ -26,6 +27,7 @@ export function useMediaRoom(roomId) {
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [sharingScreen, setSharingScreen] = useState(false);
+  const [background, setBackgroundState] = useState("none"); // background effect id (lib/bgFilter.js)
 
   const device = useRef(null);
   const sendTransport = useRef(null);
@@ -39,6 +41,7 @@ export function useMediaRoom(roomId) {
   const localStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
   const listeners = useRef(null);
+  const bgPipeline = useRef(null); // canvas pipeline wrapping the camera track
 
   const syncRemotes = useCallback(() => {
     setRemotes(
@@ -125,6 +128,8 @@ export function useMediaRoom(roomId) {
       socket.off("media:consumerClosed", listeners.current.onClosed);
       listeners.current = null;
     }
+    bgPipeline.current?.stop();
+    bgPipeline.current = null;
     camProducers.current.forEach((p) => p.close());
     screenProducer.current?.close();
     consumers.current.forEach((c) => c.close());
@@ -149,6 +154,7 @@ export function useMediaRoom(roomId) {
     setScreenStream(null);
     setRemotes([]);
     setSharingScreen(false);
+    setBackgroundState("none");
     setInCall(false);
   }, []);
 
@@ -265,6 +271,41 @@ export function useMediaRoom(roomId) {
     setSharingScreen(false);
   }, [roomId]);
 
+  /**
+   * Background effects (lib/bgFilter.js) — blur / virtual backgrounds, like
+   * Teams/Meet. The camera track itself never changes — we swap what the
+   * PRODUCER sends via replaceTrack(): raw track for "none", the canvas
+   * pipeline's track otherwise. localStream is switched too so your own
+   * preview tile (and the recorder, which reads localStream) show exactly
+   * what the room sees.
+   */
+  const setBackground = useCallback(async (id, image) => {
+    const videoProducer = camProducers.current.get("video");
+    const rawTrack = localStreamRef.current?.getVideoTracks()[0];
+    if (!videoProducer || !rawTrack) return;
+
+    if (id === "none") {
+      setBackgroundState("none");
+      if (bgPipeline.current) {
+        await videoProducer.replaceTrack({ track: rawTrack });
+        bgPipeline.current.stop();
+        bgPipeline.current = null;
+        setLocalStream(localStreamRef.current);
+      }
+      return;
+    }
+
+    if (!bgPipeline.current) {
+      bgPipeline.current = createBackgroundPipeline(rawTrack);
+      await videoProducer.replaceTrack({ track: bgPipeline.current.track });
+      setLocalStream(
+        new MediaStream([bgPipeline.current.track, ...localStreamRef.current.getAudioTracks()])
+      );
+    }
+    bgPipeline.current.setEffect(id, image);
+    setBackgroundState(id);
+  }, []);
+
   const toggleMic = useCallback(() => {
     const track = localStreamRef.current?.getAudioTracks()[0];
     if (!track) return;
@@ -303,6 +344,8 @@ export function useMediaRoom(roomId) {
     hasVideo,
     peerCount,
     sharingScreen,
+    background,
+    setBackground,
     joinCall,
     joinVoice,
     leaveCall,

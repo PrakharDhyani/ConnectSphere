@@ -1,11 +1,12 @@
 import Button from "@/components/ui/Button.jsx";
+import { CaptionControls } from "@/components/Captions.jsx";
 
 /**
  * A compact, always-visible call bar so you can talk (mic) from ANY tab —
  * Room, Whiteboard, or Game. Join voice-only (no camera) for a quick chat while
  * playing, or add video. Mirrors the shared call state from useMediaRoom.
  */
-export default function VoiceBar({ call }) {
+export default function VoiceBar({ call, captions }) {
   const {
     inCall, joining, micOn, hasVideo, camOn, peerCount,
     joinVoice, joinCall, leaveCall, toggleMic, toggleCam,
@@ -35,6 +36,7 @@ export default function VoiceBar({ call }) {
               {camOn ? "📷" : "🚫"}
             </button>
           )}
+          {captions && <CaptionControls captions={captions} compact />}
           <button onClick={leaveCall} title="Leave call" className="w-9 h-9 rounded-full bg-red-600 hover:bg-red-500 flex items-center justify-center">
             📴
           </button>
