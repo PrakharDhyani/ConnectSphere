@@ -189,17 +189,21 @@ async function otakuOne(reaction) {
 }
 
 /**
- * Fetch `count` random GIFs across the given reactions, tolerating failures.
- * Requests run in small batches: OtakuGIFs is a free community service, and
- * firing 18 simultaneous requests at it is both rude and less reliable than
- * a few at a time.
+ * Fetch `count` random reaction images across the given reactions.
+ *
+ * These are calls to the JSON *API* (api.otakugifs.xyz), which is CORS-enabled
+ * and tolerant. The CDN that serves the actual image bytes
+ * (cdn.otakugifs.xyz) is the strict one — it answers HTTP 428 above ~2
+ * concurrent requests — and that pacing lives in lib/imageQueue.js, where the
+ * <img> loads actually happen. Batching here is just politeness to a free
+ * community service.
  */
 async function otakuMany(reactions, count) {
   const picks = [];
   for (let i = 0; i < count; i++) picks.push(reactions[i % reactions.length]);
 
   const out = [];
-  const BATCH = 6;
+  const BATCH = 4;
   for (let i = 0; i < picks.length; i += BATCH) {
     const settled = await Promise.allSettled(picks.slice(i, i + BATCH).map(otakuOne));
     out.push(...settled.filter((s) => s.status === "fulfilled" && s.value).map((s) => s.value));

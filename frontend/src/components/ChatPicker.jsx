@@ -13,6 +13,7 @@ import {
   providerLabel,
 } from "@/lib/gifs.js";
 import { STICKERS } from "@/components/stickers/Stickers.jsx";
+import { preloadImage, clearImageQueueCache } from "@/lib/imageQueue.js";
 
 /**
  * 😊 The chat composer's expression picker — one popover, three tabs:
@@ -216,47 +217,57 @@ function EmojiTab({ onPick }) {
  * A tile that errors stays clickable: the full image often still loads fine
  * on its own, and silently removing tiles would look like results vanishing.
  */
-function GifTile({ gif, onPick, index = 0 }) {
+function GifTile({ gif, onPick }) {
   const [state, setState] = useState("loading"); // loading | ok | error
-  // Stagger when each tile starts fetching. Browsers cap parallel connections
-  // per host (~6), so releasing them in waves means the first rows appear
-  // quickly instead of every tile crawling at once.
-  const [armed, setArmed] = useState(index < 4);
+
+  /**
+   * The <img> is only mounted AFTER lib/imageQueue confirms the url is in the
+   * browser cache. That indirection is the whole fix: the GIF CDN answers
+   * HTTP 428 when more than ~2 requests are in flight, and a grid of <img>
+   * tags fires all of them at once — measured, 11 of 12 failed in ~10 ms,
+   * which is why the tiles rendered as empty boxes. The queue paces the
+   * loads (and retries refusals), so by the time this renders an <img> the
+   * bytes are cached and it paints instantly.
+   *
+   * Data-URI built-ins skip the queue entirely — there is no network there.
+   */
+  const isLocal = gif.previewUrl?.startsWith("data:");
 
   useEffect(() => {
-    if (armed) return;
-    const t = setTimeout(() => setArmed(true), Math.floor(index / 4) * 220);
-    return () => clearTimeout(t);
-  }, [armed, index]);
+    if (isLocal) {
+      setState("ok");
+      return;
+    }
+    let alive = true;
+    setState("loading");
+    preloadImage(gif.previewUrl).then((ok) => {
+      if (alive) setState(ok ? "ok" : "error");
+    });
+    return () => { alive = false; };
+  }, [gif.previewUrl, isLocal]);
 
   return (
     <button
       type="button"
       onClick={() => onPick(gif)}
       title={gif.name}
-      className="mb-1.5 w-full block rounded-lg overflow-hidden border border-transparent hover:border-brand-500 transition-colors relative"
+      className="mb-1.5 w-full block rounded-lg overflow-hidden border border-transparent hover:border-brand-500 transition-colors relative bg-gray-800/60"
     >
-      {state !== "ok" && (
-        <div
-          className={`w-full h-24 flex items-center justify-center bg-gray-800/60 ${
-            state === "loading" ? "animate-pulse" : ""
-          }`}
-        >
-          <span className="text-[10px] text-gray-500 px-1 truncate">
-            {state === "loading" ? "…" : gif.name}
-          </span>
-        </div>
-      )}
-      {armed && (
+      {state === "ok" ? (
         <img
           src={gif.previewUrl}
           alt={gif.name}
-          loading="lazy"
           decoding="async"
-          onLoad={() => setState("ok")}
-          onError={() => setState("error")}
-          className={`w-full block ${state === "ok" ? "" : "hidden"}`}
+          className="w-full block"
         />
+      ) : (
+        <span
+          className={`w-full h-24 flex items-center justify-center text-[10px] text-gray-500 px-1 ${
+            state === "loading" ? "animate-pulse" : ""
+          }`}
+        >
+          {state === "loading" ? "…" : gif.name}
+        </span>
       )}
     </button>
   );
@@ -323,7 +334,7 @@ function GifTab({ onPick }) {
         />
         <button
           type="button"
-          onClick={() => setNonce((n) => n + 1)}
+          onClick={() => { clearImageQueueCache(); setNonce((n) => n + 1); }}
           title="Shuffle — show me something else"
           className="shrink-0 w-9 rounded-lg border border-gray-700 text-gray-400 hover:text-white hover:border-brand-500 transition-colors text-sm"
         >
@@ -346,8 +357,8 @@ function GifTab({ onPick }) {
           // Masonry-ish two columns so GIFs of different aspect ratios pack
           // tightly instead of leaving gaps in a rigid grid.
           <div className="columns-2 gap-1.5 [column-fill:_balance]">
-            {gifs.map((g, i) => (
-              <GifTile key={g.id} gif={g} onPick={onPick} index={i} />
+            {gifs.map((g) => (
+              <GifTile key={g.id} gif={g} onPick={onPick} />
             ))}
           </div>
         )}

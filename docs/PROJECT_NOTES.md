@@ -2231,39 +2231,59 @@ the reaction names straight out of `lib/gifs.js` and checks every one against
 the live `/gif/allreactions` list (skipped offline so CI never fails on a
 third party being down).
 
-**The broken-thumbnail bug: a payload problem wearing a URL problem's
-clothes.** The picker showed broken-image icons in the grid, yet clicking a
-tile worked perfectly. That combination rules out dead URLs (a 404 fails both
-ways) and rules out CSP (there is none on the Vite-served page — checked).
-Measuring the actual bytes found it: these are full-resolution reaction GIFs
-averaging ~500 KB and peaking at 1.3 MB, so an 18-tile grid was firing
-**~9 MB of parallel image requests**. Browsers cap parallel connections per
-host at ~6; the rest queued, stalled, and rendered as broken icons. A single
-click succeeded because it was one warm request instead of eighteen cold ones.
+**The broken-thumbnail bug, and two wrong diagnoses before the right one.**
+The picker showed broken/empty tiles in the grid while clicking a tile worked
+perfectly. That combination already rules out dead URLs (a 404 fails both
+ways) and CSP (there is none on the Vite-served page — checked).
 
-Three changes, each measured rather than assumed:
-- **WebP instead of GIF** — the API serves the same artwork from a parallel
-  `/webps/` path at a measured 68% smaller (`celebrate`: 1,327 KB → 64 KB).
-  A first attempt *derived* the webp url from the gif url by swapping
-  `/gifs/`→`/webps/` and the extension; **all 12 test URLs 404'd**, because
-  the two formats are independent random draws with unrelated ids. Verified
-  by diffing them side by side, then fixed by requesting webp once and using
-  it for both the thumbnail and the sent message — one request, so the tile
-  you click is the image that gets sent.
-- **Smaller shelf** (18 → 12 tiles) and request **batching** (6 at a time)
-  rather than a single 18-wide `Promise.allSettled` burst at a free community
-  API.
-- **Per-tile load state**: a shimmer while loading, a labelled placeholder on
-  error, and staggered start times (4 tiles per ~220 ms wave) so the first
-  row appears immediately. A failed tile stays clickable, because silently
-  dropping tiles reads as results vanishing.
+*Wrong diagnosis #1 — payload size.* Measuring showed these are
+full-resolution GIFs averaging ~500 KB, so an 18-tile grid was ~9 MB of
+parallel requests; the obvious story was "browsers cap ~6 connections per
+host, the rest stall". Fixes shipped on that theory: **WebP** instead of GIF
+(same artwork, measured 68% smaller — `celebrate` 1,327 KB → 64 KB), shelf
+18 → 12 tiles, and per-tile load states. Grid payload dropped 9 MB → 2.85 MB.
+**The tiles were still blank.** The theory was plausible, the measurements
+were real, and the conclusion was still wrong.
 
-Result: one grid render went from ~9 MB to **2.85 MB**, and 12/12 tiles load.
+*Wrong diagnosis #2 — my own placeholder code.* Reading the shipped tile
+found a genuine deadlock: `loading="lazy"` on an `<img>` that starts
+`display:none` until `onLoad` fires. A lazy image that is `display:none` is
+never near the viewport, so it is never fetched, so `onLoad` never fires, so
+it stays hidden forever. Real bug, correctly fixed — **and still not why the
+tiles were blank.**
 
-**Lesson:** "works on click, broken in the grid" is a *concurrency and payload*
-signature, not a URL signature. And the near-miss is worth as much as the fix
-— deriving the webp url looked obviously right and was verifiably wrong;
-the only reason it did not ship is that the check hit real URLs.
+*The actual cause, found by timing the failures in a real browser:* eleven of
+twelve images failed in **~10 ms**. Instant failure is not a stalled queue and
+not a big download — it is a refusal. Reproduced directly against the CDN:
+
+    2 parallel requests  → 12/12 succeed
+    3 parallel requests  →  8/12 succeed   (4 × HTTP 428)
+    12 parallel requests →  1/12 succeeds  (11 × HTTP 428)
+
+`cdn.otakugifs.xyz` has bot/abuse protection that answers **HTTP 428** above
+~2 concurrent requests. A grid of `<img>` tags fires all of them at once, so
+the grid could never work no matter how small the files were.
+
+The fix is `lib/imageQueue.js`: a global loader that keeps at most **2**
+requests in flight, staggers starts, and retries refusals with backoff. Tiles
+mount their `<img>` only once the queue reports the url is cached, so the
+render is instant and never re-hits the CDN. Verified in headless Chrome
+against live urls: **all-at-once 1/12 in 10 ms, queued 12/12 in 1.13 s.**
+
+*A near-miss worth recording separately:* the first WebP attempt **derived**
+the webp url from the gif url by swapping `/gifs/`→`/webps/` and the
+extension. All 12 test URLs 404'd — the two formats are independent random
+draws with unrelated ids (`/gifs/wave/7832e5c7….gif` vs
+`/webps/wave/967a5f2a….webp`). It only failed to ship because the check hit
+real URLs.
+
+**Lessons.** (1) *Timing is a diagnosis.* A failure at 10 ms and a failure at
+10 s have completely different causes; measuring only "did it work" hides
+that. (2) A plausible theory backed by real measurements can still be the
+wrong theory — the payload numbers were all correct and irrelevant. (3) When
+a symptom survives a fix, the fix was for a different bug; keep the fix if
+it is genuinely right (WebP and the lazy/display:none deadlock both were),
+but do not close the case.
 
 **The fallback bug — and the rule that came out of it.** The first version
 degraded (no key configured) to a "curated set of evergreen reaction GIFs"
