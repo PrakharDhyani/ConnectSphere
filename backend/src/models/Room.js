@@ -33,11 +33,22 @@ const roomSchema = new Schema(
       sparse: true,
       index: true,
     },
-    // public rooms are discoverable and joinable without an invite code;
-    // private rooms are invite-code only (the original behavior).
+    // public     — discoverable in the public list, joinable without a code
+    // private    — invite-code only (the original behaviour, still the default)
+    // inviteOnly — not discoverable, and eventually the code alone will not be
+    //              enough: you must have been invited.
+    //
+    // NOTE (Phase 1): `inviteOnly` is accepted and stored, and already behaves
+    // strictly wherever visibility is read — every existing check tests
+    // `=== "public"`, so it fails closed: excluded from discovery, rejected by
+    // join-public. What is NOT yet enforced is the part that distinguishes it
+    // from `private`: joinRoom() does not consult visibility, so a code still
+    // works. That lands with the invite mechanism in Phase 4. Until then the
+    // value is safe but no stricter than private — do not advertise it in the
+    // UI as "invite required" before then.
     visibility: {
       type: String,
-      enum: ["public", "private"],
+      enum: ["public", "private", "inviteOnly"],
       default: "private",
     },
     code: {
@@ -100,6 +111,62 @@ const roomSchema = new Schema(
       },
       updatedAt: { type: Date },
       updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    },
+
+    /**
+     * Activity plugins — which are installed in this room, and which is open.
+     *
+     * The room stores only ids, config and state. It knows nothing about what
+     * an activity *is*: the manifest (shared/activities/<id>/manifest.js) owns
+     * the name, icon, permissions and settings grammar. That separation is what
+     * lets a plugin be added without touching the room, the model, or any
+     * existing file.
+     *
+     * ABSENT MEANS "EVERYTHING". Rooms created before this field existed have
+     * no `activities`, and resolveInstalled() in shared/activities/compat.js
+     * maps that to the full legacy set — so old rooms behave exactly as they
+     * do today with no migration, no batch job and nothing to undo. A room
+     * materialises an explicit list the first time someone edits it.
+     */
+    activities: {
+      installed: [
+        {
+          // Matches a manifest id. Deliberately NOT enum-validated here: an
+          // unknown id must degrade to an "unavailable" placeholder, not make
+          // the whole room document unreadable. Validation happens at the API
+          // boundary, where a bad id can be reported to the caller.
+          id: { type: String, required: true },
+          // Pinned at install time so a future plugin update can be an opt-in
+          // migration rather than a silent behaviour change mid-session.
+          version: { type: String },
+          // Validated + clamped against the plugin's configSchema before it
+          // ever reaches here (coerceConfig) — client input is untrusted.
+          config: { type: Schema.Types.Mixed, default: () => ({}) },
+          enabled: { type: Boolean, default: true },
+          addedBy: { type: Schema.Types.ObjectId, ref: "User" },
+          addedAt: { type: Date, default: Date.now },
+          _id: false,
+        },
+      ],
+      // The foregrounded activity; null = the room's own chat surface.
+      // Never trusted directly on read — resolveActiveActivity() falls back if
+      // it names something since uninstalled, disabled or missing from a build.
+      active: { type: String, default: null },
+    },
+
+    /**
+     * What the room is for — drives activity recommendations at creation and,
+     * later, analytics. `kind` is one of PURPOSE_IDS (shared/activities/
+     * purposes.js); `text` carries the free-text answer and is only meaningful
+     * when kind === "custom".
+     *
+     * Not enum-validated at the schema level for the same reason as activity
+     * ids: the taxonomy lives in shared/ and may gain entries, and a room
+     * document should never become unreadable because a purpose was renamed.
+     */
+    purpose: {
+      kind: { type: String, default: null },
+      text: { type: String, maxlength: 200, trim: true },
     },
   },
   { timestamps: true }

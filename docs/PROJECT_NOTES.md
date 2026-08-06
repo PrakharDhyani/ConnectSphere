@@ -2528,6 +2528,166 @@ think to assert.
 
 ---
 
+## 41. Architecture: Activity Platform — Phase 1 (plugin foundation)
+
+**Goal.** Stop the app thinking in terms of built-in features. The room becomes a
+core shell (chat · video · screen share · voice · presence · moderation) and
+everything on the Board and Game surfaces becomes an **Activity Plugin**. Full
+design in `docs/ACTIVITY_PLATFORM_MIGRATION.md`.
+
+Phase 1 is the contract only: **no behaviour changes, nothing reads it yet.**
+
+### What the analysis found
+
+Better starting position than expected — two plugin-shaped things already worked:
+
+- `sockets/lobbyGame.js` **is already a plugin framework**. Games supply pure
+  callbacks (`start`, `publicState`, `botAct`, `tick`) and get
+  `ctx = {g, io, roomId, broadcast, notice, endGame}` — they never touch
+  Socket.IO directly. That is an SDK.
+- `GamesHub.jsx` is a `GAMES[]` registry + `lazy()` panels.
+
+But a measurement corrected an assumption. I claimed six games ran on the
+framework; grepping for `createLobbyGame` showed **four** (chess 210, uno 237,
+typing 149, bingo 212). **Ludo (536) and Kart (478) are bespoke** — they grew the
+logic that *became* `lobbyGame.js` and were never moved onto it. Draw & Guess
+(311) predates it. So the migration is three heavyweight conversions, not one.
+
+Kart is hardest: it runs its own `setInterval` physics loop at `TICK_HZ`
+(`kart.handlers.js:248`). Migrates last; its `destroy()` is the reference
+lifecycle test.
+
+**The actual coupling problem:** adding one game today means editing four files
+that have nothing to do with that game — `sockets/index.js` (12 hardcoded
+registrations), `RoomPage.jsx:546` (literal tab array), `RoomPage.jsx:31-44`
+(`ACT_LABEL`/`ACT_VIEW` maps), `GamesHub.jsx:28` (`GAMES[]`).
+
+### Options considered
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Is chat a plugin? | (a) everything is a plugin (b) chat stays core | **(b)** — chat is the room's substrate: games post into it, moderation acts on it, it survives activity switches, it is the fallback when a plugin fails. As a plugin it could be *uninstalled*, bricking the room. Plugins use `sdk.chat` instead. |
+| Where do manifests live? | (a) duplicate per side (b) `shared/` (c) fetch from API | **(b)** — the wizard, the engine and the server's permission check need the same facts; two copies drift. Data-only ESM, no build step. |
+| Registry contents | (a) manifests + components (b) manifests only | **(b)** — registering components pulls every plugin into the initial bundle and destroys existing lazy loading (Excalidraw ~1.8 MB). |
+| Config grammar | (a) JSON Schema (b) closed 6-type grammar | **(b)** — JSON Schema can express what no form can render (`oneOf`, `$ref`, recursion), so a generic renderer silently drops fields. Closed grammar ⇒ every valid schema renders; an unrenderable one is a boot error. |
+| Backward compat | (a) migration script (b) read-time resolver | **(b)** — absence means "everything". No batch job, no deploy ordering, no downtime, fully reversible; rooms upgrade themselves on first edit. |
+| Permissions | (a) check at call time (b) build SDK from declared list | **(b)** — an ungranted capability is `undefined`, so it fails as a TypeError at the plugin's own call site in dev, not in production in someone else's frame. **Absent beats denied.** |
+
+### Implementation
+
+```
+shared/                          ← new, data-only, imported by BOTH sides
+  package.json                   ("type":"module" — see gotcha below)
+  activities/
+    manifest.js                  contract + validateManifest() + CAPABILITIES
+    config-schema.js             6-type grammar + validate + coerce (trust boundary)
+    registry.js                  register/get/byCategory/bySurface/deps + cycle detection
+    purposes.js                  10 wizard cards
+    compat.js                    legacy resolution — the backward-compat core
+    index.js                     registers the 9 built-ins; auto-runs on import
+    <id>/manifest.js             whiteboard skribbl ludo chess uno typing bingo kart poll
+```
+
+Plus: `Room` gains `activities.installed[]`, `activities.active`, `purpose`, and
+`visibility` gains `inviteOnly`; `backend/src/index.js` imports the registry
+first so a bad manifest crashes at boot; Vite gets an `@shared` alias.
+
+**v1 SDK is five capabilities** — `room:read`, `socket:namespaced`,
+`storage:room`, `presence:read`, `events:listen`. Narrowing the scope to
+whiteboard + games cut it from ten: nothing in scope needs chat, video or AI.
+A test pins this list so adding one is a deliberate decision.
+
+### Challenges
+
+**1. `shared/` was parsed as CommonJS.** Jest failed with *"Cannot use import
+statement outside a module"*. Node resolves module type from the **nearest**
+`package.json` walking up from each file — `shared/` is a sibling of `backend/`,
+so backend's `"type": "module"` never applied. Fix: a 6-line `package.json` in
+`shared/`.
+
+**2. Duplicate `server:` key in `vite.config.js`.** I added `fs.allow` as a new
+`server` block while one already existed. Valid JS — the second silently wins —
+so `fs.allow` would have been dropped and dev imports from `shared/` would break
+with a confusing "outside of Vite serving allow list". Caught by reading the
+file back after editing. **Merging into an existing key is not the same as
+adding a key.**
+
+**3. Invented config options that did not exist.** I wrote kart arenas
+`arena`/`docks`/`canyon` from memory; the real `MAPS` are `speedway`, `forest`,
+`volcano`, `circuit`, `canyon` — only one right. Same for typing
+(`difficulty`/`passageLength` — the real modes are `race`/`timed`) and bingo
+(invented 2/4/7s; the ticker is `ms: 3500`). A manifest describes config the
+plugin will honour, so inventing settings *creates* work rather than describing
+it. **Same failure mode as the dead Tenor URLs — plausible-looking values I did
+not check.** Fixed by grepping each handler.
+
+**4. A test that failed for a real reason.** "Every purpose recommends
+something" failed on **music** — there is no music plugin yet. Tempting fix:
+add a fake `music: 0.3` weight somewhere. That would lie to the engine and put
+Bingo in front of someone who asked for music. Instead the gap is named
+(`PURPOSES_WITHOUT_PLUGINS`) with a second test asserting it is the *only* one,
+so shipping Music Room **fails** the suite as a reminder to delete the
+exemption.
+
+**5. Proving the Vite alias actually worked.** First attempt built a probe file
+that was never imported — Rollup tree-shakes it, so the green build proved
+nothing. Second attempt used a marker string, which Vite constant-folded away.
+What finally proved it: grepping `dist/` for real manifest content
+(`"Smash Karts 3D"`, `infiniteCanvas`), plus a live `curl` of
+`/@fs/.../shared/activities/purposes.js` returning 200 from the dev server —
+build path and dev path use different mechanisms (bundler vs `fs.allow`).
+
+### Verification
+
+- **77 new contract tests**, all green.
+- **Full suite: 18 suites / 359 tests green** — the 282 pre-existing tests
+  untouched, which is the actual claim being made ("no behaviour changes").
+- Backend log: `✅ 9 activity plugins registered` on real boot.
+- Vite prod build contains manifest data; dev server serves `shared/` (200).
+- **Real Mongo document** shaped like a pre-plugin room: loads through Mongoose,
+  resolves to all 9 activities at defaults, `active: null`, and `inviteOnly`
+  passes validation. Probe row deleted afterwards.
+
+Note: Mongoose materializes a missing array as `[]`, not `undefined` — which is
+why `resolveInstalled()` tests `.length > 0` rather than existence. A unit test
+alone would not have shown that; it took a real document.
+
+### Interview Q&A
+
+**Q: Why isn't chat a plugin if "everything except the room" should be?**
+Because uninstalling it would brick the room. Chat is the substrate the other
+activities post into and the fallback when a plugin fails to load. The rule:
+*if removing it bricks the room, or if two plugins would fight over the same
+hardware (mediasoup's SFU router), it's infrastructure.* VS Code doesn't make
+the text buffer an extension.
+
+**Q: Why a resolver instead of a migration?**
+A backfill must be re-run for every deploy and every row written by an older
+server, is a deploy-ordering hazard, and is hard to undo. A read-time resolver
+means old rooms behave identically with zero rows touched, and dropping the
+field returns the app to its starting state.
+
+**Q: Why not JSON Schema for plugin config?**
+Expressiveness is the wrong goal for a schema that must be *rendered*. JSON
+Schema can describe forms no generic renderer can draw, and the failure is
+silent — the setting vanishes. Six types means every valid schema renders, and
+an invalid one fails loudly at boot.
+
+**Q: How do you know adding a plugin won't break the app?**
+Six mechanisms, not conventions: adding a plugin edits no existing file; error
+boundary per plugin; manifests validate at boot; unknown ids degrade to a
+placeholder instead of white-screening; ESLint `no-restricted-imports` confines
+plugins to the SDK; `destroy()` is mandatory. Phase 6 tests guarantee #1 for
+real — building Sticky Notes must touch nothing outside its own folder.
+
+**Q: What was the most expensive mistake here?**
+Writing manifest values from memory instead of reading the handlers. Three of
+nine manifests had fabricated options. It's the same failure as the dead Tenor
+URLs earlier in the project: plausible-looking output that was never checked
+against the thing it describes.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·

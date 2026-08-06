@@ -1,0 +1,7 @@
+{
+  "name": "@connectsphere/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Code shared verbatim by the backend and frontend — activity plugin manifests and contract. Data only: no dependencies, no build step.",
+  "type": "module"
+}

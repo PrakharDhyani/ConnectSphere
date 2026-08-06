@@ -14,6 +14,11 @@
 
 import "dotenv/config";
 import http from "http";
+// Registers every activity plugin manifest. Imported for its side effect and
+// placed FIRST deliberately: a malformed manifest throws here, before any
+// external connection is opened, so the failure is an immediate startup crash
+// naming the offending plugin and field — never a blank tab in production.
+import { getAllPlugins } from "../../shared/activities/index.js";
 import { app } from "./app.js";
 import { connectMongo } from "./config/mongo.js";
 import { connectRedis } from "./config/redis.js";
@@ -38,6 +43,8 @@ async function bootstrap() {
       await Promise.all([User.syncIndexes(), Room.syncIndexes()]);
       logger.info("✅ Indexes synced (dev)");
     }
+
+    logger.info(`✅ ${getAllPlugins().length} activity plugins registered`);
 
     await connectRedis();
     await connectKafka();
