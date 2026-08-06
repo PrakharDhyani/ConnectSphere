@@ -25,6 +25,8 @@ import { registerTypingHandlers } from "./typing.handlers.js";
 import { registerBingoHandlers } from "./bingo.handlers.js";
 import { registerPollHandlers } from "./poll.handlers.js";
 import { registerCaptionHandlers } from "./caption.handlers.js";
+import { registerActivityHost } from "../activities/host.js";
+import { registerActivityServerModules, legacyHandlerEnabled } from "../activities/index.js";
 
 let io;
 
@@ -42,6 +44,11 @@ export function initSocket(httpServer) {
   // Gate every connection on a valid access token (see auth.js).
   io.use(authenticateSocket);
 
+  // Activity plugins served through the new host (ACTIVITY_PLUGINS env flag).
+  // Anything not listed keeps its original handler below, so the two paths can
+  // run side by side and a migration reverts with an env var, not a deploy.
+  registerActivityServerModules();
+
   io.on("connection", (socket) => {
     logger.info(`Socket connected: ${socket.id} (user ${socket.user.id})`);
     // Personal room — lets the server address all of one user's sockets (e.g.
@@ -49,7 +56,12 @@ export function initSocket(httpServer) {
     socket.join(`user:${socket.user.id}`);
     registerChatHandlers(io, socket);
     registerMediaHandlers(io, socket);
-    registerWhiteboardHandlers(io, socket);
+    // One dispatcher for every migrated plugin — this call does not grow as
+    // plugins are added, which is the whole point.
+    registerActivityHost(io, socket);
+    // Legacy handlers, skipped once their plugin is served by the host.
+    // Registering both would double-broadcast every event.
+    if (legacyHandlerEnabled("whiteboard")) registerWhiteboardHandlers(io, socket);
     registerGameHandlers(io, socket);
     registerLudoHandlers(io, socket);
     registerKartHandlers(io, socket);

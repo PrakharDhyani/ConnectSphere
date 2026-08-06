@@ -2688,6 +2688,101 @@ against the thing it describes.
 
 ---
 
+## 42. Architecture: Activity Platform — Phase 2 (backend plugin host)
+
+**Goal.** Replace the twelve hardcoded `registerXHandlers(io, socket)` calls in
+`sockets/index.js` with one dispatcher, and migrate the first plugin
+(whiteboard) onto it — reversibly.
+
+### What the host does so plugins never have to
+
+Every plugin event now passes through one gate that: resolves the plugin →
+`canAccessRoom()` → checks the activity is installed **and** has a registered
+server module → rate limits per socket per event → builds the SDK from declared
+permissions → try/catches the handler.
+
+`whiteboard.handlers.js` repeated steps 2 and 4 **by hand, four times**. The
+migrated plugin (`activities/whiteboard/server.js`) contains only whiteboard
+logic. **Structural beats remembered: a plugin author cannot forget a step that
+is not theirs.**
+
+### Options considered
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Dispatch shape | (a) N listeners per plugin per socket (b) one dispatcher routing by id | **(b)** — the registration call must not grow as plugins are added; that is the whole point |
+| Migration safety | (a) cut over (b) parallel behind env flag | **(b)** `ACTIVITY_PLUGINS` — reverting is an env change, not a deploy. Defaults to `none`: **Phase 2 ships dark.** The old code still running by default is the only rollback that cannot itself fail |
+| Persistence | (a) move whiteboard to generic ActivityState (b) keep its own model | **(b)** — migration stays behaviour-preserving and instantly revertible; existing boards need no data migration. Moving data is a separate decision, not something to smuggle into a refactor |
+| Bus scope | (a) bridge client+server (b) server-side only | **(b)** — a bridged bus lets a client forge an event that server plugins trust as coming from a peer plugin. Crossing that gap goes through `sdk.socket`, which is access-controlled |
+
+### Challenges — three real bugs, each found a different way
+
+**1. Rejected events never answered the ack.** Five bare `return`s in the
+dispatcher. The rejection was correct; the *silence* was the bug — a client that
+awaits an ack (the normal way to send a move and wait for confirmation) hangs
+forever on every refusal. Found because a test **timed out at 30s instead of
+failing**, which is itself the tell: an assertion failure means wrong behaviour,
+a hang means nobody is answering. Now every path acks, with `Slow down`
+distinct from `Not allowed` so a client can back off rather than retry forever.
+
+**2. The host accepted plugins it wasn't serving.** With the flag off,
+`activity:join` for *any* plugin returned `{ok:true, state:null}` and put the
+socket in the activity room, because `authorize()` checked the plugin was
+installed in the room (every legacy room resolves to all 9) but never that a
+**server module was registered**. Harmless in isolation — no events were wired —
+but it is the first half of a double-broadcast bug, and it made the flag look
+like it had not taken effect.
+
+**The unit suite could never have caught this: it always ran with the flag ON.**
+Found by driving the live server with `ACTIVITY_PLUGINS=none`. A regression test
+now covers it explicitly.
+
+**3. `.env` is not watched by nodemon.** After flipping the flag I read the log,
+saw the old "activity host serving: whiteboard" line, and nearly concluded the
+rollback had failed. There is no `nodemon.json`; the default watches `*.js`
+only. `touch src/index.js` forces the restart. **A stale log line looks exactly
+like a working feature** — checking the timestamp is what distinguished them.
+
+Also: writing a throwaway script into `backend/` triggers nodemon and kills the
+server mid-test (`ECONNRESET`). Scratchpad, not the repo.
+
+### Verification — the part that mattered
+
+- **32 host tests + 391 total** across 19 suites, all green (was 359).
+- `sockets.test.js` covers the **legacy** whiteboard and runs with the flag off:
+  that is the parity check, and it passes unmodified.
+- **Live server, both directions:**
+  - flag ON → 7/7: join, broadcast, cursors, save+persist, non-member refused,
+    and **legacy `whiteboard:join` silent** (proving the flag swaps paths rather
+    than registering both)
+  - flag OFF → 3/3: legacy handler answers again, **and the plugin path is inert**
+- Flag reset to `none` afterwards.
+
+**Lesson (again, in a new costume): the tests all passed while a real bug sat in
+the flag-off path, because the suite only ever exercised one side of the switch.
+A migration flag has two states and both are production.**
+
+### Interview Q&A
+
+**Q: Why an env flag instead of just cutting over?**
+Because the rollback has to be cheaper than the migration. An env var reverts in
+seconds without a rebuild; a revert commit needs a deploy at the exact moment
+you least want one. Default `none` means the new path is opt-in until exercised.
+
+**Q: Why does the host ack even when it refuses?**
+An accepted event and a dropped one must be distinguishable by a client that
+awaits. Silence is indistinguishable from a lost packet, so a well-behaved
+client either hangs or retries forever. The reason is vague and identical for
+"unknown event" and "not allowed" so probing cannot enumerate what exists —
+but throttling is distinct, because that one the client should act on.
+
+**Q: Why keep the whiteboard's own Mongo model?**
+A refactor should change one thing. Moving the data at the same time would make
+the diff impossible to verify and the rollback lossy. `ActivityState` exists for
+plugins that have no model yet; whiteboard can move later, deliberately.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
