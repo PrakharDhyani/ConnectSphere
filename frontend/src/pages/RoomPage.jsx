@@ -200,6 +200,8 @@ export default function RoomPage() {
   const [viewOnce, setViewOnce] = useState(false);
   const [editingMsg, setEditingMsg] = useState(null);   // { id, text } being edited
   const [forwarding, setForwarding] = useState(null);   // message being forwarded
+  // Mobile only — on md+ the sidebar is always visible (see the aside below).
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
   // Drag events fire per-child-element, so a naive boolean flickers as the
@@ -499,9 +501,23 @@ export default function RoomPage() {
   const nameFor = (userId) => room.members.find((m) => m.id === userId)?.name || "Guest";
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* Persistent mic/call bar — available on every tab */}
-      <VoiceBar call={call} captions={captions} />
+    /**
+     * The room is a FIXED-HEIGHT app shell, not a growing document.
+     *
+     * `h-screen` + `overflow-hidden` pins the page to the viewport so the
+     * header, tab switcher and composer never scroll away; only the message
+     * list (the one element with `overflow-y-auto`) moves. With
+     * `min-h-screen` the page grew as messages arrived and the whole document
+     * scrolled, taking the navbar and controls with it.
+     *
+     * Every flex ancestor of the scroller also needs `min-h-0`: a flex item
+     * defaults to `min-height: auto`, which refuses to shrink below its
+     * content, so without it the scroll container just grows instead.
+     */
+    <div className="h-screen overflow-hidden flex flex-col">
+      {/* Persistent mic/call bar. On the Room tab the chat header already has
+          Join call, so it only appears once a call is live. */}
+      <VoiceBar call={call} captions={captions} hideWhenIdle={view === "room"} />
 
       {/* Live captions — subtitle strip visible on every tab */}
       <CaptionOverlay lines={captions.lines} />
@@ -523,7 +539,7 @@ export default function RoomPage() {
         ))}
       </div>
 
-      <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-800 gap-2">
+      <header className="shrink-0 flex items-center justify-between px-4 sm:px-6 py-3 border-b border-gray-800 gap-2">
         <Link to={me?.isGuest ? "/" : "/dashboard"} className="shrink-0"><Logo withText={false} /></Link>
         {/* Segmented pill tabs — the active tab slides its gradient in place. */}
         <div className="flex items-center gap-1 p-1 rounded-full bg-gray-900/70 backdrop-blur border border-white/10">
@@ -546,8 +562,10 @@ export default function RoomPage() {
         </Link>
       </header>
 
+      {/* The board and game tabs get their own scroll: the shell no longer
+          grows, so anything taller than the viewport must scroll internally. */}
       {view === "board" && (
-        <div className="flex-1 w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
+        <div className="flex-1 min-h-0 overflow-y-auto w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
           <Suspense
             fallback={
               <div className="flex items-center justify-center h-[75vh]">
@@ -561,15 +579,22 @@ export default function RoomPage() {
       )}
 
       {view === "game" && (
-        <div className="flex-1 w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
+        <div className="flex-1 min-h-0 overflow-y-auto w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
           <GamesHub roomId={roomId} />
         </div>
       )}
 
-      <div className={`flex-1 max-w-6xl w-full mx-auto px-4 py-6 grid md:grid-cols-[1fr_260px] gap-4 ${view !== "room" ? "hidden" : ""}`}>
-        {/* Chat column */}
-        <section className="flex flex-col bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden min-h-[70vh]">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 gap-3">
+      {/* min-h-0 lets this grid shrink inside the fixed-height shell; without
+          it the chat column would push the page taller than the viewport.
+          The sidebar scrolls independently so a long member list never drags
+          the chat with it. */}
+      <div className={`flex-1 min-h-0 max-w-6xl w-full mx-auto px-4 py-4 grid md:grid-cols-[1fr_260px] gap-4 ${view !== "room" ? "hidden" : ""}`}>
+        {/* Chat column. On mobile it yields to the sidebar rather than
+            splitting the fixed height between them. */}
+        <section className={`${sidebarOpen ? "hidden md:flex" : "flex"} flex-col min-h-0 bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden`}>
+          {/* shrink-0 on every fixed band (title row, banners, composer) so
+              they keep their height and the scroller absorbs the rest. */}
+          <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-gray-800 gap-3">
             {editingName ? (
               <form
                 className="flex items-center gap-2 flex-1"
@@ -586,9 +611,9 @@ export default function RoomPage() {
                 <button type="button" onClick={() => setEditingName(false)} className="text-sm text-gray-400 hover:text-gray-200">Cancel</button>
               </form>
             ) : (
-              <div className="min-w-0">
-                <h1 className="font-bold truncate flex items-center gap-2">
-                  {room.name}
+              <div className="min-w-0 flex-1">
+                <h1 className="font-bold truncate flex items-center gap-2 text-sm sm:text-base">
+                  <span className="truncate">{room.name}</span>
                   {room.isOwner && (
                     <button
                       onClick={() => { setNameDraft(room.name); setEditingName(true); setActionError(null); }}
@@ -602,14 +627,38 @@ export default function RoomPage() {
                 <p className="text-xs text-gray-500">{presence.length} online · {room.memberCount} member{room.memberCount === 1 ? "" : "s"}</p>
               </div>
             )}
-            <div className="flex items-center gap-2 shrink-0">
+            {/* On narrow screens these buttons cannot all fit beside the room
+                name — they used to squeeze the title into a vertical sliver
+                and overflow the card. Copy-link and Invite collapse to icons
+                below md, and the row never shrinks the title below its text. */}
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              {/* Mobile: reach the member list / rules / room actions, which
+                  live in the sidebar the one-column layout pushes off-screen. */}
+              <button
+                onClick={() => setSidebarOpen((o) => !o)}
+                title="Members & room settings"
+                className="md:hidden w-9 h-9 rounded-lg border border-gray-700 text-gray-300 hover:border-brand-500 text-sm shrink-0"
+              >
+                {sidebarOpen ? "✕" : "👥"}
+              </button>
               {call.inCall ? (
-                <Button variant="danger" onClick={call.leaveCall}>Leave call</Button>
+                <Button variant="danger" onClick={call.leaveCall}>Leave</Button>
               ) : (
                 <Button onClick={call.joinCall} loading={call.joining}>Join call</Button>
               )}
-              {!me?.isGuest && <InviteFriends roomId={roomId} />}
-              <Button variant="secondary" onClick={copyLink}>{copied ? "Copied ✓" : "🔗 Copy invite link"}</Button>
+              {!me?.isGuest && (
+                <span className="hidden sm:inline-flex"><InviteFriends roomId={roomId} /></span>
+              )}
+              <button
+                onClick={copyLink}
+                title="Copy invite link"
+                className="sm:hidden w-9 h-9 rounded-lg border border-gray-700 text-gray-300 hover:border-brand-500 text-sm shrink-0"
+              >
+                {copied ? "✓" : "🔗"}
+              </button>
+              <span className="hidden sm:inline-flex">
+                <Button variant="secondary" onClick={copyLink}>{copied ? "Copied ✓" : "🔗 Copy invite link"}</Button>
+              </span>
             </div>
           </div>
 
@@ -654,8 +703,12 @@ export default function RoomPage() {
               Recording in progress — {recorders.map((r) => (r.id === me?.id ? "you" : r.name)).join(", ")}
             </div>
           )}
+          {/* Capped and independently scrollable: with screen shares plus a
+              row of camera tiles this panel can get tall, and in a
+              fixed-height shell that would squeeze the message list to
+              nothing. shrink-0 stops flex from collapsing it instead. */}
           {call.inCall && (
-            <div className="border-b border-gray-800 p-3 bg-gray-950/40">
+            <div className="shrink-0 max-h-[45%] overflow-y-auto border-b border-gray-800 p-3 bg-gray-950/40">
               {/* Screen shares — big, on top */}
               {(call.screenStream || call.remotes.some((r) => r.source === "screen")) && (
                 <div className="space-y-2 mb-2">
@@ -706,7 +759,8 @@ export default function RoomPage() {
           {/* 📊 One live poll per room — everyone sees it, votes update live. */}
           <PollPanel roomId={roomId} />
 
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4">
+          {/* THE scroll container — the only thing in the room that moves. */}
+          <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-4 py-4">
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full text-center gap-2 py-10">
                 <span className="text-4xl">👋</span>
@@ -976,8 +1030,14 @@ export default function RoomPage() {
           </form>
         </section>
 
-        {/* Members + actions sidebar */}
-        <aside className="bg-gray-900 border border-gray-800 rounded-2xl p-4 h-fit space-y-4">
+        {/* Members + actions sidebar — scrolls on its own so a long member
+            list or ban list never drags the chat column with it.
+            On mobile the grid is one column, so it sits BELOW the chat and is
+            collapsed behind a toggle: with a fixed-height shell an
+            always-open panel would eat the message list. */}
+        <aside
+          className={`${sidebarOpen ? "block" : "hidden"} md:block overflow-y-auto min-h-0 bg-gray-900 border border-gray-800 rounded-2xl p-4 pb-20 space-y-4`}
+        >
           <div>
             <h2 className="text-sm font-semibold text-gray-300 mb-3">Members — {room.memberCount}</h2>
             <ul className="space-y-2">

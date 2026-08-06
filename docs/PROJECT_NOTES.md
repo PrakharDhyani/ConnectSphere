@@ -2488,6 +2488,44 @@ collisions broke two **existing** tests that asserted exact names
 helper rather than changing `reg()` for everyone — a shared test helper is an
 API, and widening it silently is as breaking as changing production code.
 
+### Room layout: an app shell, not a document
+**The bug:** as messages arrived, the *page* grew and the whole document
+scrolled — carrying the navbar, the Room/Board/Game tabs, the room name and
+the Join call / Invite buttons off the top of the screen. Everything except
+the message list was supposed to stay put.
+
+Three causes, all of them the same mistake in different places:
+- `min-h-screen` lets the page grow past the viewport. The fix is
+  `h-screen` + `overflow-hidden` — the room is a fixed-height **app shell**,
+  and exactly one element inside it (the message list) owns `overflow-y-auto`.
+- `min-h-[70vh]` on the chat card made it stretch instead of fit.
+- **Every flex ancestor of a scroll container needs `min-h-0`.** A flex item
+  defaults to `min-height: auto`, which refuses to shrink below its content —
+  so without it the "scroll container" simply grows and pushes the page
+  taller, which is precisely the bug. This is the non-obvious one; the CSS
+  looks correct without it.
+
+The same reasoning applied outward: the Board and Game tabs now scroll
+internally (the shell can no longer grow for them), the sidebar scrolls
+independently so a long member list never drags the chat, and the in-call
+video panel is capped at `max-h-[45%]` so screen shares plus camera tiles
+can't squeeze the messages to nothing.
+
+**Two bugs the screenshots caught that the assertions did not.** Verification
+drove a real Chrome over CDP and asserted the header/composer `getBoundingClientRect().top`
+was *identical* before and after scrolling the list (0 → 0 and 616 → 616,
+page 704 = 704 so it cannot scroll). All green — but looking at the actual
+image showed the floating VoiceBar sitting on top of the sidebar's "Delete
+room" button, and on a 390px phone the header buttons overflowing the card
+with the room name squeezed into a one-character-wide column. Neither is
+expressible as "did the header move". Fixed by docking the bar bottom-right
+(and hiding it on the Room tab while idle, where the header already has Join
+call), and collapsing Invite/Copy-link to icons below `sm`.
+
+**Lesson:** geometry assertions prove the thing you thought to measure.
+Rendering the page and *looking at it* is what finds the overlap you did not
+think to assert.
+
 ---
 
 ## Current Status / Next Steps
