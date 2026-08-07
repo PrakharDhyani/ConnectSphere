@@ -5,6 +5,7 @@ import { Report } from "../models/Report.js";
 import { io } from "../sockets/index.js";
 import { roomKey } from "../sockets/chat.handlers.js";
 import { isScopedGuest } from "../utils/roomAccess.js";
+import { getPlugin, coerceConfig, isValidPurpose, resolveActivities } from "../../../shared/activities/index.js";
 
 // Lightweight shape for lists/create/join — one place decides what a room looks
 // like to clients.
@@ -51,6 +52,13 @@ function toRoomDetail(room, userId) {
     // editing them is owner-gated.
     rules: room.rules?.items || [],
     rulesUpdatedAt: room.rules?.updatedAt,
+    // Activities drive the room's tabs. Sent as the raw stored shape (not
+    // resolved) so the client applies the SAME legacy fallback the server
+    // would — one rule, in shared/, rather than two that can drift.
+    activities: room.activities?.installed?.length
+      ? { installed: room.activities.installed, active: room.activities.active ?? null }
+      : undefined,
+    purpose: room.purpose?.kind ? { kind: room.purpose.kind, text: room.purpose.text } : undefined,
     // The ban list is owner-only information (needed for the unban UI).
     banned: isOwner
       ? (room.banned || []).map((b) => ({ id: b.user, name: b.name, reason: b.reason, at: b.at }))
@@ -249,9 +257,58 @@ async function loadRoom(id, { populateMembers = false } = {}) {
   return room;
 }
 
+/**
+ * Turn the wizard's activity selection into stored installs.
+ *
+ * TRUST BOUNDARY. Ids and config come from the browser, so:
+ *   - an unknown plugin id is a 400, not a silently stored ghost entry
+ *   - config is coerced and clamped against the plugin's own configSchema
+ *     (unknown keys dropped, numbers clamped, bad types replaced by defaults)
+ *   - the version is pinned at install time, so a later plugin update is an
+ *     opt-in migration rather than a silent behaviour change
+ *
+ * Returns null when nothing was selected — the room keeps NO activities field
+ * and therefore resolves to the legacy "everything" default, which is exactly
+ * what a one-click create should do.
+ */
+function buildInstalledActivities(activities, userId) {
+  if (!Array.isArray(activities) || activities.length === 0) return null;
+
+  const seen = new Set();
+  const installed = [];
+  for (const entry of activities) {
+    const manifest = getPlugin(entry.id);
+    if (!manifest) {
+      const err = new Error(`Unknown activity "${entry.id}"`);
+      err.statusCode = 400;
+      throw err;
+    }
+    if (seen.has(manifest.id)) continue; // duplicates are a client bug, not an error
+    seen.add(manifest.id);
+    const { config } = coerceConfig(manifest.configSchema, entry.config);
+    installed.push({
+      id: manifest.id,
+      version: manifest.version,
+      config,
+      enabled: true,
+      addedBy: userId,
+      addedAt: new Date(),
+    });
+  }
+  return installed.length ? installed : null;
+}
+
 export async function createRoom(req, res, next) {
   try {
-    const { name, visibility } = req.body;
+    const { name, visibility, purpose, activities } = req.body;
+    const installed = buildInstalledActivities(activities, req.user.id);
+
+    // Only store a purpose we recognise. "custom" is the one kind that carries
+    // free text; for every other kind the text is meaningless, so it is dropped
+    // rather than persisted as confusing dead data.
+    const purposeDoc = purpose?.kind && isValidPurpose(purpose.kind)
+      ? { kind: purpose.kind, text: purpose.kind === "custom" ? (purpose.text || "").slice(0, 200) : undefined }
+      : undefined;
 
     // The 6-char code has a ~1-in-16M collision chance; the unique index
     // catches it (E11000). Retry with a fresh code instead of failing the
@@ -260,7 +317,13 @@ export async function createRoom(req, res, next) {
     let room;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        room = await Room.create({ name, visibility, owner: req.user.id });
+        room = await Room.create({
+          name,
+          visibility,
+          owner: req.user.id,
+          ...(purposeDoc ? { purpose: purposeDoc } : {}),
+          ...(installed ? { activities: { installed, active: null } } : {}),
+        });
         break;
       } catch (err) {
         if (err.code === 11000 && err.keyPattern?.nameLower) {

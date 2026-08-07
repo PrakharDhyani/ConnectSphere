@@ -2783,6 +2783,192 @@ plugins that have no model yet; whiteboard can move later, deliberately.
 
 ---
 
+## 43. Architecture: Activity Platform — Phase 3 (frontend runtime)
+
+**Goal.** Delete the three hand-maintained lists in `RoomPage.jsx` that had to
+be edited to add a game, and give plugins a mount point that contains their
+failures.
+
+### What was hardcoded, and what replaced it
+
+| Was | Now |
+|---|---|
+| `[["room","💬 Room"],["board","🖊️ Board"],["game","🎮 Game"]]` | tabs derived from the room's installed activities |
+| `ACT_LABEL` — id → "started Ludo 🎲" | `describe(id)` from manifest `name` + `icon` |
+| `ACT_VIEW` — id → which tab | `tabFor(id)` from manifest `surface` |
+| `GamesHub`'s `GAMES[]` + a `lazy()` per game | `activities/registry.jsx`, one line per plugin |
+
+Tabs are now **derived, not listed** — a room with no games shows no Game tab,
+and the Board tab is labelled from the whiteboard manifest ("🖊️ Whiteboard").
+
+### Design decisions
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Tab-switch behaviour | (a) unmount (b) keep mounted, `hidden` | **(b)** — unmounting a live Ludo game to glance at chat loses the board; GamesHub already works around this with `sessionStorage`. Comes with the `display:none` trap (below) |
+| Where the tab logic lives | (a) in the hook (b) pure module in `shared/` | **(b)** — the frontend has **no test runner**, and this decides what every user sees at the top of the room. Pure + dependency-free ⇒ the backend suite covers it. The hook is a 3-line `useMemo` |
+| Lazy loading | (a) registry holds components (b) registry holds loaders, `lazy()` derived | **(b)** — keeps a separate `LOADERS` map so a chunk can be *warmed* on hover without mounting. Vite needs literal `import()`, so it cannot be built from a loop |
+| Failure containment | error boundary per activity | a crashing plugin shows a card in its own tab; chat and the call keep running |
+
+### Challenges
+
+**1. The `display:none` trap, again.** Keeping activities mounted-but-hidden is
+right for state, but canvases and lazily-loaded images inside a hidden subtree
+do not size or load correctly — and a 3D game happily renders at full frame
+rate into a canvas nobody can see. `ActivityHost` dispatches
+`activity:hidden` / `activity:shown` DOM events so canvas panels can pause,
+without every existing panel needing a rewrite. Same class of bug as the GIF
+thumbnails.
+
+**2. `call` and `board` are not plugin ids.** `ACT_LABEL` contained both:
+`call` is **core** (mediasoup is deliberately not a plugin) and `board` is a
+legacy alias for `whiteboard`. Routing them through a manifest lookup would
+have silently degraded "started the call 📞" to "started an activity" — a
+regression that reads like a translation bug, not a refactor. Both are handled
+explicitly (`CORE_ACTIVITIES`, `ACTIVITY_ALIASES`) and covered by tests.
+
+**3. Reached into React internals for preloading.** First version of
+`preloadActivity()` poked at `lazy()`'s `_payload`/`_init`. Not public API and
+would break on a React upgrade. Replaced with a plain loader map — calling the
+same `import()` twice is free, the module registry caches it.
+
+**4. I was querying the wrong database for two phases.** Every `mongosh` check
+used `groot`; the app uses **`connectsphere`** (`MONGO_URI`). So "0 rooms, 0
+users" looked like a wiped DB and sent me chasing a non-existent bug. The real
+DB had **85 users and 47 rooms**.
+
+That turned into the best verification of the whole migration: resolving **all
+47 real rooms — 40 of them true pre-plugin legacy rows — through the compat
+layer. 47/47 resolve to 9 activities with `active: null`.** Far stronger
+evidence than the synthetic probe row from Phase 1. *An empty result is a claim
+about your query before it is a claim about the data.*
+
+**5. The browser test could not log in.** The app keeps its access token in a
+**closure, not localStorage** (deliberate: XSS can read localStorage). So a
+`fetch()` login gives the SPA nothing. The new `layout-check.mjs` drives the
+real login form via the native input setter + `input` event — which also
+exercises the path a user actually takes.
+
+### Verification
+
+- **413 tests / 20 suites green** (was 391); 22 new room-view tests.
+- **Layout invariant re-checked after every edit**, against a real room with 45
+  messages (806px of overflow): page fixed at **704 = 704**, header **0 → 0**,
+  composer **636 → 636**, Board and Game tabs never scroll the page.
+- **Screenshots read, not just assertions** — the lesson from the layout fix.
+  Room and Whiteboard tabs both render correctly, VoiceBar docked without
+  overlap.
+- Frontend production build clean.
+
+### Interview Q&A
+
+**Q: Why keep activities mounted when hidden?**
+Because unmounting destroys state. Leaving a Ludo game to check a message and
+returning to an empty board is a bug users would report as "the game reset".
+The cost is that hidden canvases keep rendering, which is why the host tells
+them they are hidden.
+
+**Q: You put UI logic in a `shared/` folder — isn't that a layering violation?**
+It would be if it were UI. It is a pure function from room data to
+`{tabs, describe, tabFor}` — no React, no DOM. Putting it there bought real
+test coverage for the code that decides what every user sees, in a project
+whose frontend has no test runner. The React binding stayed in the frontend.
+
+**Q: What would have caught the `call` regression?**
+The test that asserts every legacy activity id produces a real phrase rather
+than the "started an activity" fallback. Written because `ACT_LABEL` had ten
+entries and only eight were plugins — the mismatch is the tell.
+
+---
+
+## 44. Feature: Room Creation Wizard + Recommendation Engine (Phase 4)
+
+**Goal.** The original brief's FIRST TASK: replace "name + Create" with
+name → visibility → purpose → recommended activities → per-plugin settings.
+
+### The decision that shaped everything: the skip button
+
+Creating a room used to be one text field and a click. A five-step wizard
+everyone must walk through would be a **downgrade** for the person who already
+knows what they want — the single most likely way this feature makes the
+product worse. So **"Skip & create" is present from step 1 onward**, and
+skipping stores no activities, which resolves to the legacy "everything"
+default. The server contract stayed additive (`{name, visibility}` is still
+valid), so old clients and the fast path are the same code path.
+
+### Options considered
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Recommendations | (a) `if (purpose === "coding")` (b) weighted scoring over manifest data | **(b)** — a hardcoded map needs editing for every new plugin AND every new purpose (the N×M problem the plugin system exists to kill). Each manifest declares its own `recommendedFor`, so a plugin arrives knowing where it belongs |
+| Tiering | (a) absolute score cutoff (b) relative + floor/cap | **(b)** — an absolute cutoff empties the list for weak purposes ("music"); a pure ratio leaves a shortlist of ONE when a plugin dominates (Coding → Whiteboard). Floor 4, cap 6 |
+| Where recommendations run | (a) client (b) server | **(b)** — the co-occurrence table and future personalisation improve without shipping a bundle. Client keeps a static fallback: a recommendation is a nicety and must never block creation |
+| Config forms | one generic renderer | the payoff for the closed six-type grammar — **zero per-plugin form code**, and an unrenderable field is impossible by construction |
+| Config validation | server-side `coerceConfig` | same trust boundary as `sanitizeAttachments`: unknown keys dropped, numbers clamped, bad types defaulted |
+
+### Explainable by construction
+
+Because the score is a **sum of named signals**, the UI can say *why*:
+"Made for Study rooms", "Pairs well with Ludo", "Popular choice". That is the
+difference between a recommendation feeling deliberate and feeling random —
+and it costs nothing once scoring is data-driven rather than hardcoded.
+
+### Challenges
+
+**1. First tuning pass produced one-item shortlists.** `cutoff = top * 0.6`
+looked principled but gave Coding → *only* Whiteboard, and Study → *only*
+Whiteboard. A "shortlist" of one reads as broken, not selective. Fixed with a
+floor (4) and cap (6). Also discovered already-selected plugins were competing
+for recommendation slots — suggesting what the user just picked wastes the
+list. Both found by **printing the output for all ten purposes** rather than
+trusting the formula.
+
+**2. The production build passed with a reference to a deleted variable.**
+Removing `roomName` state from the dashboard left `setRoomName("")` in the
+mutation's `onSuccess` — a guaranteed `ReferenceError` on *every successful
+room creation*. Vite bundled it happily; only grepping for stale references
+caught it. **A green build is not a green program**: bundlers resolve modules,
+they do not check that identifiers exist.
+
+**3. Numeric select values round-trip as strings.** `<option value>` is always
+a string, so `maxElements: 50000` would have come back as `"50000"` and failed
+server coercion. The renderer maps the chosen option back to its declared type.
+
+### Verification
+
+- **443 tests / 21 suites green** (was 413); 30 new.
+- **15 live API checks**: legacy body still 201s and stores no activities;
+  wizard payload stores config + pinned version; `maxPlayers: 9999` → clamped
+  to 4; unknown key dropped; `"yes please"` → default `true`; unknown plugin id
+  → 400; `inviteOnly` hidden from discovery; all 10 purposes return
+  recommendations.
+- **15 live UI checks** driving the real browser through all five steps:
+  4 recommendations pre-selected with reasons, "More activities (5)" collapsed,
+  generic renderer produced **3 toggles + 1 dropdown from the manifest alone**,
+  room created and landed on `/room/:id` with the right tabs.
+- **Screenshots read** — the wizard renders correctly at each step.
+- Layout invariant re-checked; lint clean.
+
+### Interview Q&A
+
+**Q: Why not just hardcode which activities suit which purpose?**
+Because that table is N×M and lives in the centre of the app: every new plugin
+and every new purpose edits it. Manifest-declared affinity means a plugin
+arrives self-describing and no shared file changes. It also gives explainability
+free — a hardcoded list cannot tell you why.
+
+**Q: Isn't a 5-step wizard worse than one text field?**
+It would be if it were mandatory. "Skip & create" is available from step 1, so
+the fast path is unchanged and the wizard is opt-in depth. The steps also stay
+additive server-side, so nothing about them is load-bearing.
+
+**Q: Why validate plugin config on the server when the form already constrains it?**
+The form constrains a cooperative client. `curl` is not one. It is the same
+reasoning as `sanitizeAttachments` — anything a browser sends is untrusted, so
+config is clamped against the plugin's own schema before it reaches Mongo.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·

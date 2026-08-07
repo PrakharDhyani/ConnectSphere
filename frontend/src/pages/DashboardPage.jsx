@@ -10,6 +10,7 @@ import Input from "@/components/ui/Input.jsx";
 import Logo from "@/components/Logo.jsx";
 import Aurora from "@/components/Aurora.jsx";
 import PushToggle from "@/components/PushToggle.jsx";
+import CreateRoomWizard from "@/components/activities/CreateRoomWizard.jsx";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -20,8 +21,8 @@ export default function DashboardPage() {
   const { requests } = useFriends();
   const pendingCount = requests.data?.incoming?.length || 0;
   const [resent, setResent] = useState(false);
-  const [roomName, setRoomName] = useState("");
-  const [visibility, setVisibility] = useState("private");
+  // Room name/visibility now live inside CreateRoomWizard — the dashboard only
+  // owns the mutation and the resulting navigation.
   const [joinCode, setJoinCode] = useState("");
   const [formError, setFormError] = useState(null);
 
@@ -46,7 +47,8 @@ export default function DashboardPage() {
     onSuccess: (room) => {
       queryClient.invalidateQueries({ queryKey: ["rooms"] });
       queryClient.invalidateQueries({ queryKey: ["publicRooms"] });
-      setRoomName("");
+      // No form state to reset here any more — the wizard owns its own, and we
+      // navigate away from it immediately.
       navigate(`/room/${room.id}`);
     },
     onError: (err) => setFormError(err.response?.data?.error?.message || "Could not create room."),
@@ -142,42 +144,11 @@ export default function DashboardPage() {
 
         {/* Create / Join */}
         <div className="grid sm:grid-cols-2 gap-4">
-          <form
-            className="glass-card p-5 space-y-3 anim-fade-up"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setFormError(null);
-              if (roomName.trim().length >= 2) createRoom.mutate({ name: roomName.trim(), visibility });
-            }}
-          >
-            <h2 className="font-semibold">Create a room</h2>
-            <Input label="Room name" value={roomName} placeholder="Daily standup"
-              onChange={(e) => setRoomName(e.target.value)} />
-            <div>
-              <span className="block text-sm text-gray-400 mb-1.5">Who can find it?</span>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { id: "private", label: "🔒 Private", hint: "invite code only" },
-                  { id: "public", label: "🌐 Public", hint: "anyone can discover" },
-                ].map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    onClick={() => setVisibility(v.id)}
-                    className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
-                      visibility === v.id
-                        ? "border-brand-500 bg-brand-600/20"
-                        : "border-gray-700 bg-gray-800 hover:border-brand-600"
-                    }`}
-                  >
-                    <span className="block font-medium">{v.label}</span>
-                    <span className="block text-[11px] text-gray-500">{v.hint}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <Button type="submit" loading={createRoom.isPending} className="w-full">Create</Button>
-          </form>
+          <CreateRoomWizard
+            creating={createRoom.isPending}
+            error={formError}
+            onCreate={(payload) => { setFormError(null); createRoom.mutate(payload); }}
+          />
 
           <form
             className="glass-card p-5 space-y-3 anim-fade-up d1"

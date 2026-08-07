@@ -25,23 +25,15 @@ import VoiceBar from "@/components/VoiceBar.jsx";
 import InviteFriends from "@/components/InviteFriends.jsx";
 import Button from "@/components/ui/Button.jsx";
 import Logo from "@/components/Logo.jsx";
+import { useRoomActivities } from "@/activities/useRoomActivities.js";
 
-const ACT_LABEL = {
-  call: "started the call 📞",
-  board: "opened the whiteboard 🖊️",
-  skribbl: "started Draw & Guess 🎨",
-  ludo: "started Ludo 🎲",
-  kart: "started Smash Karts 🏎️",
-  chess: "started Chess ♟️",
-  uno: "started UNO 🃏",
-  typing: "started a Typing race ⌨️",
-  bingo: "started Bingo 🎱",
-  poll: "started a poll 📊",
-};
-const ACT_VIEW = {
-  call: "room", board: "board", skribbl: "game", ludo: "game", kart: "game",
-  chess: "game", uno: "game", typing: "game", bingo: "game", poll: "room",
-};
+/**
+ * Activity labels, icons and destination tabs used to live here as two
+ * hand-maintained maps (ACT_LABEL / ACT_VIEW). Adding a game meant editing
+ * this page — a file that has nothing to do with that game. They now come from
+ * the plugin manifests via useRoomActivities(), so a new plugin appears in the
+ * toast text and the tab bar by existing.
+ */
 
 // Excalidraw is heavy (~1.8 MB) — load it only when the whiteboard is opened.
 const WhiteboardPanel = lazy(() => import("@/components/WhiteboardPanel.jsx"));
@@ -231,6 +223,14 @@ export default function RoomPage() {
     queryFn: async () => (await api.get(`/rooms/${roomId}`)).data.data.room,
     retry: false,
   });
+
+  /**
+   * Tabs and activity descriptions, derived from the room's installed plugins
+   * rather than hardcoded here. Called unconditionally (before any early
+   * return) because it is a hook — and it tolerates `undefined` while the room
+   * loads, resolving to the legacy default set.
+   */
+  const { tabs, describe, tabFor } = useRoomActivities(room);
 
   const {
     messages, presence, typingName, error: chatError, recorders, pinned,
@@ -528,12 +528,12 @@ export default function RoomPage() {
           <button
             key={t.id}
             onClick={() => {
-              setView(ACT_VIEW[t.activity] || "room");
+              setView(tabFor(t.activity));
               setToasts((x) => x.filter((y) => y.id !== t.id));
             }}
             className="block w-full text-left bg-gray-900 border border-brand-800 rounded-xl px-4 py-2 text-sm shadow-lg hover:border-brand-500 transition-colors"
           >
-            <span><b className="text-brand-300">{t.name}</b> {ACT_LABEL[t.activity] || "started an activity"}</span>
+            <span><b className="text-brand-300">{t.name}</b> {describe(t.activity)}</span>
             <span className="block text-xs text-gray-500">Tap to join →</span>
           </button>
         ))}
@@ -541,9 +541,13 @@ export default function RoomPage() {
 
       <header className="shrink-0 flex items-center justify-between px-4 sm:px-6 py-3 border-b border-gray-800 gap-2">
         <Link to={me?.isGuest ? "/" : "/dashboard"} className="shrink-0"><Logo withText={false} /></Link>
-        {/* Segmented pill tabs — the active tab slides its gradient in place. */}
+        {/* Segmented pill tabs — the active tab slides its gradient in place.
+            Generated from the room's installed activities: the Board tab is
+            named by the whiteboard plugin's manifest, and the Game tab only
+            appears if the room actually has games. Adding a plugin no longer
+            means editing this list. */}
         <div className="flex items-center gap-1 p-1 rounded-full bg-gray-900/70 backdrop-blur border border-white/10">
-          {[["room", "💬 Room"], ["board", "🖊️ Board"], ["game", "🎮 Game"]].map(([id, label]) => (
+          {tabs.map(({ id, label, icon }) => (
             <button
               key={id}
               onClick={() => setView(id)}
@@ -553,7 +557,7 @@ export default function RoomPage() {
                   : "text-gray-400 hover:text-white hover:bg-white/5"
               }`}
             >
-              {label}
+              {icon} {label}
             </button>
           ))}
         </div>
