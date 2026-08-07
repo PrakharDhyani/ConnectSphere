@@ -3151,6 +3151,38 @@ have found it: the 18 new tests drive real sockets but never mount React, and
 the frontend has no test runner. It is a reminder that the socket-level suite
 proves the *protocol*, not the *binding*, and the binding is new code too.
 
+### The bug only a real pointer could find: the note was undraggable
+
+`startDrag` began with what looks like an obviously correct guard:
+
+```js
+if (e.target.closest("button, textarea")) return;  // let controls work
+```
+
+But the textarea fills almost the entire note (`flex-1` inside a 176×176 card),
+so this left roughly a 20-pixel frame of grabbable surface. **The note was, in
+practice, undraggable** — on a plugin whose entire premise is dragging notes
+around.
+
+Every backend test passed, because they call `move` directly over the socket and
+never touch a pointer. The 12-check live script passed for the same reason. It
+took a CDP-driven Chrome dispatching real `Input.dispatchMouseEvent` presses at
+the note's centre to show it: **moved 0px**.
+
+Fixed the way real sticky-note apps behave — drag from anywhere, and let the
+textarea claim the gesture only once it is already focused:
+
+```js
+if (e.target.closest("button")) return;                                   // × stays clickable
+if (e.target.tagName === "TEXTAREA" && document.activeElement === e.target) return;  // already typing
+e.preventDefault();                                                        // don't steal focus
+```
+
+With `preventDefault()` the textarea no longer focuses natively, so focus is
+restored on pointer-up *only when the pointer never moved* (4px of slack — a
+click is never perfectly still). A tap edits; a drag moves. That distinction is
+the whole interaction, and no assertion in the repo expressed it before.
+
 ### Guarantee #1 is now checked mechanically, not asserted in a comment
 
 ```js
@@ -3195,6 +3227,21 @@ Nothing below required a line of code beyond the manifest:
 - Live checks also confirmed a forged `authorId` is ignored, an off-board
   position is clamped to `{x:1,y:0}`, and a non-author is refused on both edit
   and delete.
+- **Real-browser pass over CDP** (Chrome 150, two isolated browser contexts, no
+  new dependencies — same approach as the earlier `tabs-test.mjs`). This is what
+  caught the undraggable-note bug above, which every other layer of testing
+  passed. It also confirmed, by screenshot rather than assertion:
+  tabs render as `💬 Room · 🖊️ Whiteboard · 📝 Sticky Notes` (manifest-driven);
+  the panel mounts through `ActivityHost` with all six colour swatches; the note
+  renders at a real 176×176 with its author name; **Whiteboard and Sticky Notes
+  coexist** (the defect that blocked Phase 6); the sticky board survives a tab
+  switch; the layout invariant holds (`scrollH 788 == clientH 788`); zero console
+  errors.
+- Test-isolation notes for the next person: Chrome must get a **fresh
+  `--user-data-dir` per run**, or the refresh cookie silently restores the
+  previous run's user and the room shows "Not a member". And the auth limiter is
+  20 requests / 15 min — a verification script that registers users burns
+  through it fast.
 - Server-authority tests prove a forged `authorId` is ignored, an off-board
   position is clamped, 5000-char text is truncated to 280, and a colour outside
   the palette falls back rather than reaching another user's CSS.
@@ -3237,6 +3284,16 @@ Because the browser is not a trusted writer. If a client could write room state
 directly, note authorship and the board cap would be advisory. State reaches the
 client through the `join` ack, which is already access-controlled, and changes
 go back as events the server validates and applies itself.
+
+**Q: The note was undraggable and nothing caught it. Why not?**
+Because every layer of testing bypassed the thing that was broken. The socket
+tests call `move` directly — they prove the server applies and broadcasts a
+position, which it did, perfectly. The live script does the same over a real
+connection. Neither dispatches a pointer, and the bug was entirely in *deciding
+when a pointer press becomes a drag*. The lesson is not "the tests were bad" but
+that a guard like `closest("button, textarea")` reads as obviously correct and is
+only wrong in combination with the layout — a textarea that happens to fill the
+card. That combination does not exist in any test; it exists on screen.
 
 **Q: 481 tests were green and you still shipped a bug. What does that say about the tests?**
 That they test the layer they test. The suite drives real socket.io clients, so

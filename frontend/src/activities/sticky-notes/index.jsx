@@ -108,21 +108,49 @@ export default function StickyNotesPanel({ roomId }) {
    * Pointer-based dragging.
    *
    * Pointer events rather than mouse events so it works with touch and stylus
-   * from one code path, and setPointerCapture so a fast drag that leaves the
-   * note (or the board) keeps tracking instead of dropping the note mid-air.
+   * from one code path.
+   *
+   * THE TEXTAREA COVERS ALMOST THE WHOLE NOTE, so "ignore drags that start on a
+   * textarea" left the note effectively undraggable — there was a ~20px strip of
+   * grabbable surface at the edges. A real pointer drag found this instantly;
+   * the socket tests never could, because they call `move` directly.
+   *
+   * So: drag from ANYWHERE, and let the textarea take over only once the note
+   * is actually being edited (it is `readOnly` until then for non-authors, and
+   * focus is what distinguishes "I want to type here" from "I grabbed the note"
+   * for the author). Buttons still opt out — the delete × must stay clickable.
    */
   const startDrag = (note) => (e) => {
-    if (e.target.closest("button, textarea")) return; // let controls work
+    if (e.target.closest("button")) return;
+    // Already typing in this note: let the caret and text selection work.
+    if (e.target.tagName === "TEXTAREA" && document.activeElement === e.target) return;
+    // Otherwise a press anywhere starts a drag. preventDefault stops the
+    // textarea from stealing focus and turning the gesture into a selection.
+    e.preventDefault();
     const board = boardRef.current;
     if (!board) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
+
+    // Captured NOW, not read inside onUp: React nulls `currentTarget` once the
+    // handler returns, so the deferred pointerup would call
+    // releasePointerCapture on null and throw mid-gesture.
+    const card = e.currentTarget;
+    card.setPointerCapture(e.pointerId);
 
     const rect = board.getBoundingClientRect();
     const grabX = e.clientX - (rect.left + note.pos.x * (rect.width - NOTE_W));
     const grabY = e.clientY - (rect.top + note.pos.y * (rect.height - NOTE_H));
 
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const textarea = card.querySelector("textarea");
     let latest = note.pos;
+    let dragged = false;
+
     const onMove = (ev) => {
+      // A few pixels of slack: a "click" is never perfectly still, and treating
+      // 1px of jitter as a drag would make the note impossible to type in.
+      if (!dragged && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+      dragged = true;
       const x = (ev.clientX - grabX - rect.left) / Math.max(1, rect.width - NOTE_W);
       const y = (ev.clientY - grabY - rect.top) / Math.max(1, rect.height - NOTE_H);
       latest = { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
@@ -131,11 +159,19 @@ export default function StickyNotesPanel({ roomId }) {
       setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, pos: latest } : n)));
     };
     const onUp = (ev) => {
-      e.currentTarget?.releasePointerCapture?.(ev.pointerId);
+      try { card.releasePointerCapture?.(ev.pointerId); } catch { /* already released */ }
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      // One write at the end of the gesture, not 60 per second.
-      sdk.socket.emit("move", { id: note.id, pos: latest });
+      if (dragged) {
+        // One write at the end of the gesture, not 60 per second.
+        sdk.socket.emit("move", { id: note.id, pos: latest });
+      } else if (mine.has(note.id)) {
+        // A tap that never moved is an intent to type, not to drag. Focusing
+        // here rather than letting the textarea do it natively is the cost of
+        // preventDefault above — but it is what makes "drag from anywhere"
+        // possible without losing the ability to edit.
+        textarea?.focus();
+      }
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
