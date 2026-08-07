@@ -23,6 +23,8 @@ import {
   unbanMember,
   setSlowMode,
   setRoomRules,
+  setRoomActivities,
+  setActiveActivity,
   reportMember,
 } from "../controllers/room.controller.js";
 import {
@@ -80,9 +82,15 @@ router.post("/:id/ban", requireFullUser, banMember);
 router.post("/:id/unban", requireFullUser, unbanMember);
 router.post("/:id/slowmode", requireFullUser, setSlowMode);
 router.put("/:id/rules", requireFullUser, setRoomRules);
+// Which activities a room has is an owner decision (checked in the controller).
+router.put("/:id/activities", requireFullUser, setRoomActivities);
 
 // Allowed for scoped guests too (access is gated per-room inside the handlers).
 router.get("/:id", getRoom);
+// Switching the open activity is ordinary participation, not administration —
+// a scoped guest who joined by link may start a game like anyone else. Access
+// is re-checked per-room inside the handler.
+router.put("/:id/activities/active", setActiveActivity);
 router.get("/:id/messages", getRoomMessages);
 router.post("/:id/attachments", chatUploadFiles, uploadRoomAttachments);
 router.post("/:id/messages/:messageId/view", viewOnceAttachment);

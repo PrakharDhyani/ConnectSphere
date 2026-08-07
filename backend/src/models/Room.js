@@ -152,6 +152,19 @@ const roomSchema = new Schema(
       // Never trusted directly on read — resolveActiveActivity() falls back if
       // it names something since uninstalled, disabled or missing from a build.
       active: { type: String, default: null },
+
+      /**
+       * Has anyone ever chosen this room's activities?
+       *
+       * Disambiguates an EMPTY installed list, which otherwise means two
+       * opposite things: "never configured" (so fall back to everything) and
+       * "the owner removed them all" (so honour that). Without this flag,
+       * removing every activity silently restored all nine.
+       *
+       * Set on the first edit; absent on every pre-plugin room, which is
+       * exactly the legacy signal we want.
+       */
+      configured: { type: Boolean, default: false },
     },
 
     /**
