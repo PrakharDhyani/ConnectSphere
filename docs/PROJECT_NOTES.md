@@ -2969,6 +2969,94 @@ config is clamped against the plugin's own schema before it reaches Mongo.
 
 ---
 
+## 45. Feature: Activity Management — add/remove plugins in a live room (Phase 5)
+
+**Goal.** The thing the plugin system was for: an owner can add, remove and
+reconfigure a room's activities *after* it exists, and everyone's tabs follow
+immediately.
+
+### Design decisions
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| API shape | (a) add/remove/patch endpoints (b) replace the whole set | **(b) `PUT /:id/activities`** — the client already holds the full list, and one write means two owners toggling at once cannot interleave into a half-applied state. Also makes "Cancel" correct for free: nothing is sent until Save |
+| Who may add/remove | owner only | it changes the room for everyone |
+| Who may *switch* the open activity | **any member** | starting a game is participation, not administration. Gating it on ownership makes the room worse for no security gain — anyone who can join can already play |
+| Legacy rooms | materialize on first edit | the implicit "everything" becomes explicit exactly when the owner expresses an opinion. Still no bulk migration, ever |
+| Omitted `config` on update | means "leave it alone" | the alternative — reset to defaults — would silently wipe every other activity's setup whenever one was toggled |
+
+### The bug that mattered: an empty list meant two opposite things
+
+`installed: []` is ambiguous. Mongoose materialises a missing array as empty,
+so it means "never configured" — but it is *also* what you get when the owner
+removes everything. The resolver treated both as legacy, so **removing every
+activity handed all nine straight back**: precisely the opposite of the
+request.
+
+Fixed with `activities.configured`, set on the first edit. After that an empty
+list is a deliberate chat-only room and is honoured; before it, absence still
+means "everything". Three tests pin the distinction, including the raw
+resolver case:
+
+```js
+resolveInstalled({ activities: { installed: [] } })                    // → 9
+resolveInstalled({ activities: { installed: [], configured: true } })  // → 0
+```
+
+**Found by a live API test, not by unit tests** — the unit tests all asserted
+the *populated* cases, which is exactly where an ambiguity like this hides.
+
+### Two more real bugs
+
+**`addedAt` was rewritten on every save.** I read install provenance from
+`resolveInstalled()`, which normalises entries down to
+`{id, config, enabled, version}` and *drops* `addedBy`/`addedAt`. So
+`prior?.addedAt || new Date()` always took the second branch, rewriting history
+for activities that had not changed. Now read from the raw subdocuments. Caught
+by a test asserting the timestamp is stable across an unrelated edit — worth
+writing precisely because nothing user-facing would have shown it.
+
+**Removing the tab you are looking at left a blank pane.** The tab bar is
+derived from installed activities, so when the owner removes the Game tab a
+member sitting on it renders nothing. `RoomPage` now falls back to the Room tab
+whenever `view` stops existing — the room tab is core and can never be removed,
+so it is always a safe destination.
+
+### Verification
+
+- **463 tests / 22 suites green** (was 443); 20 new.
+- **18 live API checks**: materialization, config preservation, clamping on
+  update, non-owner 403, member-can-switch-active, active pointer cleared on
+  removal, empty list respected, malformed body rejected.
+- **Two-browser live test** — the claim that actually matters. Owner unticks
+  seven games and saves; the *other member's* Game tab disappears **without a
+  refresh** (socket `room:activities-changed`), and re-enabling Ludo brings it
+  back. A single-tab test could not have shown this.
+- Screenshot read: the manager panel groups by category, scrolls internally,
+  and pins Save/Cancel.
+- Layout invariant re-checked: 704 = 704, header 0 → 0, composer 636 → 636.
+
+### Interview Q&A
+
+**Q: Why replace the whole activity set instead of PATCHing one at a time?**
+Concurrency and cancellability. The client already has the full list, so a
+single write removes any interleaving between two owners editing at once, and
+"Cancel" needs no compensating request because nothing was sent.
+
+**Q: Why can any member switch the active activity but only the owner install one?**
+They are different kinds of action. Installing changes what the room *is* and
+affects everyone persistently; switching is ordinary use, and anyone who can
+join can already start a game. Gating participation behind ownership adds
+friction without adding safety.
+
+**Q: How did the empty-list bug survive the unit tests?**
+Because every unit test asserted a populated list. The ambiguity only existed
+in the empty case, and "empty" was the one state that meant two different
+things depending on history the resolver could not see. The fix was to make
+that history explicit rather than to guess better.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·

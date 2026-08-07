@@ -4,8 +4,8 @@ import { Message } from "../models/Message.js";
 import { Report } from "../models/Report.js";
 import { io } from "../sockets/index.js";
 import { roomKey } from "../sockets/chat.handlers.js";
-import { isScopedGuest } from "../utils/roomAccess.js";
-import { getPlugin, coerceConfig, isValidPurpose, resolveActivities } from "../../../shared/activities/index.js";
+import { isScopedGuest, canAccessRoom } from "../utils/roomAccess.js";
+import { getPlugin, coerceConfig, isValidPurpose, resolveInstalled } from "../../../shared/activities/index.js";
 
 // Lightweight shape for lists/create/join — one place decides what a room looks
 // like to clients.
@@ -55,8 +55,16 @@ function toRoomDetail(room, userId) {
     // Activities drive the room's tabs. Sent as the raw stored shape (not
     // resolved) so the client applies the SAME legacy fallback the server
     // would — one rule, in shared/, rather than two that can drift.
-    activities: room.activities?.installed?.length
-      ? { installed: room.activities.installed, active: room.activities.active ?? null }
+    //
+    // Sent whenever the room has been CONFIGURED, even if the list is empty:
+    // omitting it there would make a deliberately chat-only room look legacy
+    // to the client and hand every activity back.
+    activities: room.activities?.configured || room.activities?.installed?.length
+      ? {
+          installed: room.activities.installed || [],
+          active: room.activities.active ?? null,
+          configured: Boolean(room.activities.configured),
+        }
       : undefined,
     purpose: room.purpose?.kind ? { kind: room.purpose.kind, text: room.purpose.text } : undefined,
     // The ban list is owner-only information (needed for the unban UI).
@@ -160,6 +168,159 @@ export async function setRoomRules(req, res, next) {
       updatedAt: room.rules.updatedAt,
     });
     res.json({ success: true, data: { rules: items, updatedAt: room.rules.updatedAt } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ── Activity management ──────────────────────────────────────────────────────
+
+/**
+ * PUT /:id/activities — install, remove and reconfigure a room's activities.
+ *
+ * Owner-only. The whole set is replaced in one call rather than exposing
+ * add/remove/patch endpoints: the client already holds the full list, and a
+ * single write means two people toggling activities at once cannot interleave
+ * into a half-applied state.
+ *
+ * MATERIALIZATION: a room created before plugins existed has no `activities`
+ * field and resolves to "everything" at read time. The first edit turns that
+ * implicit set into an explicit one — which is exactly the moment the user has
+ * expressed an opinion about it. Nothing is migrated in bulk, ever.
+ */
+export async function setRoomActivities(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id);
+    if (room.owner.toString() !== req.user.id) throw forbidden("Only the room owner can do that");
+
+    const requested = Array.isArray(req.body.activities) ? req.body.activities : null;
+    if (!requested) {
+      const err = new Error("activities must be an array");
+      err.statusCode = 400;
+      throw err;
+    }
+    if (requested.length > 32) {
+      const err = new Error("Too many activities");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    // What the room has today — legacy rooms resolve to the full default set,
+    // so config a user set earlier is preserved across an edit.
+    const existing = new Map(resolveInstalled(room).map((a) => [a.id, a]));
+    /**
+     * Install PROVENANCE (who added it, when) has to come from the raw stored
+     * subdocuments, not from resolveInstalled() — that normalises entries down
+     * to {id, config, enabled, version} and drops addedBy/addedAt. Reading it
+     * from there silently reset "added" to now on every save, rewriting
+     * history for activities that had not changed.
+     */
+    const priorMeta = new Map((room.activities?.installed || []).map((a) => [a.id, a]));
+
+    const seen = new Set();
+    const installed = [];
+    for (const entry of requested) {
+      const manifest = getPlugin(entry?.id);
+      if (!manifest) {
+        const err = new Error(`Unknown activity "${entry?.id}"`);
+        err.statusCode = 400;
+        throw err;
+      }
+      if (seen.has(manifest.id)) continue;
+      seen.add(manifest.id);
+
+      const prior = existing.get(manifest.id);
+      const meta = priorMeta.get(manifest.id);
+      // Layer: plugin defaults → whatever the room already had → this request.
+      // Omitting `config` therefore means "leave it alone", not "reset it".
+      const merged = { ...(prior?.config || {}), ...(entry.config || {}) };
+      const { config } = coerceConfig(manifest.configSchema, merged);
+
+      installed.push({
+        id: manifest.id,
+        // Keep the pinned version: a plugin update is an opt-in migration, not
+        // something that happens because the owner toggled an unrelated tab.
+        version: meta?.version || manifest.version,
+        config,
+        enabled: entry.enabled !== false,
+        addedBy: meta?.addedBy || req.user.id,
+        addedAt: meta?.addedAt || new Date(),
+      });
+    }
+
+    room.activities = room.activities || {};
+    room.activities.installed = installed;
+    // Marks the room as explicitly configured, so an EMPTY list from here on
+    // means "chat only" rather than being mistaken for a legacy room and
+    // resolving back to everything.
+    room.activities.configured = true;
+
+    // A pointer at something just removed would strand the room on a tab that
+    // no longer exists. Clearing it falls back to chat, which always exists.
+    const stillThere = installed.some((a) => a.id === room.activities.active && a.enabled);
+    if (!stillThere) room.activities.active = null;
+
+    await room.save();
+
+    const payload = {
+      roomId: room._id.toString(),
+      activities: {
+        installed: room.activities.installed,
+        active: room.activities.active ?? null,
+        configured: true,
+      },
+    };
+    // Everyone in the room needs new tabs immediately — a member staring at a
+    // Game tab the owner just removed would get an empty screen on click.
+    io?.to(roomKey(room._id)).emit("room:activities-changed", payload);
+
+    res.json({ success: true, data: payload });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PUT /:id/activities/active — switch the room's foreground activity.
+ *
+ * NOT owner-only: starting a game is ordinary participation, and gating it
+ * behind ownership would make the room worse for no security gain (anyone who
+ * can join can already play). Per-activity "who may start this" is a later,
+ * finer-grained control.
+ */
+export async function setActiveActivity(req, res, next) {
+  try {
+    const room = await loadRoom(req.params.id);
+    if (!(await canAccessRoom(req.user, req.params.id))) throw forbidden("Not a member of this room");
+
+    const { activityId } = req.body;
+    if (activityId !== null && typeof activityId !== "string") {
+      const err = new Error("activityId must be a string or null");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    // null = back to the room's own chat surface, which is always available.
+    if (activityId !== null) {
+      const entry = resolveInstalled(room).find((a) => a.id === activityId);
+      if (!entry || !entry.enabled) {
+        const err = new Error("That activity is not available in this room");
+        err.statusCode = 400;
+        throw err;
+      }
+    }
+
+    room.activities = room.activities || {};
+    room.activities.active = activityId;
+    await room.save();
+
+    io?.to(roomKey(room._id)).emit("room:active-activity", {
+      roomId: room._id.toString(),
+      active: activityId,
+      by: { id: req.user.id, name: req.user.name },
+    });
+
+    res.json({ success: true, data: { active: activityId } });
   } catch (error) {
     next(error);
   }
@@ -322,7 +483,10 @@ export async function createRoom(req, res, next) {
           visibility,
           owner: req.user.id,
           ...(purposeDoc ? { purpose: purposeDoc } : {}),
-          ...(installed ? { activities: { installed, active: null } } : {}),
+          // `configured: true` because the creator explicitly chose these —
+          // see the Room model. Omitted entirely when nothing was selected, so
+          // a one-click create still resolves to the legacy "everything".
+          ...(installed ? { activities: { installed, active: null, configured: true } } : {}),
         });
         break;
       } catch (err) {

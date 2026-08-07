@@ -37,6 +37,26 @@ export const LEGACY_ACTIVITY_IDS = Object.freeze([
  */
 export function resolveInstalled(room) {
   const installed = room?.activities?.installed;
+
+  /**
+   * `installed: []` is AMBIGUOUS on its own — it means both "never configured"
+   * (Mongoose materialises a missing array as empty) and "the owner removed
+   * everything". Treating both as legacy meant removing every activity handed
+   * all nine back, which is the opposite of what the owner asked for.
+   *
+   * `configured` disambiguates: it is set the first time someone edits the
+   * room's activities, so an empty list after that is a deliberate choice —
+   * a chat-only room — and is respected.
+   */
+  if (room?.activities?.configured) {
+    return (Array.isArray(installed) ? installed : []).map((entry) => ({
+      id: entry.id,
+      config: entry.config || {},
+      enabled: entry.enabled !== false,
+      version: entry.version,
+    }));
+  }
+
   if (Array.isArray(installed) && installed.length > 0) {
     return installed.map((entry) => ({
       id: entry.id,

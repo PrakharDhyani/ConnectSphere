@@ -26,6 +26,7 @@ import InviteFriends from "@/components/InviteFriends.jsx";
 import Button from "@/components/ui/Button.jsx";
 import Logo from "@/components/Logo.jsx";
 import { useRoomActivities } from "@/activities/useRoomActivities.js";
+import ActivityManager from "@/components/activities/ActivityManager.jsx";
 
 /**
  * Activity labels, icons and destination tabs used to live here as two
@@ -212,6 +213,7 @@ export default function RoomPage() {
     try { sessionStorage.setItem(viewKey, v); } catch { /* private mode */ }
   };
   const [toasts, setToasts] = useState([]);
+  const [managingActivities, setManagingActivities] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [actionError, setActionError] = useState(null);
@@ -231,6 +233,18 @@ export default function RoomPage() {
    * loads, resolving to the legacy default set.
    */
   const { tabs, describe, tabFor } = useRoomActivities(room);
+
+  /**
+   * If the tab you are looking at stops existing — the owner just removed that
+   * activity — fall back to the Room tab instead of leaving you staring at a
+   * blank pane. The room tab is core and can never be removed, so it is always
+   * a safe destination.
+   */
+  useEffect(() => {
+    if (!tabs.length) return;
+    if (!tabs.some((t) => t.id === view)) setView("room");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs, view]);
 
   const {
     messages, presence, typingName, error: chatError, recorders, pinned,
@@ -279,12 +293,16 @@ export default function RoomPage() {
     socket.on("room:updated", refresh);
     socket.on("room:members-changed", refresh);
     socket.on("room:rules-changed", refresh);
+    // The owner changed which activities exist — everyone's tab bar must
+    // follow, or a member clicks a Game tab that is no longer there.
+    socket.on("room:activities-changed", refresh);
     socket.on("room:closed", onClosed);
     socket.on("room:kicked", onKicked);
     return () => {
       socket.off("room:updated", refresh);
       socket.off("room:members-changed", refresh);
       socket.off("room:rules-changed", refresh);
+      socket.off("room:activities-changed", refresh);
       socket.off("room:closed", onClosed);
       socket.off("room:kicked", onKicked);
     };
@@ -1097,6 +1115,23 @@ export default function RoomPage() {
             roomId={roomId}
             onChanged={() => queryClient.invalidateQueries({ queryKey: ["room", roomId] })}
           />
+
+          {/* Activities (owner only) — which plugins this room has. */}
+          {room.isOwner && (
+            <div className="border-t border-gray-800 pt-3">
+              {managingActivities ? (
+                <ActivityManager room={room} onClose={() => setManagingActivities(false)} />
+              ) : (
+                <button
+                  onClick={() => setManagingActivities(true)}
+                  className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-gray-500 hover:text-brand-400"
+                >
+                  <span>🧩 Activities</span>
+                  <span className="normal-case text-[11px]">manage</span>
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Slow mode (owner sets it; everyone sees when it's on) */}
           <div className="border-t border-gray-800 pt-3">
