@@ -3237,11 +3237,19 @@ Nothing below required a line of code beyond the manifest:
   coexist** (the defect that blocked Phase 6); the sticky board survives a tab
   switch; the layout invariant holds (`scrollH 788 == clientH 788`); zero console
   errors.
-- Test-isolation notes for the next person: Chrome must get a **fresh
-  `--user-data-dir` per run**, or the refresh cookie silently restores the
-  previous run's user and the room shows "Not a member". And the auth limiter is
-  20 requests / 15 min — a verification script that registers users burns
-  through it fast.
+- Test-isolation notes for the next person driving Chrome over CDP:
+  - **Fresh `--user-data-dir` per run.** Otherwise the httpOnly refresh cookie
+    restores the *previous* run's user, and the room renders "Not a member" —
+    which looks exactly like an access-control bug and is not one.
+  - **Log in by driving the real form.** The access token is deliberately
+    memory-only (zustand, never localStorage), so there is no store to prime
+    from outside the app.
+  - **Reuse the seeded demo accounts** (`demo01.3vqqo@example.com` …, password
+    `Password123`) rather than registering. The auth limiter is 20 req/15 min and
+    register+login per run exhausts it in a few iterations.
+  - The room URL is `/room/:roomId` (**singular**), not `/rooms/`.
+  - `ws` is already a transitive dependency, so a ~90-line CDP client needs no
+    new packages — no Puppeteer/Playwright install required.
 - Server-authority tests prove a forged `authorId` is ignored, an off-board
   position is clamped, 5000-char text is truncated to 280, and a colour outside
   the palette falls back rather than reaching another user's CSS.
@@ -3417,4 +3425,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-07 (Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. 481 tests / 23 suites green, plus 12 live checks against the running server.)*
+*Last updated: 2026-08-07 (Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
