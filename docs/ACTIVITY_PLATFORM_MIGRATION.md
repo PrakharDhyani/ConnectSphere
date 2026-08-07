@@ -429,9 +429,30 @@ Server-side validation of client config against `configSchema` (same trust bound
 ### Phase 5 — Activity management in an existing room
 Add/remove/reconfigure; per-activity permission (who may start it).
 
-### Phase 6 — First new plugin: Sticky Notes
+### Phase 6 — First new plugin: Sticky Notes ✅ DONE
 The real test of guarantee #1: **if this touches any file outside `activities/sticky-notes/`, the
 architecture failed** and gets fixed before anything else is built on it.
+
+**Outcome: it failed, and the architecture was fixed first.** Three platform defects surfaced —
+each invisible while whiteboard was the only non-game plugin, each a hard blocker for the second:
+
+1. **`surface: "tab"` aliased onto `"board"`**, and `buildRoomView` took `bySurface("board")[0]` —
+   so the second board-ish plugin was silently dropped. `tab` is now its own surface; each such
+   plugin gets `tab:<id>`, a slot it cannot share.
+2. **The tab bar was manifest-driven but the tab body was not** — Phase 3 deleted the hardcoded tab
+   array and left `<WhiteboardPanel/>` hardcoded underneath. Tabs now carry the `activityId` they
+   render and the shell mounts `<ActivityHost>`; RoomPage.jsx names no plugin at all.
+3. **There was no client SDK.** The server had spoken `activity:join`/`activity:event` since Phase 2
+   but nothing in the frontend ever spoke it — every panel still imported `socket.js` directly, so
+   the whiteboard migration was server-side only. Built as platform:
+   `frontend/src/activities/sdk.js` + `useActivitySdk.js`.
+
+Also: `ACTIVITY_PLUGINS=none` meant "run the legacy handler instead", which for a plugin with *no*
+legacy handler means silently dead. Native plugins (`NATIVE_PLUGIN_IDS`) are now always served.
+
+Final footprint: 3 new files + 3 registration lines, zero edits to the dispatcher, wizard or
+recommendation engine. Guarantee #1 is now enforced by a test that greps the shell files for the
+plugin id, so it cannot quietly regress. See PROJECT_NOTES §46.
 
 ### Phase 7 — Marketplace seams (architecture only)
 Version resolution, dependency graph, plugin state store interface (in-memory now, Redis later),

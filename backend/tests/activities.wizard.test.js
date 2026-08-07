@@ -12,6 +12,7 @@ import { startHarness } from "./helpers/harness.js";
 
 import { scoreActivities, recommendForRoom, WEIGHTS } from "../../shared/activities/recommend.js";
 import { SCORABLE_PURPOSE_IDS, PURPOSES } from "../../shared/activities/purposes.js";
+import { getAllPlugins } from "../../shared/activities/index.js";
 
 const h = startHarness();
 
@@ -113,7 +114,10 @@ describe("GET /api/activities", () => {
     const t = await auth();
     const res = await authed(t)(request(h.app).get("/api/activities"));
     expect(res.status).toBe(200);
-    expect(res.body.data.activities).toHaveLength(9);
+    // Derived, not a literal: a hardcoded count makes adding a plugin edit a
+    // test that has nothing to do with it, and fails as "expected 9, got 10",
+    // which says nothing about what actually broke.
+    expect(res.body.data.activities).toHaveLength(getAllPlugins().length);
     expect(res.body.data.purposes).toHaveLength(PURPOSES.length);
   });
 

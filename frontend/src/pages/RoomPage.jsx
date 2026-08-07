@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api.js";
@@ -26,6 +26,7 @@ import InviteFriends from "@/components/InviteFriends.jsx";
 import Button from "@/components/ui/Button.jsx";
 import Logo from "@/components/Logo.jsx";
 import { useRoomActivities } from "@/activities/useRoomActivities.js";
+import ActivityHost from "@/activities/ActivityHost.jsx";
 import ActivityManager from "@/components/activities/ActivityManager.jsx";
 
 /**
@@ -34,10 +35,14 @@ import ActivityManager from "@/components/activities/ActivityManager.jsx";
  * this page — a file that has nothing to do with that game. They now come from
  * the plugin manifests via useRoomActivities(), so a new plugin appears in the
  * toast text and the tab bar by existing.
+ *
+ * The tab BODY is now generated too. Until Phase 6 this page imported
+ * WhiteboardPanel and rendered it literally under `view === "board"`, so the
+ * tab bar was manifest-driven while the content underneath was not — a second
+ * board-ish plugin got a tab that rendered the whiteboard. Each non-game tab
+ * now mounts <ActivityHost activityId={tab.activityId}>, which resolves the
+ * component from the registry, so this page names no plugin at all.
  */
-
-// Excalidraw is heavy (~1.8 MB) — load it only when the whiteboard is opened.
-const WhiteboardPanel = lazy(() => import("@/components/WhiteboardPanel.jsx"));
 
 // Full literal class strings per size — Tailwind only generates classes it can
 // see as complete tokens, so `w-${n}` would silently produce no CSS.
@@ -207,9 +212,20 @@ export default function RoomPage() {
   const viewKey = `groot:view:${roomId}`;
   const [view, setViewRaw] = useState(() => {
     try { return sessionStorage.getItem(viewKey) || "room"; } catch { return "room"; }
-  }); // "room" | "board" | "game"
+  }); // "room" | "board" | "game" | "tab:<pluginId>" — see room-view.js
+  /**
+   * Which activity tabs have ever been opened this session.
+   *
+   * ActivityHost keeps a tab MOUNTED once opened so switching away does not
+   * destroy a live game — but mounting all of them upfront would download every
+   * plugin's chunk (Excalidraw alone is ~1.8 MB) just to open a room. Tracking
+   * what has actually been visited gives both: nothing loads until you ask for
+   * it, and nothing is thrown away once you have.
+   */
+  const [openedTabs, setOpenedTabs] = useState(() => new Set([view]));
   const setView = (v) => {
     setViewRaw(v);
+    setOpenedTabs((prev) => (prev.has(v) ? prev : new Set(prev).add(v)));
     try { sessionStorage.setItem(viewKey, v); } catch { /* private mode */ }
   };
   const [toasts, setToasts] = useState([]);
@@ -584,21 +600,31 @@ export default function RoomPage() {
         </Link>
       </header>
 
-      {/* The board and game tabs get their own scroll: the shell no longer
-          grows, so anything taller than the viewport must scroll internally. */}
-      {view === "board" && (
-        <div className="flex-1 min-h-0 overflow-y-auto w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
-          <Suspense
-            fallback={
-              <div className="flex items-center justify-center h-[75vh]">
-                <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-              </div>
+      {/* One body per activity-backed tab, resolved from the manifest rather
+          than named here — this page no longer imports a single plugin.
+          ActivityHost keeps a tab mounted-but-hidden once opened, so switching
+          away from a live board or game does not throw its state away.
+          Each body scrolls internally: the shell no longer grows, so anything
+          taller than the viewport must handle its own overflow. */}
+      {tabs
+        .filter((t) => t.activityId)
+        .map((t) => (
+          <div
+            key={t.id}
+            className={
+              view === t.id
+                ? "flex-1 min-h-0 overflow-y-auto w-full max-w-7xl mx-auto px-2 sm:px-4 py-4"
+                : "hidden"
             }
           >
-            <WhiteboardPanel roomId={roomId} />
-          </Suspense>
-        </div>
-      )}
+            <ActivityHost
+              activityId={t.activityId}
+              roomId={roomId}
+              active={view === t.id}
+              mounted={openedTabs.has(t.id)}
+            />
+          </div>
+        ))}
 
       {view === "game" && (
         <div className="flex-1 min-h-0 overflow-y-auto w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">

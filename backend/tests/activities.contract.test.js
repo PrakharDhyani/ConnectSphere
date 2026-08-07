@@ -285,8 +285,13 @@ describe("built-in manifests", () => {
     for (const m of BUILT_IN) registerPlugin(m);
   });
 
-  it("registers all nine existing activities", () => {
-    expect(getAllPlugins()).toHaveLength(9);
+  it("registers every built-in activity", () => {
+    // Derived from BUILT_IN rather than a literal: a hardcoded count has to be
+    // edited by anyone adding a plugin, which is the exact coupling the plugin
+    // system exists to remove — and it fails as "expected 9, got 10", which
+    // says nothing about what is wrong.
+    expect(getAllPlugins()).toHaveLength(BUILT_IN.length);
+    expect(getAllPlugins().map((p) => p.id).sort()).toEqual(BUILT_IN.map((m) => m.id).sort());
   });
 
   it("every built-in passes validation", () => {

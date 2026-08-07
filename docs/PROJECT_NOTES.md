@@ -3057,6 +3057,200 @@ that history explicit rather than to guess better.
 
 ---
 
+## 46. Feature: Sticky Notes — the first new plugin (Phase 6)
+
+**Goal.** Build one genuinely new activity end to end and find out whether the
+plugin API actually holds. The migration plan states the pass condition in
+advance: *if it touches any file outside its own three folders plus two
+registration lines each, the architecture failed and gets fixed first.*
+
+Sticky Notes was chosen because it is small enough that a wrong API shows up in
+a day: a shared board of draggable coloured notes, exercising `sdk.socket`,
+`sdk.storage`, `sdk.presence` and the config grammar.
+
+### The verdict: the architecture failed the test, and was fixed first
+
+Writing the plugin took a fraction of the session. Two platform defects blocked
+it, and **both were fixed as platform work rather than worked around inside the
+plugin** — a workaround would have let the API's first real test pass while
+leaving the defect for plugin #2.
+
+**Defect 1 — the room shell could only ever render one non-game plugin.**
+`buildRoomView` did `bySurface("board")[0]`: it took the *first* board plugin
+and silently dropped the rest. `surface: "tab"` aliased onto `"board"` too, so
+Sticky Notes would have collided with Whiteboard and never rendered — no error,
+no log, just a tab showing the wrong plugin. Invisible while whiteboard was the
+only board-ish plugin; a hard blocker the moment a second one existed.
+Now `tab` is its own surface and each such plugin gets `tab:<id>`, a slot it
+cannot share.
+
+**Defect 2 — the tab bar was manifest-driven but the tab BODY was not.**
+Phase 3 deleted the hardcoded tab *array* and left `<WhiteboardPanel roomId/>`
+hardcoded as the board body. So the bar said "Sticky Notes" and the pane
+underneath rendered the whiteboard. Each tab now carries the `activityId` it
+renders and the shell mounts `<ActivityHost>`, so **RoomPage.jsx names no plugin
+at all** — the `lazy`/`Suspense` imports became dead and were removed.
+
+**Defect 3 — there was no client SDK.** The server had spoken
+`activity:join`/`activity:event` since Phase 2, but *nothing in the frontend
+ever spoke it*: every panel still imported `socket.js` and emitted bespoke event
+names. The whiteboard "migration" was server-side only. Sticky Notes would have
+had to invent a client for the protocol inside its own folder, where no other
+plugin could reuse it. Built once as platform: `activities/sdk.js` +
+`useActivitySdk.js`.
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Where positions live | (a) pixels (b) fractions 0–1 | **(b)** two people on a phone and a 4K monitor must see the same layout; pixels put a note off-screen for the smaller board. Clamping also stops a hostile client parking a note at x=10⁹ where nobody can reach it to delete it |
+| Optimistic updates | (a) everywhere (b) dragging only | **(b)** a note lagging the cursor feels broken, so dragging is local-first; everything else waits for the broadcast so there is one source of truth. Optimistic *creation* would render a note the server may refuse (board full) and yank it back |
+| Who may edit vs delete | edit = author only; delete = configurable | rewriting someone's words under their name is a different act from removing a note. Delete is the destructive one, so it is the one exposed to config (`author`/`anyone`/`owner`) |
+| Move echo | broadcast vs toOthers | **toOthers** — echoing the position back at the dragger fights their own cursor mid-gesture |
+| Plugin state | (a) module-level Map (b) `sdk.storage` | **(b)** whiteboard keeps a `scenes` Map only because it predates the storage SDK and its migration was behaviour-preserving. A new plugin has no excuse: storage already does the memory layer, debounced write-behind and release-on-empty |
+
+### The migration flag meant the opposite thing for a native plugin
+
+`ACTIVITY_PLUGINS` defaults to `none` and that was right for Phase 2: "off"
+means *the legacy handler runs instead*. Sticky Notes has no legacy handler, so
+"off" would have meant the activity was **silently dead** — a tab that renders
+and never syncs, with nothing in the logs. Worse than not shipping it.
+
+Fixed by separating the two cases: `NATIVE_PLUGIN_IDS` are always served,
+because there is nothing else that could serve them. The flag still governs
+everything being migrated *from* something, which is the only case it was built
+for.
+
+### The compat resolver did its job, and the first test draft failed because of it
+
+The suite's first run refused every join. Cause: `createRoom` sent only a name,
+so the room stored no `activities` field, resolved as **legacy**, and
+`LEGACY_ACTIVITY_IDS` deliberately excludes Sticky Notes.
+
+That is the resolver working exactly as designed — a 2026 plugin must not
+appear retroactively in 2025's rooms — and the fix was for the *test* to install
+the plugin the way a real user does, not to add the id to the legacy list. A
+test asserts that `compat.js` never mentions `sticky-notes`, so nobody "fixes"
+it that way later.
+
+### The bug no test could have caught: the SDK was a ref
+
+`useActivitySdk` first held the built SDK in a `useRef`. The SDK is created
+*inside* an effect, so it does not exist on the first render — and consumers
+subscribe to broadcasts in their own `useEffect(..., [sdk])`.
+
+A ref assignment does not re-render. So that effect would run exactly once with
+`sdk === null`, and **never again**: the board would load its initial state
+through the join ack and then sit there deaf to every subsequent update, with
+nothing in the console to say why. The failure looks like "realtime is broken
+sometimes", which is the worst kind of bug report.
+
+Fixed by making the SDK `useState`, so building it re-renders and dependent
+effects actually re-run.
+
+**Found by re-reading the diff, not by a test** — and no test in this repo could
+have found it: the 18 new tests drive real sockets but never mount React, and
+the frontend has no test runner. It is a reminder that the socket-level suite
+proves the *protocol*, not the *binding*, and the binding is new code too.
+
+### Guarantee #1 is now checked mechanically, not asserted in a comment
+
+```js
+const mustNotMention = ["backend/src/sockets/index.js", "frontend/src/pages/RoomPage.jsx",
+  "frontend/src/components/GamesHub.jsx", "shared/activities/room-view.js",
+  "shared/activities/compat.js", "shared/activities/recommend.js", ...];
+for (const p of mustNotMention) expect(read(p)).not.toContain("sticky-notes");
+```
+
+If a future change makes the shell, the dispatcher or the wizard name this
+plugin, the test fails — and it should, because that is the coupling the whole
+system exists to prevent. The fix is to make the platform generic again, not to
+add a file to the allowlist.
+
+**Final footprint:** 3 new files (manifest, server, panel) + 3 registration
+lines. Zero edits to the dispatcher, the wizard or the recommendation engine.
+
+### What came for free — the actual payoff
+
+Nothing below required a line of code beyond the manifest:
+
+- The **recommendation engine** ranks it #1 for "team" and #2 for brainstorm and
+  meeting rooms, with the generated reason *"Made for brainstorm rooms"* —
+  purely from `recommendedFor` weights.
+- The **creation wizard** renders its three settings via the generic
+  `ConfigSchemaForm`.
+- The **activity manager** can install and remove it in a live room.
+- The room announces **"started Sticky Notes 📝"** from the manifest name + icon.
+- It got its own **8 KB lazy chunk**; no bundle regression.
+- Hostile config is clamped by the existing trust boundary: `maxNotes: 99999 →
+  500`, `allowDelete: "everyone" → "author"`.
+
+### Verification
+
+- **481 tests / 23 suites green** (was 463 / 22); 18 new, driven through real
+  socket.io clients rather than by calling the module in-process.
+- **12 live checks against the running dev server and the real `connectsphere`
+  database** — not the in-memory harness. The one that matters: both users
+  disconnect, `destroy()` fires, storage flushes to Mongo, and a fresh
+  connection gets the notes back *with the moved position intact*. That is the
+  debounced write-behind and the teardown path proven outside the test doubles.
+- Live checks also confirmed a forged `authorId` is ignored, an off-board
+  position is clamped to `{x:1,y:0}`, and a non-author is refused on both edit
+  and delete.
+- Server-authority tests prove a forged `authorId` is ignored, an off-board
+  position is clamped, 5000-char text is truncated to 280, and a colour outside
+  the palette falls back rather than reaching another user's CSS.
+- `toOthers` vs `broadcast` is pinned by a test that asserts the dragger does
+  **not** receive its own move echo — a silent-timeout case that would otherwise
+  only show as a jittery drag in a real browser.
+- Build check: Sticky Notes lands in its own chunk, not the main bundle.
+
+### Interview Q&A
+
+**Q: You set a pass condition and it failed. Why is that a good outcome?**
+Because it failed *cheaply and on purpose*. The whole point of building a small
+plugin first was to find the wrong assumptions while they cost a day instead of
+a fortnight. Three defects surfaced — a single-slot surface, a half-generic tab
+body, a protocol with no client — and every one of them would have been far more
+expensive to discover on the code editor or the AI tutor. A test that can only
+pass tells you nothing.
+
+**Q: Why not just special-case Sticky Notes in RoomPage and move on?**
+Because the plugin would then be evidence of nothing. The architecture's claim
+is "adding a plugin edits no existing file"; a plugin that ships by editing
+existing files does not test the claim, it hides that the claim is false. And
+the cost is not saved, only deferred and multiplied — plugin #3 pays it again.
+
+**Q: Why are positions fractions rather than pixels?**
+Because the board is a different size for every viewer. Pixel coordinates
+encode one person's viewport into shared state, so a note placed on a 4K monitor
+lands off-screen on a phone. Fractions make position a property of the *board*
+rather than of whoever happened to place the note — and clamping to 0–1 doubles
+as a safety bound, since an unreachable note is also an undeletable one.
+
+**Q: Why is deletion configurable but editing always author-only?**
+They are different acts. Deleting removes something from a shared wall, which is
+a moderation question with legitimately different answers per room. Editing
+rewrites someone's words *while keeping their name on them* — there is no room
+where that is the desired default, so it is not offered as an option.
+
+**Q: Why does the client SDK have no `storage.set`?**
+Because the browser is not a trusted writer. If a client could write room state
+directly, note authorship and the board cap would be advisory. State reaches the
+client through the `join` ack, which is already access-controlled, and changes
+go back as events the server validates and applies itself.
+
+**Q: 481 tests were green and you still shipped a bug. What does that say about the tests?**
+That they test the layer they test. The suite drives real socket.io clients, so
+it proves the wire protocol, the authorization gates and the persistence path —
+and it proved all of those correctly. The SDK-as-a-ref bug lived in the React
+binding, which no backend test mounts and which the frontend has no runner for.
+The honest conclusion is not "write more tests" but "know which claims your
+tests are making": a green socket suite is evidence about the protocol and
+silent about everything above it. That is also why the live two-user script
+against the running server exists — it is the cheapest thing that exercises the
+layers the suite cannot see.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -3115,6 +3309,30 @@ games hub, both server-authoritative + responsive, live-verified.
 toasts when someone starts a call/board/game), and **mic on every tab**
 (audio-only "Join voice" + a persistent VoiceBar). Verified: ready-up gate.
 
+**Done — Activity Platform, Phases 1–6 (§41–46):** the app is now an activity
+platform rather than a feature-based app. Manifest contract + registry +
+closed config grammar (§41) · backend plugin host, one dispatcher replacing 12
+hardcoded registrations, capability SDK (§42) · frontend runtime, manifest-driven
+tabs (§43) · room creation wizard + data-driven recommendation engine (§44) ·
+live activity management (§45) · **Sticky Notes, the first genuinely new plugin,
+which failed the guarantee-#1 test and got the architecture fixed first** (§46).
+**481 tests / 23 suites green.**
+
+**Next — Activity Platform, Phase 7 + the remaining migrations:**
+- Migrate the rest onto the host, in this order: `poll` → the four framework
+  games (chess/uno/typing/bingo — near-mechanical) → `skribbl` → `ludo` →
+  **`kart` last** (478 bespoke lines running its own `setInterval` physics loop;
+  its `destroy()` clearing that interval is the reference lifecycle test).
+- Migrate the existing panels onto the **client SDK** built in §46 — today only
+  Sticky Notes uses it; every other panel still imports `socket.js` directly, so
+  the whiteboard "migration" remains server-side only.
+- Phase 7 marketplace seams: version resolution, dependency graph, plugin state
+  behind an interface (an in-process `Map` today — pre-existing, does not survive
+  a restart or scale horizontally), manifest signature hook, remote manifests.
+- `inviteOnly` is stored and fails closed everywhere visibility is read, but
+  `joinRoom()` does not consult it — it currently behaves as private. Do not
+  advertise it as "invite required" until the invite mechanism exists.
+
 **Next:**
 0. **Direct messages (1:1)** — the prerequisite for disappearing-message
    timers (24h/7d/30d/90d), which belong in a two-person conversation both
@@ -3142,4 +3360,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-06 (message actions — edit/copy/pin/forward/delete — house rules with explainable moderation, live "N in call" banner, and Teams-style ring-to-invite that reaches muted members — 282 tests green. Disappearing-message timers still deferred to DMs.)*
+*Last updated: 2026-08-07 (Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. 481 tests / 23 suites green, plus 12 live checks against the running server.)*

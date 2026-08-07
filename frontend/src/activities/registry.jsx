@@ -42,6 +42,9 @@ const LOADERS = {
   typing: () => import("@/components/TypingPanel.jsx"),
   bingo: () => import("@/components/BingoPanel.jsx"),
   poll: () => import("@/components/PollPanel.jsx"),
+  // The first plugin that lives entirely under activities/ and talks only
+  // through the SDK, rather than reusing a pre-plugin panel from components/.
+  "sticky-notes": () => import("./sticky-notes/index.jsx"),
 };
 
 export const CLIENT_MODULES = Object.fromEntries(

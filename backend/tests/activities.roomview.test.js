@@ -137,8 +137,11 @@ describe("tabFor() — where an announcement takes you", () => {
   });
 
   it("maps every surface to a real tab", () => {
+    // "tab" is the per-plugin surface: the destination is tab:<id>, computed
+    // per plugin rather than fixed, so it is the one value that is a prefix
+    // rather than a literal tab id.
     for (const tab of Object.values(SURFACE_TAB)) {
-      expect(["room", "board", "game"]).toContain(tab);
+      expect(["room", "board", "game", "tab"]).toContain(tab);
     }
   });
 });

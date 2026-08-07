@@ -23,30 +23,51 @@ import { registerActivityModule } from "./host.js";
 import { logger } from "../utils/logger.js";
 
 import whiteboardServer from "./whiteboard/server.js";
+import stickyNotesServer from "./sticky-notes/server.js";
 
 // pluginId -> server module. Only these can be enabled by the flag.
 const SERVER_MODULES = {
   whiteboard: whiteboardServer,
+  "sticky-notes": stickyNotesServer,
 };
+
+/**
+ * Plugins that exist ONLY as plugins — no sockets/*.handlers.js to fall back to.
+ *
+ * The flag is a MIGRATION rollback: turning a plugin off means "run the old
+ * handler instead". A plugin born after the plugin system has no old handler,
+ * so "off" would not mean legacy behaviour, it would mean the activity is
+ * silently dead — a tab that renders and never syncs, with nothing in the logs.
+ *
+ * These are therefore always served. The flag still governs everything being
+ * migrated FROM something, which is the only case it was built for.
+ */
+const NATIVE_PLUGIN_IDS = Object.freeze(["sticky-notes"]);
 
 /** Which plugins the new host should serve, parsed from the env flag. */
 export function enabledPluginIds(raw = process.env.ACTIVITY_PLUGINS) {
   const value = String(raw ?? "none").trim().toLowerCase();
-  if (value === "none" || value === "") return [];
-  if (value === "all") return Object.keys(SERVER_MODULES);
-  return value
-    .split(",")
-    .map((s) => s.trim())
-    .filter((id) => {
-      if (!id) return false;
-      if (!SERVER_MODULES[id]) {
-        // Loud, because a typo here silently means "the old handler is still
-        // running" — which looks exactly like success.
-        logger.warn(`ACTIVITY_PLUGINS names "${id}", which has no server module — ignoring`);
-        return false;
-      }
-      return true;
-    });
+  // Native plugins are not opt-in: there is nothing else that could serve them.
+  const native = NATIVE_PLUGIN_IDS.filter((id) => SERVER_MODULES[id]);
+  const withNative = (ids) => [...new Set([...native, ...ids])];
+
+  if (value === "none" || value === "") return withNative([]);
+  if (value === "all") return withNative(Object.keys(SERVER_MODULES));
+  return withNative(
+    value
+      .split(",")
+      .map((s) => s.trim())
+      .filter((id) => {
+        if (!id) return false;
+        if (!SERVER_MODULES[id]) {
+          // Loud, because a typo here silently means "the old handler is still
+          // running" — which looks exactly like success.
+          logger.warn(`ACTIVITY_PLUGINS names "${id}", which has no server module — ignoring`);
+          return false;
+        }
+        return true;
+      })
+  );
 }
 
 let registered = null;

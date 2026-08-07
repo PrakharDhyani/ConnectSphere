@@ -29,8 +29,9 @@ import typing from "./typing/manifest.js";
 import bingo from "./bingo/manifest.js";
 import kart from "./kart/manifest.js";
 import poll from "./poll/manifest.js";
+import stickyNotes from "./sticky-notes/manifest.js";
 
-const BUILT_IN = [whiteboard, skribbl, ludo, chess, uno, typing, bingo, kart, poll];
+const BUILT_IN = [whiteboard, skribbl, ludo, chess, uno, typing, bingo, kart, poll, stickyNotes];
 
 let registered = false;
 

@@ -88,9 +88,17 @@ const send = (s, activityId, roomId, event, payload) =>
   ack(s, "activity:event", { activityId, roomId, event, payload });
 
 describe("migration flag", () => {
-  it("defaults to none, so Phase 2 ships dark", () => {
-    expect(enabledPluginIds("none")).toEqual([]);
-    expect(enabledPluginIds("")).toEqual([]);
+  /**
+   * The flag governs MIGRATED plugins — ones with a legacy handler to fall back
+   * to. Native plugins (born after the plugin system) have no fallback, so
+   * "off" would mean dead rather than legacy, and they are always served.
+   */
+  const NATIVE = ["sticky-notes"];
+  const migrated = (ids) => ids.filter((id) => !NATIVE.includes(id));
+
+  it("defaults to none for migrated plugins, so Phase 2 ships dark", () => {
+    expect(migrated(enabledPluginIds("none"))).toEqual([]);
+    expect(migrated(enabledPluginIds(""))).toEqual([]);
     // `undefined` falls through to process.env.ACTIVITY_PLUGINS, which THIS
     // FILE sets to "whiteboard" at import time — so assert the unset default
     // by clearing the env rather than passing undefined and reading the
@@ -98,17 +106,26 @@ describe("migration flag", () => {
     const saved = process.env.ACTIVITY_PLUGINS;
     delete process.env.ACTIVITY_PLUGINS;
     try {
-      expect(enabledPluginIds()).toEqual([]);
+      expect(migrated(enabledPluginIds())).toEqual([]);
     } finally {
       process.env.ACTIVITY_PLUGINS = saved;
     }
   });
 
+  it("serves a native plugin regardless of the flag", () => {
+    // Sticky Notes has no sockets/*.handlers.js. If the flag could switch it
+    // off, the tab would render and silently never sync — a failure with
+    // nothing in the logs, which is worse than not shipping it.
+    for (const raw of ["none", "", "whiteboard", "all"]) {
+      expect(enabledPluginIds(raw)).toContain("sticky-notes");
+    }
+  });
+
   it("parses a list, 'all', and ignores unknown ids", () => {
-    expect(enabledPluginIds("whiteboard")).toEqual(["whiteboard"]);
-    expect(enabledPluginIds("all")).toEqual(Object.keys(SERVER_MODULES));
+    expect(migrated(enabledPluginIds("whiteboard"))).toEqual(["whiteboard"]);
+    expect(enabledPluginIds("all").sort()).toEqual(Object.keys(SERVER_MODULES).sort());
     // A typo must not silently mean "old handler still running" without a warning.
-    expect(enabledPluginIds("whiteboard, nonsense")).toEqual(["whiteboard"]);
+    expect(migrated(enabledPluginIds("whiteboard, nonsense"))).toEqual(["whiteboard"]);
   });
 
   it("turns the legacy handler off exactly when the plugin is served", () => {
