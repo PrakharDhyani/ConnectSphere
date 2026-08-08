@@ -37,6 +37,54 @@ describe("recommendation engine", () => {
     expect(worstGame).toBeLessThan(wbIndex);
   });
 
+  describe("multiple purposes", () => {
+    it("scores by BEST fit, not the average", () => {
+      // The rule that matters. A room for "Fun + Study" wants the best game AND
+      // the best study tool — averaging would demote both specialists in favour
+      // of something mediocre at each, which is the opposite of what picking
+      // two purposes asks for.
+      const both = scoreActivities({ purpose: ["fun", "study"] });
+      const fun = scoreActivities({ purpose: "fun" });
+      const study = scoreActivities({ purpose: "study" });
+
+      for (const a of both) {
+        const f = fun.find((x) => x.id === a.id).signals.purpose;
+        const s = study.find((x) => x.id === a.id).signals.purpose;
+        expect(a.signals.purpose).toBeCloseTo(Math.max(f, s), 5);
+      }
+    });
+
+    it("keeps a specialist for one purpose ahead of a generalist for neither", () => {
+      const both = scoreActivities({ purpose: ["fun", "study"] });
+      const rank = (id) => both.findIndex((a) => a.id === id);
+      // kart is ~1.0 for fun and ~0 for study; it must still out-rank anything
+      // that is merely lukewarm about both.
+      expect(rank("kart")).toBeLessThan(both.length - 1);
+      expect(both.find((a) => a.id === "kart").signals.purpose).toBeGreaterThan(0.8);
+    });
+
+    it("names the purpose a plugin actually matched in its reason", () => {
+      // With fun listed first, a study-oriented plugin must not read
+      // "Made for fun rooms" just because fun came first in the array.
+      const both = scoreActivities({ purpose: ["fun", "study"] });
+      const wb = both.find((a) => a.id === "whiteboard");
+      expect(wb.reasons.join(" ")).toMatch(/study/i);
+    });
+
+    it("treats a single purpose exactly as before", () => {
+      // Multi-select was added later; every existing caller passes one id.
+      const asString = scoreActivities({ purpose: "study" });
+      const asArray = scoreActivities({ purpose: ["study"] });
+      expect(asArray.map((a) => a.id)).toEqual(asString.map((a) => a.id));
+    });
+
+    it("ignores 'custom' among real purposes rather than zeroing the signal", () => {
+      const withCustom = scoreActivities({ purpose: ["study", "custom"] });
+      const plain = scoreActivities({ purpose: ["study"] });
+      expect(withCustom.map((a) => a.id)).toEqual(plain.map((a) => a.id));
+    });
+  });
+
   it("gives every purpose a non-empty recommended list", () => {
     // A purpose card that recommends nothing is a dead end in the wizard.
     // Relative tiering + a floor guarantees this even for "music", which has
@@ -263,7 +311,9 @@ describe("POST /api/rooms — wizard payload", () => {
       const custom = await authed(t)(request(h.app).post("/api/rooms"))
         .send({ name: uniq("C"), purpose: { kind: "custom", text: "D&D night" } });
       const a = (await authed(t)(request(h.app).get(`/api/rooms/${custom.body.data.room.id}`))).body.data.room;
-      expect(a.purpose).toEqual({ kind: "custom", text: "D&D night" });
+      // `kinds` always comes back, defaulting to [kind], so a client never has
+      // to know whether the room predates multi-select.
+      expect(a.purpose).toEqual({ kind: "custom", kinds: ["custom"], text: "D&D night" });
 
       // For a known purpose the text is meaningless — dropped, not stored as
       // confusing dead data.
@@ -272,6 +322,32 @@ describe("POST /api/rooms — wizard payload", () => {
       const b = (await authed(t)(request(h.app).get(`/api/rooms/${study.body.data.room.id}`))).body.data.room;
       expect(b.purpose.kind).toBe("study");
       expect(b.purpose.text).toBeUndefined();
+    });
+
+    it("stores several purposes and keeps kind as the first", async () => {
+      const t = await auth();
+      const res = await authed(t)(request(h.app).post("/api/rooms"))
+        .send({ name: uniq("M"), purpose: { kind: "fun", kinds: ["fun", "study", "team"] } });
+      const room = (await authed(t)(request(h.app).get(`/api/rooms/${res.body.data.room.id}`))).body.data.room;
+      expect(room.purpose.kinds).toEqual(["fun", "study", "team"]);
+      // Single-value readers keep working unchanged.
+      expect(room.purpose.kind).toBe("fun");
+    });
+
+    it("drops unrecognised purposes from the list rather than rejecting it", async () => {
+      const t = await auth();
+      const res = await authed(t)(request(h.app).post("/api/rooms"))
+        .send({ name: uniq("M2"), purpose: { kinds: ["study", "from-the-future", "fun"] } });
+      const room = (await authed(t)(request(h.app).get(`/api/rooms/${res.body.data.room.id}`))).body.data.room;
+      expect(room.purpose.kinds).toEqual(["study", "fun"]);
+    });
+
+    it("de-duplicates a repeated purpose", async () => {
+      const t = await auth();
+      const res = await authed(t)(request(h.app).post("/api/rooms"))
+        .send({ name: uniq("M3"), purpose: { kinds: ["fun", "fun", "study"] } });
+      const room = (await authed(t)(request(h.app).get(`/api/rooms/${res.body.data.room.id}`))).body.data.room;
+      expect(room.purpose.kinds).toEqual(["fun", "study"]);
     });
 
     it("ignores an unrecognised purpose instead of rejecting the room", async () => {

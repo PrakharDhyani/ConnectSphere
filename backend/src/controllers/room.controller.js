@@ -5,7 +5,7 @@ import { Report } from "../models/Report.js";
 import { io } from "../sockets/index.js";
 import { roomKey } from "../sockets/chat.handlers.js";
 import { isScopedGuest, canAccessRoom } from "../utils/roomAccess.js";
-import { getPlugin, coerceConfig, isValidPurpose, resolveInstalled } from "../../../shared/activities/index.js";
+import { getPlugin, coerceConfig, isValidPurpose, PURPOSE_IDS, resolveInstalled } from "../../../shared/activities/index.js";
 
 // Lightweight shape for lists/create/join — one place decides what a room looks
 // like to clients.
@@ -66,7 +66,15 @@ function toRoomDetail(room, userId) {
           configured: Boolean(room.activities.configured),
         }
       : undefined,
-    purpose: room.purpose?.kind ? { kind: room.purpose.kind, text: room.purpose.text } : undefined,
+    purpose: room.purpose?.kind
+      ? {
+          kind: room.purpose.kind,
+          // Falls back to [kind] so a client can always read `kinds` without
+          // caring whether the room predates multi-select.
+          kinds: room.purpose.kinds?.length ? room.purpose.kinds : [room.purpose.kind],
+          text: room.purpose.text,
+        }
+      : undefined,
     // The ban list is owner-only information (needed for the unban UI).
     banned: isOwner
       ? (room.banned || []).map((b) => ({ id: b.user, name: b.name, reason: b.reason, at: b.at }))
@@ -464,11 +472,25 @@ export async function createRoom(req, res, next) {
     const { name, visibility, purpose, activities } = req.body;
     const installed = buildInstalledActivities(activities, req.user.id);
 
-    // Only store a purpose we recognise. "custom" is the one kind that carries
-    // free text; for every other kind the text is meaningless, so it is dropped
-    // rather than persisted as confusing dead data.
-    const purposeDoc = purpose?.kind && isValidPurpose(purpose.kind)
-      ? { kind: purpose.kind, text: purpose.kind === "custom" ? (purpose.text || "").slice(0, 200) : undefined }
+    /**
+     * Only store purposes we recognise. "custom" is the one kind that carries
+     * free text; for every other kind the text is meaningless, so it is dropped
+     * rather than persisted as confusing dead data.
+     *
+     * `kinds` is the full multi-select; `kind` remains the first of them so
+     * every room stored before multi-select — and every reader that only knows
+     * about `kind` — keeps working unchanged.
+     */
+    const validKinds = Array.isArray(purpose?.kinds)
+      ? [...new Set(purpose.kinds.filter(isValidPurpose))].slice(0, PURPOSE_IDS.length)
+      : (purpose?.kind && isValidPurpose(purpose.kind) ? [purpose.kind] : []);
+
+    const purposeDoc = validKinds.length
+      ? {
+          kind: validKinds[0],
+          kinds: validKinds,
+          text: validKinds.includes("custom") ? (purpose.text || "").slice(0, 200) : undefined,
+        }
       : undefined;
 
     // The 6-char code has a ~1-in-16M collision chance; the unique index

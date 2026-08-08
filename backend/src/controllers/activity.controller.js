@@ -58,14 +58,21 @@ export async function recommendActivities(req, res, next) {
   try {
     const { purpose, selected, visibility, interests } = req.body || {};
 
-    // An unrecognised purpose is not an error: the engine treats it as "no
-    // purpose signal" and falls back to popularity, which is the honest
-    // answer. Rejecting it would break the wizard for a stale client.
-    const kind = isValidPurpose(purpose) ? purpose : null;
+    /**
+     * Accepts one purpose or several. An unrecognised purpose is not an error:
+     * the engine treats it as "no purpose signal" and falls back to popularity,
+     * which is the honest answer. Rejecting it would break the wizard for a
+     * stale client — and this endpoint has to keep serving clients that still
+     * send a bare string.
+     */
+    const kinds = (Array.isArray(purpose) ? purpose : [purpose]).filter(isValidPurpose);
+    // The label only seeds the fallback wording; the engine picks the
+    // best-matching purpose per plugin for the reason it actually prints.
+    const scorable = kinds.find((k) => k !== "custom") || null;
 
     const result = recommendForRoom({
-      purpose: kind,
-      purposeLabel: getPurpose(kind)?.label || "this",
+      purpose: kinds,
+      purposeLabel: getPurpose(scorable)?.label || "this",
       // Cheap guards: these come straight from a browser.
       selected: Array.isArray(selected) ? selected.filter((s) => typeof s === "string").slice(0, 32) : [],
       visibility: ["public", "private", "inviteOnly"].includes(visibility) ? visibility : "private",

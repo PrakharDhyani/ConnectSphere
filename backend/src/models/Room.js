@@ -178,7 +178,13 @@ const roomSchema = new Schema(
      * document should never become unreadable because a purpose was renamed.
      */
     purpose: {
+      // The primary purpose. Kept as a single field even after multi-select so
+      // every room stored before it — and every reader that only knows `kind` —
+      // keeps working. It is always `kinds[0]`.
       kind: { type: String, default: null },
+      // The full multi-select ("Fun + Study"). Absent on older rooms, which is
+      // why `kind` remains the canonical single value rather than a derived one.
+      kinds: { type: [String], default: undefined },
       text: { type: String, maxlength: 200, trim: true },
     },
   },

@@ -28,10 +28,24 @@ import uno from "./uno/manifest.js";
 import typing from "./typing/manifest.js";
 import bingo from "./bingo/manifest.js";
 import kart from "./kart/manifest.js";
-import poll from "./poll/manifest.js";
 import stickyNotes from "./sticky-notes/manifest.js";
 
-const BUILT_IN = [whiteboard, skribbl, ludo, chess, uno, typing, bingo, kart, poll, stickyNotes];
+/**
+ * POLLS ARE NOT HERE, DELIBERATELY.
+ *
+ * Polls were briefly migrated onto the plugin host and then taken back out. The
+ * migration worked — but "runs on the plugin architecture" and "the user may
+ * uninstall it" are separate properties, and conflating them made polls an
+ * OPTIONAL feature in the creation wizard. A room where you cannot ask a quick
+ * question is a downgrade, not a configuration.
+ *
+ * So polls went back to being core, alongside chat, voice and presence:
+ * backend/src/sockets/poll.handlers.js, always registered. The rule this
+ * settles for future activities — "if uninstalling it makes the room worse for
+ * everyone rather than merely different, it is infrastructure" — is the same
+ * test that keeps chat and video out of the plugin set.
+ */
+const BUILT_IN = [whiteboard, skribbl, ludo, chess, uno, typing, bingo, kart, stickyNotes];
 
 let registered = false;
 

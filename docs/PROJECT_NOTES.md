@@ -3439,6 +3439,136 @@ number is usually a sign the design underneath got more honest.
 
 ---
 
+## 48. Correction: polls are core again, and the last hardcoded list dies
+
+Five fixes from one round of real use. Three were bugs; two were the plugin
+system not being finished where it mattered most to a user.
+
+### Polls came back OUT of the plugin system
+
+§47 migrated polls onto the host. It worked — and it was the wrong call.
+
+The mistake was conflating two properties: **"runs on the plugin
+architecture"** and **"the user may uninstall it"**. Migrating polls gave them
+both, so polls appeared in the creation wizard as an *optional* feature you
+could decline. A room where you cannot ask a quick question is a downgrade, not
+a configuration.
+
+So polls went back to `sockets/poll.handlers.js`, always registered, alongside
+chat and voice. The rule this settles, now written at the registry itself:
+
+> If uninstalling it makes the room **worse for everyone** rather than merely
+> **different**, it is infrastructure.
+
+Same test that keeps chat and video out of the plugin set. Reverted the poll
+plugin, its client hook and its 19 tests; **kept `sdk.socket.detached()`**,
+which is genuine platform work every remaining timer-based plugin needs.
+
+**Can polls be a plugin?** Technically yes — the migration passed 19 tests and
+10 live checks. That is exactly why it is worth being explicit that "we can" is
+not "we should".
+
+### The games bug: `GamesHub` held its own hardcoded list
+
+Reported as *"I selected a few games but all the games are coming in the room"*.
+Not a server bug — the room stored the right two. `GamesHub.jsx` had a literal
+`GAMES[]` array of all seven plus seven `game === "x" && <Panel/>` branches, and
+never looked at what the room installed.
+
+This was **the fourth coupling point the migration plan named in §1.3** and the
+last one standing. Phase 3 made the tab *bar* manifest-driven and stopped there;
+the arcade behind it kept its own list. Now it renders from
+`useRoomActivities().gameActivities` and mounts each panel through
+`ActivityHost` — a game appears by being installed and nowhere else.
+
+Two things fell out of it:
+
+- **A stale `sessionStorage` game had to be handled.** Play Ludo, have the owner
+  uninstall it, refresh — you would land in a game the room no longer has, whose
+  socket events the server now refuses. Falls back to the picker.
+- **`ActivityHost` now forwards extra props.** Kart's Exit button is an `onExit`
+  callback; swallowing it would have left the button rendered and dead. The host
+  stays generic — it forwards what the caller supplies without knowing what any
+  of it means.
+
+### The toggle overflowed its track
+
+`w-5` knob in a `w-11` track with `translate-x-5` from `left: 0` put the knob's
+right edge at 40px in a 44px track when off, and over the border when on.
+Anchored with `left-0.5` and translated 20px: 2 + 20 + 20 = 42, leaving a
+symmetric 2px inset at both ends. Rows also got `min-w-0` on the label — a flex
+child's default `min-width: auto` refuses to shrink below its content, which is
+what pushed controls outside the card when a setting name was long.
+
+### Purposes are multi-select
+
+A room is often "Fun + Study", and forcing one pick made the user discard half
+their intent before recommendations were even computed.
+
+**Scoring takes the BEST fit across the selected purposes, not the average.**
+Averaging punishes specialists — precisely what someone picking two purposes is
+asking for — and would rank a bland generalist above Chess for a study room.
+Summing is worse: a plugin with weak ties to four purposes would outrank a
+perfect fit for one, and the score would grow without bound.
+
+The reason text names the purpose a plugin *actually* matched, so with
+Fun + Study selected the whiteboard reads "Made for study rooms" rather than
+borrowing whichever purpose happened to be first in the array.
+
+`kind` is retained as `kinds[0]` so every room stored before multi-select, and
+every reader that only knows `kind`, keeps working.
+
+**Caught by a test, not by reading:** Joi strips unknown keys, so `kinds` was
+silently dropped at the validator and never reached the controller. The
+persistence tests failed while the scoring tests passed — which located it
+immediately.
+
+### Plugins moved to a header button
+
+The activity manager was at the bottom of a scrolling sidebar behind a toggle:
+the room's most structural setting was its hardest to find. Now a 🧩 **Plugins**
+button sits in the room header and opens the manager as a modal — foreground,
+and wide enough to show settings without squeezing them into 260px.
+
+### Verification
+
+- **490 tests / 23 suites green.** Nine new (multi-purpose scoring and
+  persistence), 19 removed with the poll plugin.
+- **8/8 real-browser checks**: arcade shows exactly the two installed games;
+  three purpose cards selected at once; 🧩 Plugins in the header; polls present
+  but not a tab; every toggle knob measured inside its track and inside the
+  panel; zero console errors.
+- Screenshots read, not just asserted — the arcade image is the actual proof
+  that "all seven games" became "Chess and UNO".
+
+### Interview Q&A
+
+**Q: You migrated polls to the plugin system and then reverted it. Wasn't that wasted work?**
+The code was reverted; the decision was the deliverable. It surfaced a
+distinction I had been eliding — that being *built* as a plugin and being
+*optional* to the user are independent, and the plugin system was quietly
+coupling them. That is now a written rule at the registry, so the next
+borderline activity gets decided rather than defaulted. It also produced
+`sdk.socket.detached()`, which survives the revert because every timer-based
+plugin still needs it.
+
+**Q: The games bug was reported as a server problem. How did you find it?**
+By checking the claim rather than the symptom. The room document had the right
+two activities and the API returned them, so the data was never wrong — which
+meant the list being rendered came from somewhere else. It was a hardcoded array
+in the component, and it had been flagged in the migration plan a year of work
+earlier as one of four coupling points. Three had been fixed; this was the one
+nobody had revisited because the tab bar above it looked correct.
+
+**Q: Why best-fit rather than averaging for multiple purposes?**
+Because of what the user is expressing. Picking Fun and Study is not "find me
+things that are moderately both" — it is "this room does two things, serve them
+both well". Averaging optimises for the compromise candidate and demotes the
+best game *and* the best study tool simultaneously, which is the one outcome
+nobody asked for.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -3506,9 +3636,13 @@ live activity management (§45) · **Sticky Notes, the first genuinely new plugi
 which failed the guarantee-#1 test and got the architecture fixed first** (§46).
 **481 tests / 23 suites green.**
 
-**Done — Polls migrated, client + server (§47).** First activity moved fully
-onto the host. Added `sdk.socket.detached()` for plugins that must speak after
-their request ends (timers, turn clocks, physics ticks). **500 tests / 24 suites.**
+**Done — §47 polls migration, then §48 REVERTED it: polls are core again.**
+Being *built* as a plugin and being *optional* are independent properties, and
+conflating them made polls declinable in the wizard. Kept
+`sdk.socket.detached()` (needed by every timer-based plugin). §48 also killed
+the last hardcoded activity list (`GamesHub`), made purposes multi-select, moved
+the activity manager to a 🧩 Plugins header button, and fixed the config-form
+toggle overflow. **490 tests / 23 suites green, 8/8 browser checks.**
 
 **Next — Activity Platform, Phase 7 + the remaining migrations:**
 - Migrate the rest onto the host: ~~`poll`~~ → the four framework games
@@ -3554,4 +3688,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-08 (Polls migrated onto the plugin host, client + server — §47. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
+*Last updated: 2026-08-08 (§48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*

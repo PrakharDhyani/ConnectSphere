@@ -17,8 +17,12 @@ export const createRoomSchema = Joi.object({
   name: Joi.string().trim().min(2).max(100).required(),
   visibility: Joi.string().valid("public", "private", "inviteOnly").default("private"),
   purpose: Joi.object({
+    // The primary purpose; kept for clients that predate multi-select.
     kind: Joi.string().trim().max(30).allow(null, ""),
-    // Only meaningful when kind === "custom"; harmless otherwise.
+    // The full multi-select. Bounded generously — the controller filters to
+    // known ids and de-duplicates, so this only has to stop an absurd payload.
+    kinds: Joi.array().items(Joi.string().trim().max(30)).max(20).optional(),
+    // Only meaningful when "custom" is among the kinds; harmless otherwise.
     text: Joi.string().trim().max(200).allow(null, ""),
   }).optional(),
   activities: Joi.array()

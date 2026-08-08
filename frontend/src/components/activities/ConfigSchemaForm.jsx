@@ -12,15 +12,28 @@
 function Row({ label, help, children, htmlFor }) {
   return (
     <div className="py-2">
+      {/* min-w-0 on the label lets a long setting name wrap instead of forcing
+          the row wider than the panel and pushing the control off the edge —
+          a flex child's default min-width:auto refuses to shrink below its
+          content, which is what shoved the toggles outside the card. */}
       <div className="flex items-center justify-between gap-3">
-        <label htmlFor={htmlFor} className="text-sm text-gray-300">{label}</label>
+        <label htmlFor={htmlFor} className="text-sm text-gray-300 min-w-0 flex-1">{label}</label>
         {children}
       </div>
-      {help && <p className="text-[11px] text-gray-500 mt-0.5 pr-24">{help}</p>}
+      {help && <p className="text-[11px] text-gray-500 mt-0.5 pr-2">{help}</p>}
     </div>
   );
 }
 
+/**
+ * The knob is inset by 2px on both sides, so its travel is
+ * track(44) − knob(20) − inset(2) − inset(2) = 20px … but `left-0.5` already
+ * spends 2px of that, so the transform must be 20px, not 20px from the edge.
+ * The old version used `top-0.5 translate-x-5` with no left inset, which put
+ * the knob's right edge at 40px in a 44px track when off, and hung it over the
+ * border when on. Anchoring with `left-0.5` and translating by `x-[20px]`
+ * keeps it inside at both ends.
+ */
 function Toggle({ id, checked, onChange }) {
   return (
     <button
@@ -32,15 +45,19 @@ function Toggle({ id, checked, onChange }) {
       className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${checked ? "bg-brand-600" : "bg-gray-700"}`}
     >
       <span
-        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${checked ? "translate-x-5" : "translate-x-0.5"}`}
+        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+          checked ? "translate-x-5" : "translate-x-0"
+        }`}
       />
     </button>
   );
 }
 
+// max-w caps the control so a long option label cannot widen the row past the
+// panel; shrink-0 keeps it from collapsing to nothing when the label is long.
 const selectCls =
-  "shrink-0 bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white " +
-  "focus:outline-none focus:ring-2 focus:ring-brand-500 max-w-[55%]";
+  "shrink-0 max-w-[14rem] bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white " +
+  "focus:outline-none focus:ring-2 focus:ring-brand-500";
 
 function Field({ name, field, value, onChange }) {
   const id = `cfg-${name}`;

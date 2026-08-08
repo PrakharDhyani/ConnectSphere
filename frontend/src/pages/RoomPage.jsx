@@ -19,6 +19,7 @@ import RoomRules, { RulesPrompt, useRulesAck } from "@/components/RoomRules.jsx"
 import { CaptionOverlay, CaptionControls } from "@/components/Captions.jsx";
 import VideoTile from "@/components/VideoTile.jsx";
 import BackgroundPicker from "@/components/BackgroundPicker.jsx";
+import PollPanel from "@/components/PollPanel.jsx";
 import GamesHub from "@/components/GamesHub.jsx";
 import VoiceBar from "@/components/VoiceBar.jsx";
 import InviteFriends from "@/components/InviteFriends.jsx";
@@ -247,7 +248,7 @@ export default function RoomPage() {
    * return) because it is a hook — and it tolerates `undefined` while the room
    * loads, resolving to the legacy default set.
    */
-  const { tabs, overlayActivities, describe, tabFor } = useRoomActivities(room);
+  const { tabs, gameActivities, overlayActivities, describe, tabFor } = useRoomActivities(room);
 
   /**
    * If the tab you are looking at stops existing — the owner just removed that
@@ -594,10 +595,45 @@ export default function RoomPage() {
             </button>
           ))}
         </div>
-        <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400 shrink-0 hidden sm:block">
-          {me?.isGuest ? "← Home" : "← Dash"}
-        </Link>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* 🧩 Plugins — the room's activity manager, one click from anywhere
+              in the room. It used to live at the bottom of the sidebar, behind
+              a scroll and a toggle, which is why nobody found it. Owner-only:
+              installing changes the room for everyone. */}
+          {room.isOwner && (
+            <button
+              onClick={() => setManagingActivities(true)}
+              title="Add or remove this room's activities"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium text-gray-300 bg-gray-900/70 border border-white/10 hover:text-white hover:border-brand-500/60 transition-colors"
+            >
+              <span>🧩</span>
+              <span className="hidden sm:inline">Plugins</span>
+            </button>
+          )}
+          <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400 hidden sm:block">
+            {me?.isGuest ? "← Home" : "← Dash"}
+          </Link>
+        </div>
       </header>
+
+      {/* Activity manager, as a modal rather than a sidebar panel: it is a
+          room-wide decision, so it deserves the foreground and enough width to
+          show every activity's settings without squeezing them into 260px. */}
+      {managingActivities && room.isOwner && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-6"
+          onClick={() => setManagingActivities(false)}
+        >
+          <div
+            className="w-full max-w-2xl max-h-[88vh] overflow-y-auto bg-gray-900 border border-gray-800 rounded-2xl p-4 sm:p-5 shadow-2xl"
+            // Stop a click inside the panel from reaching the backdrop and
+            // closing it — losing unsaved activity changes to a stray click.
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ActivityManager room={room} onClose={() => setManagingActivities(false)} />
+          </div>
+        </div>
+      )}
 
       {/* One body per activity-backed tab, resolved from the manifest rather
           than named here — this page no longer imports a single plugin.
@@ -627,7 +663,10 @@ export default function RoomPage() {
 
       {view === "game" && (
         <div className="flex-1 min-h-0 overflow-y-auto w-full max-w-7xl mx-auto px-2 sm:px-4 py-4">
-          <GamesHub roomId={roomId} />
+          {/* The arcade shows only what the room installed. It used to hold its
+              own hardcoded list of all seven games, so a room created with two
+              still showed every one of them. */}
+          <GamesHub roomId={roomId} games={gameActivities} />
         </div>
       )}
 
@@ -803,13 +842,14 @@ export default function RoomPage() {
           )}
           {call.error && <p className="px-5 py-2 text-sm text-red-400">{call.error}</p>}
 
-          {/* Overlay activities render INSIDE the room tab rather than owning
-              one — composed into an existing surface instead of replacing it.
-              Driven from the registry like the tabs are, so this page names no
-              plugin: previously `<PollPanel/>` was hardcoded here and mounted
-              even in rooms without polls installed. Harmless while polls were a
-              global socket event; now it would mean joining an activity the
-              room does not have. */}
+          {/* 📊 Polls are CORE, like chat and voice — always present, never
+              installed. Hardcoded here on purpose: a room where you cannot ask
+              a quick question is a downgrade, not a configuration. */}
+          <PollPanel roomId={roomId} />
+
+          {/* Overlay plugins render INSIDE the room tab rather than owning one —
+              composed into an existing surface instead of replacing it. Driven
+              from the registry, so this page names no plugin. */}
           {overlayActivities.map((a) => (
             <ActivityHost key={a.id} activityId={a.id} roomId={roomId} active mounted />
           ))}
@@ -1149,20 +1189,19 @@ export default function RoomPage() {
             onChanged={() => queryClient.invalidateQueries({ queryKey: ["room", roomId] })}
           />
 
-          {/* Activities (owner only) — which plugins this room has. */}
+          {/* Activities moved OUT of the sidebar to a 🧩 Plugins button in the
+              room header. It was at the bottom of a scrolling sidebar behind a
+              toggle, which made the room's most structural setting the hardest
+              one to find. This shortcut just opens the same modal. */}
           {room.isOwner && (
             <div className="border-t border-gray-800 pt-3">
-              {managingActivities ? (
-                <ActivityManager room={room} onClose={() => setManagingActivities(false)} />
-              ) : (
-                <button
-                  onClick={() => setManagingActivities(true)}
-                  className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-gray-500 hover:text-brand-400"
-                >
-                  <span>🧩 Activities</span>
-                  <span className="normal-case text-[11px]">manage</span>
-                </button>
-              )}
+              <button
+                onClick={() => setManagingActivities(true)}
+                className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-gray-500 hover:text-brand-400"
+              >
+                <span>🧩 Activities</span>
+                <span className="normal-case text-[11px]">manage</span>
+              </button>
             </div>
           )}
 

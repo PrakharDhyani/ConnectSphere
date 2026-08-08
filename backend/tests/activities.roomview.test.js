@@ -36,7 +36,7 @@ describe("tabs are derived from installed activities", () => {
 
   it("hides the game tab when a room has no games", () => {
     // A room built for a meeting should not show an empty arcade.
-    const room = { activities: { installed: [{ id: "whiteboard", enabled: true }, { id: "poll", enabled: true }] } };
+    const room = { activities: { installed: [{ id: "whiteboard", enabled: true }] } };
     const { tabs } = buildRoomView(room, all);
     expect(tabs.map((t) => t.id)).toEqual(["room", "board"]);
   });
@@ -48,8 +48,10 @@ describe("tabs are derived from installed activities", () => {
   });
 
   it("leaves only the room tab when every activity is uninstalled", () => {
-    const { tabs } = buildRoomView({ activities: { installed: [{ id: "poll", enabled: true }] } }, all);
-    expect(tabs.map((t) => t.id)).toEqual(["room"]);
+    // `configured` marks this as a deliberate chat-only room rather than a
+    // never-configured legacy one, which would resolve to everything.
+    const room = { activities: { installed: [], configured: true } };
+    expect(buildRoomView(room, all).tabs.map((t) => t.id)).toEqual(["room"]);
   });
 
   it("drops an activity the client cannot render", () => {
@@ -127,9 +129,17 @@ describe("tabFor() — where an announcement takes you", () => {
     expect(tabFor("board")).toBe("board");
   });
 
-  it("keeps overlays and calls on the room tab", () => {
-    expect(tabFor("poll")).toBe("room"); // renders inline beside chat
+  it("keeps calls on the room tab", () => {
+    // `call` is CORE and has no manifest — routing it through the manifest
+    // lookup would silently degrade it to the unknown-id fallback.
     expect(tabFor("call")).toBe("room");
+  });
+
+  it("routes the overlay surface to the room tab", () => {
+    // No plugin currently uses `overlay` (poll did, before it went back to
+    // being core), so this asserts the mapping rather than a live plugin —
+    // otherwise the next overlay plugin inherits an untested path.
+    expect(SURFACE_TAB.overlay).toBe("room");
   });
 
   it("falls back to the room tab for an unknown id", () => {
@@ -153,7 +163,10 @@ describe("activity grouping", () => {
     expect(v.gameActivities.map((a) => a.id).sort()).toEqual(
       ["bingo", "chess", "kart", "ludo", "skribbl", "typing", "uno"]
     );
-    expect(v.overlayActivities.map((a) => a.id)).toEqual(["poll"]);
+    // Empty until a plugin uses the overlay surface again — poll was the only
+    // one and is core now. Asserted rather than dropped so the grouping is
+    // still covered when one arrives.
+    expect(v.overlayActivities).toEqual([]);
   });
 
   it("returns every usable activity with its manifest attached", () => {

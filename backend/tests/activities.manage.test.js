@@ -10,7 +10,7 @@
 import { describe, it, expect } from "@jest/globals";
 import request from "supertest";
 import { startHarness } from "./helpers/harness.js";
-import { resolveInstalled } from "../../shared/activities/index.js";
+import { resolveInstalled, LEGACY_ACTIVITY_IDS } from "../../shared/activities/index.js";
 
 const h = startHarness();
 const uniq = (n) => `${n}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -62,13 +62,13 @@ describe("legacy rooms materialize on first edit", () => {
     const d = await detail(t, room.id);
     expect(d.activities).toBeUndefined();
     // The compat resolver is what makes the room behave normally meanwhile.
-    expect(resolveInstalled(d)).toHaveLength(9);
+    expect(resolveInstalled(d)).toHaveLength(LEGACY_ACTIVITY_IDS.length);
   });
 
   it("becomes explicit the moment someone edits it", async () => {
     const t = await user();
     const room = await makeRoom(t);
-    await setActivities(t, room.id, [{ id: "whiteboard" }, { id: "poll" }]);
+    await setActivities(t, room.id, [{ id: "whiteboard" }, { id: "sticky-notes" }]);
     const d = await detail(t, room.id);
     expect(d.activities.installed).toHaveLength(2);
     expect(d.activities.configured).toBe(true);
@@ -110,11 +110,11 @@ describe("the empty list is a real choice, not a legacy signal", () => {
   it("still treats a never-configured room as having everything", async () => {
     const t = await user();
     const room = await makeRoom(t);
-    expect(resolveInstalled(await detail(t, room.id))).toHaveLength(9);
+    expect(resolveInstalled(await detail(t, room.id))).toHaveLength(LEGACY_ACTIVITY_IDS.length);
   });
 
   it("distinguishes the two cases purely by the configured flag", () => {
-    expect(resolveInstalled({ activities: { installed: [] } })).toHaveLength(9);
+    expect(resolveInstalled({ activities: { installed: [] } })).toHaveLength(LEGACY_ACTIVITY_IDS.length);
     expect(resolveInstalled({ activities: { installed: [], configured: true } })).toHaveLength(0);
   });
 });
@@ -126,7 +126,7 @@ describe("config handling on update", () => {
     const t = await user();
     const room = await makeRoom(t);
     await setActivities(t, room.id, [{ id: "whiteboard", config: { darkTheme: false } }]);
-    await setActivities(t, room.id, [{ id: "whiteboard" }, { id: "poll" }]);
+    await setActivities(t, room.id, [{ id: "whiteboard" }, { id: "sticky-notes" }]);
     const wb = (await detail(t, room.id)).activities.installed.find((a) => a.id === "whiteboard");
     expect(wb.config.darkTheme).toBe(false);
   });

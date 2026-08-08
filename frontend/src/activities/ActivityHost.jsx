@@ -111,7 +111,7 @@ function useVisibilitySignal(ref, active, activityId) {
  * @param {boolean} active      is this the foreground activity?
  * @param {boolean} mounted     keep it in the tree while hidden (default true)
  */
-export default function ActivityHost({ activityId, roomId, active, mounted = true, className = "" }) {
+export default function ActivityHost({ activityId, roomId, active, mounted = true, className = "", ...panelProps }) {
   const ref = useRef(null);
   useVisibilitySignal(ref, active, activityId);
 
@@ -137,7 +137,12 @@ export default function ActivityHost({ activityId, roomId, active, mounted = tru
     >
       <ActivityErrorBoundary activityId={activityId} name={manifest.name} icon={manifest.icon}>
         <Suspense fallback={<ActivityFallback />}>
-          <Component_ roomId={roomId} />
+          {/* Extra props pass through to the panel. Needed because some panels
+              legitimately take more than a roomId — Kart's Exit button is an
+              `onExit` callback, and swallowing it here would leave the button
+              rendered and dead. The host stays generic: it forwards whatever
+              the caller supplies without knowing what any of it means. */}
+          <Component_ roomId={roomId} {...panelProps} />
         </Suspense>
       </ActivityErrorBoundary>
     </div>

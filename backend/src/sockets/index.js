@@ -69,7 +69,10 @@ export function initSocket(httpServer) {
     registerUnoHandlers(io, socket);
     registerTypingHandlers(io, socket);
     registerBingoHandlers(io, socket);
-    if (legacyHandlerEnabled("poll")) registerPollHandlers(io, socket);
+    // Polls are CORE, not a plugin — always registered. See the note in
+    // shared/activities/index.js on why polls came back out of the plugin
+    // system: a room without polls is a downgrade, not a configuration.
+    registerPollHandlers(io, socket);
     registerCaptionHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {

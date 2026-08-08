@@ -112,10 +112,51 @@ function bestPartner(pluginId, selectedIds) {
 }
 
 /**
+ * How well a plugin fits the room's purposes.
+ *
+ * MULTIPLE PURPOSES TAKE THE BEST FIT, NOT THE AVERAGE.
+ * A room for "Fun + Study" wants the best board game AND the best study tool,
+ * not the activities that are mediocre at both. Averaging punishes specialists
+ * — exactly the activities a user picking two purposes is asking for — and
+ * would rank a bland generalist above Chess for a study room. Summing is worse
+ * still: it would let a plugin with weak ties to four purposes outrank a
+ * perfect fit for one, and the score would grow without bound as purposes are
+ * added.
+ *
+ * "custom" and unknown purposes contribute NOTHING, which is honest: we
+ * genuinely do not know what the room is for, so ranking falls back to
+ * popularity and pairings rather than inventing a fit.
+ */
+function purposeFit(manifest, purposes) {
+  let best = 0;
+  for (const p of purposes) {
+    if (!p || p === "custom") continue;
+    const v = manifest.recommendedFor?.[p] ?? 0;
+    if (v > best) best = v;
+  }
+  return best;
+}
+
+/** The purpose a plugin fits best — used to word its reason. */
+function bestPurpose(manifest, purposes) {
+  let best = null;
+  let bestVal = -1;
+  for (const p of purposes) {
+    if (!p || p === "custom") continue;
+    const v = manifest.recommendedFor?.[p] ?? 0;
+    if (v > bestVal) { bestVal = v; best = p; }
+  }
+  return best;
+}
+
+/**
  * Score every plugin for a room being created.
  *
  * @param {object} ctx
- * @param {string} ctx.purpose       purpose id ("study"), or "custom"/null
+ * @param {string|string[]} ctx.purpose  purpose id(s) — "study", ["fun","study"],
+ *                                       or "custom"/null. A single id still
+ *                                       works: multi-select was added later and
+ *                                       every existing caller passes one.
  * @param {string[]} ctx.selected    plugin ids already chosen
  * @param {string} ctx.visibility    public | private | inviteOnly
  * @param {string[]} ctx.interests   free-text interests (optional)
@@ -123,13 +164,12 @@ function bestPartner(pluginId, selectedIds) {
  * @returns {Array<{id,name,icon,description,category,score,tier,reasons}>}
  */
 export function scoreActivities({ purpose, selected = [], visibility = "private", interests = [], purposeLabel } = {}) {
-  const label = purposeLabel || purpose || "this";
+  // Normalised to an array so one code path serves both shapes.
+  const purposes = (Array.isArray(purpose) ? purpose : [purpose]).filter(Boolean);
+  const label = purposeLabel || purposes.find((p) => p && p !== "custom") || "this";
 
   const scored = getAllPlugins().map((manifest) => {
-    // "custom" and unknown purposes contribute NO purpose signal — which is
-    // honest: we genuinely do not know what the room is for, so the ranking
-    // falls back to popularity and pairings rather than inventing a fit.
-    const purposeScore = purpose && purpose !== "custom" ? (manifest.recommendedFor?.[purpose] ?? 0) : 0;
+    const purposeScore = purposeFit(manifest, purposes);
     const coScore = cooccurrence(manifest.id, selected);
     const visScore = visibilityFit(manifest, visibility);
     const interestScore = interestMatch(manifest, interests);
@@ -157,7 +197,11 @@ export function scoreActivities({ purpose, selected = [], visibility = "private"
       reasons: reasonsFor({
         manifest, purposeScore, coScore,
         coPartner: bestPartner(manifest.id, selected),
-        visScore, interestScore, purposeLabel: label,
+        visScore, interestScore,
+        // Name the purpose this plugin actually matched, not whichever was
+        // picked first: with Fun + Study selected, Chess should read "Made for
+        // study rooms", not "Made for fun rooms" because fun came first.
+        purposeLabel: bestPurpose(manifest, purposes) || label,
       }),
     };
   });

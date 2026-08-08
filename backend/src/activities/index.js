@@ -36,13 +36,11 @@ import { logger } from "../utils/logger.js";
 
 import whiteboardServer from "./whiteboard/server.js";
 import stickyNotesServer from "./sticky-notes/server.js";
-import pollServer from "./poll/server.js";
 
 // pluginId -> server module. Only these can be enabled by the flag.
 const SERVER_MODULES = {
   whiteboard: whiteboardServer,
   "sticky-notes": stickyNotesServer,
-  poll: pollServer,
 };
 
 /**

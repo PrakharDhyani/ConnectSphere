@@ -9,7 +9,14 @@
 ## 0. Scope
 
 **Core — never a plugin.** The room shell that is always present:
-chat/text · video calling · screen sharing · voice · presence · membership · moderation · auth.
+chat/text · video calling · screen sharing · voice · presence · membership · moderation · auth ·
+**polls**.
+
+> **The test, settled by the polls round-trip (PROJECT_NOTES §48):** if uninstalling it makes the
+> room *worse for everyone* rather than merely *different*, it is infrastructure. Polls were
+> migrated onto the host successfully and then reverted, because "runs on the plugin architecture"
+> and "the user may uninstall it" are independent properties — and the plugin system was coupling
+> them, so polls showed up in the wizard as an optional feature you could decline.
 
 **Plugins — starting now.** Everything that occupies the Board or Game surface:
 `whiteboard` · `draw-guess` · `ludo` · `chess` · `uno` · `typing-race` · `bingo` · `smash-karts`.
@@ -86,6 +93,12 @@ Plus `GamesHub.jsx:28-36`, the `GAMES[]` array.
 
 **Today, adding one game means editing four files that have nothing to do with that game.** That is
 the thing to fix. Everything else in the migration follows from it.
+
+> **All four are now resolved.** 1 and 2–3 went in Phases 2–3. The fourth —
+> `GamesHub`'s `GAMES[]` — survived until PROJECT_NOTES §48, because the tab bar above it had
+> become manifest-driven and *looked* correct while the arcade underneath still listed every game
+> ever written. It surfaced as a user report ("I selected a few games but all of them show up"),
+> not as a failing test. Worth remembering: a coupling point that is half-fixed reads as fixed.
 
 ---
 
@@ -403,9 +416,9 @@ Tests: manifest validation, legacy vs new resolution.
 2. Server SDK (socket, room, storage, presence, events) built from declared permissions.
 3. **Migrate in this order**, each behind a parallel-registration flag so old and new run side by
    side until verified:
-   ~~`whiteboard`~~ (server done; client still on socket.js) → ~~`poll`~~ ✅ **done, client+server
-   (see PROJECT_NOTES §47)** → the four framework games (chess, uno, typing, bingo —
-   near-mechanical) → `draw-guess` → `ludo` → **`smash-karts` last**.
+   ~~`whiteboard`~~ (server done; client still on socket.js) → ~~`poll`~~ **migrated in §47 and
+   deliberately REVERTED in §48 — polls are core, see §0** → the four framework games (chess, uno,
+   typing, bingo — near-mechanical) → `draw-guess` → `ludo` → **`smash-karts` last**.
 
    **The flag is per-plugin and so is the migration.** Enabling a plugin switches the *server* to
    the host; its *client* must already speak `sdk.socket`, or the two halves desynchronise and the

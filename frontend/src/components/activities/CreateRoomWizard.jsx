@@ -80,7 +80,10 @@ export default function CreateRoomWizard({ onCreate, creating, error, onCancel }
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [visibility, setVisibility] = useState("private");
-  const [purposeKind, setPurposeKind] = useState(null);
+  // Several purposes, not one: a room is often "Fun + Study" or "Team +
+  // Brainstorm", and forcing a single pick made the user throw away half of
+  // what they wanted before the recommendations were even computed.
+  const [purposeKinds, setPurposeKinds] = useState([]);
   const [purposeText, setPurposeText] = useState("");
   const [selected, setSelected] = useState([]);      // plugin ids
   const [configs, setConfigs] = useState({});        // id -> config
@@ -103,7 +106,7 @@ export default function CreateRoomWizard({ onCreate, creating, error, onCancel }
     if (step !== 3) return;
     let cancelled = false;
     setLoadingRecs(true);
-    api.post("/activities/recommend", { purpose: purposeKind, selected, visibility })
+    api.post("/activities/recommend", { purpose: purposeKinds, selected, visibility })
       .then((r) => { if (!cancelled) setRecs(r.data.data); })
       .catch(() => {
         // Degrade to the plain catalogue rather than blocking creation.
@@ -112,9 +115,11 @@ export default function CreateRoomWizard({ onCreate, creating, error, onCancel }
       .finally(() => { if (!cancelled) setLoadingRecs(false); });
     return () => { cancelled = true; };
     // `selected` deliberately omitted: re-ranking on every tick would make
-    // cards jump under the user's cursor mid-click.
+    // cards jump under the user's cursor mid-click. purposeKinds is joined
+    // rather than passed by reference — a new array identity every render
+    // would refetch endlessly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, purposeKind, visibility, catalogue]);
+  }, [step, purposeKinds.join(","), visibility, catalogue]);
 
   // Pre-check the recommendations the first time they arrive — the wizard
   // should propose a working room, not an empty one.
@@ -139,7 +144,17 @@ export default function CreateRoomWizard({ onCreate, creating, error, onCancel }
     onCreate({
       name: name.trim(),
       visibility,
-      ...(purposeKind ? { purpose: { kind: purposeKind, text: purposeKind === "custom" ? purposeText.trim() : undefined } } : {}),
+      // `kind` stays a single id for backward compatibility with every room
+      // already stored; `kinds` carries the full selection.
+      ...(purposeKinds.length
+        ? {
+            purpose: {
+              kind: purposeKinds[0],
+              kinds: purposeKinds,
+              text: purposeKinds.includes("custom") ? purposeText.trim() : undefined,
+            },
+          }
+        : {}),
       // No selection → omit entirely, so the room keeps the legacy default of
       // "every activity available" rather than being created with none.
       ...(selected.length ? { activities: selected.map((id) => ({ id, config: configs[id] || {} })) } : {}),
@@ -191,27 +206,52 @@ export default function CreateRoomWizard({ onCreate, creating, error, onCancel }
         </div>
       )}
 
-      {/* Step 3 — purpose */}
+      {/* Step 3 — purposes. Multi-select: rooms are rarely one thing. */}
       {step === 2 && (
         <div className="space-y-3">
-          <span className="block text-sm text-gray-400">What are you creating this room for?</span>
+          <span className="block text-sm text-gray-400">
+            What are you creating this room for?
+            <span className="text-gray-500"> — pick as many as fit.</span>
+          </span>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {PURPOSES.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => { setPurposeKind(p.id); setSelected([]); setRecs(null); }}
-                className={`rounded-xl border p-2.5 text-center transition-colors ${
-                  purposeKind === p.id ? "border-brand-500 bg-brand-600/20" : "border-gray-700 bg-gray-900 hover:border-gray-600"
-                }`}
-                title={p.blurb}
-              >
-                <span className="block text-xl">{p.icon}</span>
-                <span className="block text-[11px] mt-0.5 leading-tight">{p.label}</span>
-              </button>
-            ))}
+            {PURPOSES.map((p) => {
+              const on = purposeKinds.includes(p.id);
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => {
+                    setPurposeKinds((cur) =>
+                      cur.includes(p.id) ? cur.filter((x) => x !== p.id) : [...cur, p.id]
+                    );
+                    // Recommendations are about to change, so drop the previous
+                    // ones — keeping them would leave activities pre-checked on
+                    // the strength of a purpose the user has just deselected.
+                    setSelected([]);
+                    setRecs(null);
+                  }}
+                  className={`relative rounded-xl border p-2.5 text-center transition-colors ${
+                    on ? "border-brand-500 bg-brand-600/20" : "border-gray-700 bg-gray-900 hover:border-gray-600"
+                  }`}
+                  title={p.blurb}
+                >
+                  {on && (
+                    <span className="absolute top-1 right-1.5 text-[10px] text-brand-300" aria-hidden="true">✓</span>
+                  )}
+                  <span className="block text-xl">{p.icon}</span>
+                  <span className="block text-[11px] mt-0.5 leading-tight">{p.label}</span>
+                </button>
+              );
+            })}
           </div>
-          {purposeKind === "custom" && (
+          {purposeKinds.length > 1 && (
+            <p className="text-[11px] text-gray-500">
+              Activities are ranked by their best fit across all {purposeKinds.length} — so a
+              specialist for one still beats something mediocre at both.
+            </p>
+          )}
+          {purposeKinds.includes("custom") && (
             <Input
               label="Tell us more"
               value={purposeText}

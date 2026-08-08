@@ -325,8 +325,12 @@ describe("built-in manifests", () => {
     expect(getPlugin("typing").minPlayers).toBe(1); // solo practice is supported
   });
 
-  it("renders poll inline rather than as its own tab", () => {
-    expect(getPlugin("poll").surface).toBe("overlay");
+  it("does not register polls as a plugin — they are core", () => {
+    // Polls were briefly a plugin and were taken back out: a room where you
+    // cannot ask a quick question is a downgrade, not a configuration. They
+    // live in sockets/poll.handlers.js alongside chat and voice, so they must
+    // NOT appear in the catalogue the wizard and the manager render from.
+    expect(getPlugin("poll")).toBeNull();
   });
 
   /**

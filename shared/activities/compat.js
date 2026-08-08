@@ -25,8 +25,15 @@ import { defaultsFor } from "./config-schema.js";
  * plugin in 2027 would retroactively install it into every legacy room — which
  * is precisely the kind of surprise this file exists to prevent.
  */
+/**
+ * `poll` is absent: it was briefly a plugin and is now core again (always
+ * present, never installed), so listing it here would make every legacy room
+ * resolve an activity that has no manifest — `resolveActivities` would mark it
+ * `unavailable: true` and the management UI would offer to uninstall something
+ * that cannot be uninstalled.
+ */
 export const LEGACY_ACTIVITY_IDS = Object.freeze([
-  "whiteboard", "skribbl", "ludo", "chess", "uno", "typing", "bingo", "kart", "poll",
+  "whiteboard", "skribbl", "ludo", "chess", "uno", "typing", "bingo", "kart",
 ]);
 
 /**
