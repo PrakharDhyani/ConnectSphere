@@ -103,7 +103,7 @@ export default function UnoPanel({ roomId }) {
   const { me, state, priv, notices, isHost, act, reset } = lobby;
   const [wildIdx, setWildIdx] = useState(null); // card awaiting color choice
   const [err, setErr] = useState(null);
-  const rx = useReactions("uno", roomId);
+  const rx = useReactions("uno", roomId, lobby.sdk);
 
   const myTurn = state?.turnId === me?.id && !state?.winnerId;
   const hand = priv?.hand || [];

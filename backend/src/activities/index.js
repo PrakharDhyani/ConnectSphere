@@ -36,11 +36,18 @@ import { logger } from "../utils/logger.js";
 
 import whiteboardServer from "./whiteboard/server.js";
 import stickyNotesServer from "./sticky-notes/server.js";
+import { chessServer, unoServer, typingServer, bingoServer } from "./framework-games/server.js";
 
 // pluginId -> server module. Only these can be enabled by the flag.
 const SERVER_MODULES = {
   whiteboard: whiteboardServer,
   "sticky-notes": stickyNotesServer,
+  // All four come from ONE adapter over the existing lobbyGame framework —
+  // no per-game server code. See framework-games/server.js.
+  chess: chessServer,
+  uno: unoServer,
+  typing: typingServer,
+  bingo: bingoServer,
 };
 
 /**

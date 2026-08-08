@@ -210,3 +210,9 @@ const bingo = createLobbyGame({
 export function registerBingoHandlers(io, socket) {
   bingo.register(io, socket);
 }
+
+// Exported so the plugin adapter can host this game through the activity
+// host (activities/lobbyGameAdapter.js). The legacy registration above stays
+// until the flag flips, so both paths serve the same instance and the same
+// table — never two copies of the game.
+export { bingo };

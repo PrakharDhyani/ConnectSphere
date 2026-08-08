@@ -417,8 +417,14 @@ Tests: manifest validation, legacy vs new resolution.
 3. **Migrate in this order**, each behind a parallel-registration flag so old and new run side by
    side until verified:
    ~~`whiteboard`~~ (server done; client still on socket.js) → ~~`poll`~~ **migrated in §47 and
-   deliberately REVERTED in §48 — polls are core, see §0** → the four framework games (chess, uno,
-   typing, bingo — near-mechanical) → `draw-guess` → `ludo` → **`smash-karts` last**.
+   deliberately REVERTED in §48 — polls are core, see §0** → ~~the four framework games~~ ✅
+   **done client+server in §50, via ONE adapter — one line per game, no per-game plugin code** →
+   `draw-guess` → `ludo` → **`smash-karts` last**.
+
+   §50 confirmed §1.2's prediction literally: because `lobbyGame.js` was already an SDK, extending
+   it beat replacing it. The enabling refactor was splitting its **seat rules** (join/leave/start/
+   reset/bots) out of its **transport** into `lobby.seats`, so the legacy registration and the
+   plugin adapter share one implementation instead of two copies that drift.
 
    **The flag is per-plugin and so is the migration.** Enabling a plugin switches the *server* to
    the host; its *client* must already speak `sdk.socket`, or the two halves desynchronise and the

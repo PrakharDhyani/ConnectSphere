@@ -3640,6 +3640,119 @@ the hard part (rebuilding `ctx` without `io`) is done and written down.
 
 ---
 
+## 50. Migration: four framework games on ONE adapter (client + server)
+
+Chess, UNO, Typing Race and Bingo now run through the plugin host — server and
+client — with **no per-game plugin code at all**.
+
+### The shape of the migration
+
+The plan called these "four near-mechanical migrations". They are mechanical
+because they were already thin configs over `sockets/lobbyGame.js`, which §1.2
+identifies as an SDK in its own right: *"the plugin contract should extend it,
+not replace it."* Taken literally, that means **one adapter, not four rewrites**.
+Writing four server modules would have duplicated seat/bot/timer handling four
+times and charged every future lobby game the same tax — re-introducing the N×M
+coupling the plugin system exists to remove, inside the plugin system.
+
+The whole cost per game is one line:
+
+```js
+export const chessServer = adaptLobbyGame("chess", chess, chess.cfg);
+```
+
+Same on the client: `useLobbyGame` is one hook shared by all four panels, so
+migrating the hook migrated every game. `ChessPanel`, `UnoPanel`, `TypingPanel`
+and `BingoPanel` were not touched.
+
+### The refactor that made it possible
+
+`lobbyGame.js` mixed two things: **seat rules** (join/leave/start/reset/bots) and
+**transport** (socket listeners, `io` broadcasts). The rules lived inline inside
+`register()`, so a plugin could not reach them without reimplementing them.
+
+Extracted into `lobby.seats` — pure state mutations that return `{ok}`/`{error}`
+and never emit. The legacy registration now calls them too, so there is exactly
+one implementation of "only the host may start" rather than one per transport.
+That is what let §49's parked adapter be finished rather than duplicated.
+
+### `ctx` rebuilt without `io`
+
+Every game callback uses `ctx.broadcast/notice/emit/endGame` and nothing else,
+so `pluginCtx()` rebuilds those four on `sdk.socket.detached()` — which reaches
+this plugin, in this room, and nothing else. The framework's `makeCtx` and
+`broadcastFor` close over `io` and are now explicitly documented as **legacy
+path only**. A plugin never receives them, so guarantee #5 holds.
+
+The three timers (AFK, bot turn, tick) are re-armed on the same detached wire.
+They fire long after the request that armed them, which is exactly why
+`detached()` exists.
+
+### The bug: `members()` was reading the wrong channel
+
+UNO's private hands never arrived. The `roomMembers()` I added in §49 enumerated
+the **room** channel — but activity clients join `act:<id>:<roomId>` and need
+never be in `room:<id>` at all. The hands were addressed to an empty set.
+
+Renamed to `members()` and pointed at the activity channel, which is also more
+correct in principle: a plugin's audience is whoever opened *the plugin*, not
+whoever is sitting in chat. Deduplicated by user, since one person with two tabs
+is one player.
+
+**Caught by a test written for the adapter**, not by reading — the public state
+tests all passed, because public state was fine.
+
+### Parallel-run preserved
+
+`useReactions` now listens on **both** `<prefix>:react` and
+`activity:<id>:react`, and sends through the SDK when given one. Ludo, Kart and
+Draw & Guess still share that hook and are unmigrated, so forking it would have
+meant two copies. This way a migrated game works with the flag on *or* off —
+the property that made reverting the poll migration painless in §48.
+
+### Verification
+
+- **520 tests / 24 suites green** (was 490 / 23); 30 new, all driving the
+  adapter through real socket.io clients.
+- Seat lifecycle is tested with `it.each` across all four games — the point of
+  one adapter is that the same assertions must hold for every game.
+- **16/16 live checks** against the running dev server: all four seat, start and
+  reach "playing" for the second player; a real chess move (e2–e4) is applied by
+  the engine and broadcast; a UNO hand of 7 reaches its owner privately;
+  reactions arrive on the namespaced channel.
+- One live assertion was wrong and got fixed rather than accepted: I grepped the
+  FEN for `"e4"`, but a pawn on e4 appears as `4P3` in the board field — the
+  check would have passed on the starting position too. Now it reads rank 4
+  explicitly.
+
+### Interview Q&A
+
+**Q: Why one adapter instead of four server modules?**
+Because the four games differ only in their rules, and their rules were already
+separated from their plumbing by `lobbyGame.js`. Four modules would have
+duplicated the plumbing — the seat logic, the bot timers, the AFK clock — four
+times, and a fifth lobby game would have paid it again. The adapter makes the
+marginal cost of the next one a single line, which is the same argument the
+plugin system makes about the room shell, applied one level down.
+
+**Q: What did you have to change in `lobbyGame.js`, and why was that safe?**
+I split seat management out of the socket registration into `lobby.seats`, and
+made the legacy path call it too. Safe because both callers now share one
+implementation — if the extraction were wrong, the existing games would break
+immediately and loudly, and their tests run on every commit. The alternative
+(copying the rules into the adapter) is what would have been unsafe: two copies
+that drift silently.
+
+**Q: The UNO bug — why did the tests miss it at first?**
+Because I only had tests for public state, which was working. Private state is a
+different channel with a different addressing scheme, and I had assumed the two
+audiences were the same set of people. Writing the adapter's own test suite is
+what surfaced it, and the fix improved the capability rather than patching the
+call site: `members()` now means "who is in this activity", which is the honest
+answer to the question a plugin is actually asking.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -3715,15 +3828,20 @@ the last hardcoded activity list (`GamesHub`), made purposes multi-select, moved
 the activity manager to a 🧩 Plugins header button, and fixed the config-form
 toggle overflow. **490 tests / 23 suites green, 8/8 browser checks.**
 
+**Done — the four framework games, client + server (§50).** Chess · UNO ·
+Typing · Bingo on ONE adapter over `lobbyGame.js`, one line per game, no
+per-game plugin code. Required splitting seat rules from transport in the
+framework (`lobby.seats`) so both paths share one implementation.
+**520 tests / 24 suites, 16/16 live checks.**
+
 **Next — Activity Platform, Phase 7 + the remaining migrations:**
-- **The four framework games via ONE adapter, not four rewrites** (§49). The
-  hard part is done — `ctx` can be rebuilt on `sdk.socket.detached()` without
-  giving plugins `io`. What remains is splitting transport from seat management
-  in `lobbyGame.js`, because join/leave/start/reset/bots still live inside its
-  `register()`. Partial adapter is in the session scratchpad.
-- Then `skribbl` → `ludo` → **`kart` last** (478 bespoke lines running its own
+- `skribbl` → `ludo` → **`kart` last** (478 bespoke lines running its own
   `setInterval` physics loop; its `destroy()` clearing that interval is the
-  reference lifecycle test, now rehearsed by poll's timer).
+  reference lifecycle test, now rehearsed twice — by poll's timer and by
+  bingo's tick through the adapter).
+- **Migrate `WhiteboardPanel` onto the client SDK.** Its server module has been
+  done since Phase 2, but the panel still imports `socket.js`, so
+  `ACTIVITY_PLUGINS=whiteboard` would break it.
 - **Migrate `WhiteboardPanel` onto the client SDK.** Its server module has been
   done since Phase 2, but the panel still imports `socket.js`, so
   `ACTIVITY_PLUGINS=whiteboard` would break it. Server and client must migrate
@@ -3762,4 +3880,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-08 (§48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
+*Last updated: 2026-08-08 (§50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*

@@ -13,12 +13,30 @@ import { getSocket } from "@/lib/socket.js";
 import { STICKERS } from "@/components/stickers/Stickers.jsx";
 import { sfx } from "@/lib/sfx.js";
 
-export function useReactions(prefix, roomId) {
+/**
+ * @param {string} prefix  game id — also the plugin id for migrated games
+ * @param {string} roomId
+ * @param {object} [sdk]   the plugin SDK, for games served by the activity host
+ *
+ * LISTENS ON BOTH CHANNELS, ON PURPOSE.
+ *
+ * The four framework games are migrated; Ludo, Kart and Draw & Guess are not,
+ * and they share this hook. Rather than fork it, it subscribes to the legacy
+ * `<prefix>:react` AND the namespaced `activity:<id>:react`, and sends through
+ * the SDK when one is supplied. A migrated game therefore keeps working whether
+ * the server flag is on or off — which is the whole point of the parallel-run
+ * flag, and the property that made reverting the poll migration painless.
+ *
+ * Duplicate suppression already exists (`heardRef` keyed on the reaction id),
+ * so even if both channels ever delivered the same reaction it would animate
+ * once and play one sound.
+ */
+export function useReactions(prefix, roomId, sdk = null) {
   const [floats, setFloats] = useState([]);
   const heardRef = useRef(new Set());
 
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId) return undefined;
     const socket = getSocket();
     const onReact = (r) => {
       if (!STICKERS[r.kind]) return;
@@ -33,10 +51,17 @@ export function useReactions(prefix, roomId) {
       setTimeout(() => setFloats((f) => f.filter((x) => x.id !== r.id)), 3400);
     };
     socket.on(`${prefix}:react`, onReact);
-    return () => socket.off(`${prefix}:react`, onReact);
+    socket.on(`activity:${prefix}:react`, onReact);
+    return () => {
+      socket.off(`${prefix}:react`, onReact);
+      socket.off(`activity:${prefix}:react`, onReact);
+    };
   }, [prefix, roomId]);
 
-  const send = (kind) => getSocket().emit(`${prefix}:react`, { roomId, kind });
+  const send = (kind) => {
+    if (sdk?.socket) sdk.socket.emit("react", { kind });
+    else getSocket().emit(`${prefix}:react`, { roomId, kind });
+  };
   return { floats, send };
 }
 

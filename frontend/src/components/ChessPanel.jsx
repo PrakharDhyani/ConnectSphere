@@ -175,7 +175,7 @@ export default function ChessPanel({ roomId }) {
   const [selected, setSelected] = useState(null); // "e2"
   const [promo, setPromo] = useState(null); // pending promotion {from,to}
   const [mode, setMode] = useState("play"); // "play" | "puzzle"
-  const rx = useReactions("chess", roomId);
+  const rx = useReactions("chess", roomId, lobby.sdk);
 
   // Local mirror for hints/promotion detection only — server stays boss.
   const chess = useMemo(() => {

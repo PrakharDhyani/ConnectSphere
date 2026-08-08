@@ -65,10 +65,10 @@ export function initSocket(httpServer) {
     registerGameHandlers(io, socket);
     registerLudoHandlers(io, socket);
     registerKartHandlers(io, socket);
-    registerChessHandlers(io, socket);
-    registerUnoHandlers(io, socket);
-    registerTypingHandlers(io, socket);
-    registerBingoHandlers(io, socket);
+    if (legacyHandlerEnabled("chess")) registerChessHandlers(io, socket);
+    if (legacyHandlerEnabled("uno")) registerUnoHandlers(io, socket);
+    if (legacyHandlerEnabled("typing")) registerTypingHandlers(io, socket);
+    if (legacyHandlerEnabled("bingo")) registerBingoHandlers(io, socket);
     // Polls are CORE, not a plugin — always registered. See the note in
     // shared/activities/index.js on why polls came back out of the plugin
     // system: a room without polls is a downgrade, not a configuration.

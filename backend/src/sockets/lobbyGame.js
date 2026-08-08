@@ -61,6 +61,115 @@ export function createLobbyGame(cfg) {
     g.afkTimer = g.botTimer = g.tickTimer = null;
   }
 
+  /**
+   * SEAT MANAGEMENT, WITH NO TRANSPORT.
+   *
+   * Extracted so the same rules serve two callers: the legacy socket
+   * registration below, and the plugin adapter (activities/lobbyGameAdapter.js)
+   * which dispatches through the activity host instead. Before this split the
+   * logic lived inline in `register()`, so migrating a game to the plugin
+   * system meant reimplementing join/leave/start/reset/bots — duplicating the
+   * exact thing this framework exists to share, four times over.
+   *
+   * Every function here takes the actor's identity explicitly and returns
+   * `{ok}` or `{error}`. None of them emit: the caller decides how to publish
+   * the result, which is precisely what makes them reusable across transports.
+   */
+  const seats = {
+    /** The table as it stands, or null. Callers must not mutate it. */
+    get: (roomId) => games.get(roomId) ?? null,
+
+    join(roomId, user) {
+      let g = games.get(roomId);
+      if (!g) { g = freshGame(user.id); games.set(roomId, g); }
+      if (g.players.some((p) => p.id === user.id)) return { ok: true, changed: false };
+      // Spectating rather than refusing: joining mid-game is normal in a
+      // hangout, and the framework already locks seats while playing.
+      if (g.status !== "lobby") return { error: "Game in progress — you're spectating until it ends", spectate: true };
+      if (g.players.length >= cfg.maxPlayers) return { error: `Table is full (${cfg.maxPlayers})` };
+      g.players.push({ id: user.id, name: user.name, isBot: false, difficulty: null });
+      // Host passes to a real human if the seat was vacant or held by a bot.
+      if (!g.hostId || !g.players.some((p) => p.id === g.hostId && !p.isBot)) g.hostId = user.id;
+      return { ok: true, changed: true };
+    },
+
+    leave(roomId, userId) {
+      const g = games.get(roomId);
+      if (!g || g.status !== "lobby") return { ok: true, changed: false };
+      g.players = g.players.filter((p) => p.id !== userId);
+      if (g.hostId === userId) g.hostId = humanIds(g)[0] || null;
+      // Last human out: drop the table rather than leave bots playing alone.
+      if (humanIds(g).length === 0) { clearTimers(g); games.delete(roomId); return { ok: true, emptied: true }; }
+      return { ok: true, changed: true };
+    },
+
+    addBot(roomId, userId, difficulty) {
+      const g = games.get(roomId);
+      if (!g || g.status !== "lobby") return { error: "Not in a lobby" };
+      if (g.hostId !== userId) return { error: "Only the host can add bots" };
+      if (g.players.length >= cfg.maxPlayers) return { error: "Table is full" };
+      const diff = DIFFICULTIES.includes(difficulty) ? difficulty : "medium";
+      const n = g.players.filter((p) => p.isBot).length;
+      const label = { easy: "Easy", medium: "Med", hard: "Hard" }[diff];
+      g.players.push({
+        id: `bot:${g.nextBotId++}`,
+        name: `${BOT_NAMES[n % BOT_NAMES.length]} (${label})`,
+        isBot: true,
+        difficulty: diff,
+      });
+      return { ok: true, changed: true };
+    },
+
+    removeBot(roomId, userId, botId) {
+      const g = games.get(roomId);
+      if (!g || g.status !== "lobby" || g.hostId !== userId) return { error: "Not allowed" };
+      const idx = botId
+        ? g.players.findIndex((p) => p.id === botId && p.isBot)
+        : g.players.findLastIndex((p) => p.isBot);
+      if (idx === -1) return { error: "No bot to remove" };
+      g.players.splice(idx, 1);
+      return { ok: true, changed: true };
+    },
+
+    start(roomId, userId) {
+      const g = games.get(roomId);
+      if (!g || g.status !== "lobby") return { error: "Cannot start" };
+      if (g.hostId !== userId) return { error: "Only the host can start" };
+      if (g.players.length < cfg.minPlayers) return { error: `Need at least ${cfg.minPlayers} players` };
+      g.status = "playing";
+      cfg.start(g);
+      return { ok: true, changed: true, started: true };
+    },
+
+    reset(roomId, userId) {
+      const g = games.get(roomId);
+      if (!g || g.hostId !== userId) return { error: "Not allowed" };
+      clearTimers(g);
+      const fresh = freshGame(userId);
+      fresh.players = g.players;      // keep the table together for a rematch
+      fresh.hostId = g.hostId;
+      fresh.nextBotId = g.nextBotId;
+      cfg.onReset?.(g, fresh);        // carry over settings (e.g. chess time control)
+      games.set(roomId, fresh);
+      return { ok: true, changed: true };
+    },
+
+    /** Free a table once no seated human is still connected. */
+    releaseIfEmpty(roomId, presentUserIds) {
+      const g = games.get(roomId);
+      if (!g) return false;
+      const humans = humanIds(g);
+      if (humans.length === 0 || !humans.some((id) => presentUserIds.has(id))) {
+        clearTimers(g);
+        games.delete(roomId);
+        return true;
+      }
+      return false;
+    },
+
+    clearTimers,
+  };
+
   function makeCtx(io, roomId) {
     const g = games.get(roomId);
     const ctx = {
@@ -167,54 +276,29 @@ export function createLobbyGame(cfg) {
 
     on("join", async ({ roomId } = {}, cb) => {
       if (!(await guard(roomId))) return cb?.({ error: "Not allowed" });
-      let g = games.get(roomId);
-      if (!g) { g = freshGame(uid); games.set(roomId, g); }
-      if (g.players.some((p) => p.id === uid)) return cb?.({ ok: true });
-      if (g.status !== "lobby") return cb?.({ error: "Game in progress — you're spectating until it ends", spectate: true });
-      if (g.players.length >= cfg.maxPlayers) return cb?.({ error: `Table is full (${cfg.maxPlayers})` });
-      g.players.push({ id: uid, name: socket.user.name, isBot: false, difficulty: null });
-      if (!g.hostId || !g.players.some((p) => p.id === g.hostId && !p.isBot)) g.hostId = uid;
-      broadcast(io, roomId);
+      const res = seats.join(roomId, socket.user);
+      if (res.error) return cb?.(res);
+      if (res.changed) broadcast(io, roomId);
       cb?.({ ok: true });
     });
 
     on("leave", ({ roomId } = {}) => {
-      const g = games.get(roomId);
-      if (!g || g.status !== "lobby") return;
-      g.players = g.players.filter((p) => p.id !== uid);
-      if (g.hostId === uid) g.hostId = humanIds(g)[0] || null;
-      if (humanIds(g).length === 0) { clearTimers(g); games.delete(roomId); return; }
-      broadcast(io, roomId);
+      const res = seats.leave(roomId, uid);
+      if (res.changed) broadcast(io, roomId);
     });
 
     if (cfg.allowBots) {
       on("addBot", async ({ roomId, difficulty } = {}, cb) => {
         if (!(await guard(roomId))) return cb?.({ error: "Not allowed" });
-        const g = games.get(roomId);
-        if (!g || g.status !== "lobby") return cb?.({ error: "Not in a lobby" });
-        if (g.hostId !== uid) return cb?.({ error: "Only the host can add bots" });
-        if (g.players.length >= cfg.maxPlayers) return cb?.({ error: "Table is full" });
-        const diff = DIFFICULTIES.includes(difficulty) ? difficulty : "medium";
-        const n = g.players.filter((p) => p.isBot).length;
-        const label = { easy: "Easy", medium: "Med", hard: "Hard" }[diff];
-        g.players.push({
-          id: `bot:${g.nextBotId++}`,
-          name: `${BOT_NAMES[n % BOT_NAMES.length]} (${label})`,
-          isBot: true,
-          difficulty: diff,
-        });
+        const res = seats.addBot(roomId, uid, difficulty);
+        if (res.error) return cb?.(res);
         broadcast(io, roomId);
         cb?.({ ok: true });
       });
 
       on("removeBot", ({ roomId, botId } = {}, cb) => {
-        const g = games.get(roomId);
-        if (!g || g.status !== "lobby" || g.hostId !== uid) return cb?.({ error: "Not allowed" });
-        const idx = botId
-          ? g.players.findIndex((p) => p.id === botId && p.isBot)
-          : g.players.findLastIndex((p) => p.isBot);
-        if (idx === -1) return cb?.({ error: "No bot to remove" });
-        g.players.splice(idx, 1);
+        const res = seats.removeBot(roomId, uid, botId);
+        if (res.error) return cb?.(res);
         broadcast(io, roomId);
         cb?.({ ok: true });
       });
@@ -222,27 +306,16 @@ export function createLobbyGame(cfg) {
 
     on("start", async ({ roomId } = {}, cb) => {
       if (!(await guard(roomId))) return cb?.({ error: "Not allowed" });
-      const g = games.get(roomId);
-      if (!g || g.status !== "lobby") return cb?.({ error: "Cannot start" });
-      if (g.hostId !== uid) return cb?.({ error: "Only the host can start" });
-      if (g.players.length < cfg.minPlayers) return cb?.({ error: `Need at least ${cfg.minPlayers} players` });
-      g.status = "playing";
-      cfg.start(g);
+      const res = seats.start(roomId, uid);
+      if (res.error) return cb?.(res);
       broadcast(io, roomId);
       startTicker(io, roomId);
       cb?.({ ok: true });
     });
 
     on("reset", ({ roomId } = {}) => {
-      const g = games.get(roomId);
-      if (!g || g.hostId !== uid) return;
-      clearTimers(g);
-      const fresh = freshGame(uid);
-      fresh.players = g.players; // keep the table together for a rematch
-      fresh.hostId = g.hostId;
-      fresh.nextBotId = g.nextBotId;
-      cfg.onReset?.(g, fresh); // carry over settings (e.g. chess time control)
-      games.set(roomId, fresh);
+      const res = seats.reset(roomId, uid);
+      if (res.error) return;
       broadcast(io, roomId);
     });
 
@@ -295,19 +368,20 @@ export function createLobbyGame(cfg) {
       const rooms = [...socket.rooms].filter((k) => k.startsWith("room:")).map((k) => k.slice(5));
       setImmediate(async () => {
         for (const roomId of rooms) {
-          const g = games.get(roomId);
-          if (!g) continue;
+          if (!games.has(roomId)) continue;
           const sockets = await io.in(roomKey(roomId)).fetchSockets();
-          const present = new Set(sockets.map((s) => s.user.id));
-          const humans = humanIds(g);
-          if (humans.length === 0 || !humans.some((id) => present.has(id))) {
-            clearTimers(g);
-            games.delete(roomId);
-          }
+          seats.releaseIfEmpty(roomId, new Set(sockets.map((s) => s.user.id)));
         }
       });
     });
   }
 
-  return { register, games, broadcastFor: broadcast, makeCtx };
+  // `seats` and `cfg` are what the plugin adapter consumes: the same rules and
+  // callbacks, with no transport attached. Exposing `cfg` means a game exports
+  // only its instance — the adapter reads minPlayers/events/tick/etc. straight
+  // from the config it was built with, so the two can never drift.
+  //
+  // `broadcastFor`/`makeCtx` close over `io` and are therefore for the LEGACY
+  // path only. A plugin must never receive them; see lobbyGameAdapter.js.
+  return { register, games, seats, cfg, broadcastFor: broadcast, makeCtx };
 }

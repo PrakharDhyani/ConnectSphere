@@ -114,15 +114,27 @@ function makeSocketApi(manifest, ctx) {
           io.to(`user:${userId}`).emit(wireEvent(pluginId, event), payload);
         },
         /**
-         * Every socket currently in the ROOM, so a plugin can send each seated
-         * player their own private state in one pass. Returns the minimum a
-         * plugin needs to address them — never the socket objects themselves,
-         * which would carry `join`, `emit` to arbitrary events, and the whole
-         * server behind `.server`.
+         * Everyone currently in THIS ACTIVITY, so a plugin can send each seated
+         * player their own private state in one pass.
+         *
+         * The activity channel, not the room channel. A plugin's audience is
+         * whoever opened the plugin — someone sitting in chat has not joined
+         * the game and has no hand to be dealt. Reading the room channel
+         * instead was a real bug: activity clients join `act:<id>:<room>` and
+         * need not be in `room:<id>` at all, so UNO's private hands were
+         * addressed to an empty set and simply never arrived.
+         *
+         * Returns the minimum needed to address them — never the socket
+         * objects, which would carry `join`, `emit` to arbitrary events, and
+         * the whole server behind `.server`.
          */
-        async roomMembers() {
-          const sockets = await io.in(roomKey(roomId)).fetchSockets();
-          return sockets.map((s) => ({ userId: s.user?.id, socketId: s.id })).filter((m) => m.userId);
+        async members() {
+          const sockets = await io.in(key).fetchSockets();
+          const seen = new Map();
+          // Deduplicated by user: one person with two tabs is one player, and
+          // a caller sending per-user state should not send it twice.
+          for (const s of sockets) if (s.user?.id) seen.set(s.user.id, { userId: s.user.id, socketId: s.id });
+          return [...seen.values()];
         },
         async participantCount() {
           const sockets = await io.in(key).fetchSockets();
