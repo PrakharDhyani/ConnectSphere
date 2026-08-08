@@ -19,7 +19,6 @@ import RoomRules, { RulesPrompt, useRulesAck } from "@/components/RoomRules.jsx"
 import { CaptionOverlay, CaptionControls } from "@/components/Captions.jsx";
 import VideoTile from "@/components/VideoTile.jsx";
 import BackgroundPicker from "@/components/BackgroundPicker.jsx";
-import PollPanel from "@/components/PollPanel.jsx";
 import GamesHub from "@/components/GamesHub.jsx";
 import VoiceBar from "@/components/VoiceBar.jsx";
 import InviteFriends from "@/components/InviteFriends.jsx";
@@ -248,7 +247,7 @@ export default function RoomPage() {
    * return) because it is a hook — and it tolerates `undefined` while the room
    * loads, resolving to the legacy default set.
    */
-  const { tabs, describe, tabFor } = useRoomActivities(room);
+  const { tabs, overlayActivities, describe, tabFor } = useRoomActivities(room);
 
   /**
    * If the tab you are looking at stops existing — the owner just removed that
@@ -804,8 +803,16 @@ export default function RoomPage() {
           )}
           {call.error && <p className="px-5 py-2 text-sm text-red-400">{call.error}</p>}
 
-          {/* 📊 One live poll per room — everyone sees it, votes update live. */}
-          <PollPanel roomId={roomId} />
+          {/* Overlay activities render INSIDE the room tab rather than owning
+              one — composed into an existing surface instead of replacing it.
+              Driven from the registry like the tabs are, so this page names no
+              plugin: previously `<PollPanel/>` was hardcoded here and mounted
+              even in rooms without polls installed. Harmless while polls were a
+              global socket event; now it would mean joining an activity the
+              room does not have. */}
+          {overlayActivities.map((a) => (
+            <ActivityHost key={a.id} activityId={a.id} roomId={roomId} active mounted />
+          ))}
 
           {/* THE scroll container — the only thing in the room that moves. */}
           <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-4 py-4">

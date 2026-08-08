@@ -403,8 +403,18 @@ Tests: manifest validation, legacy vs new resolution.
 2. Server SDK (socket, room, storage, presence, events) built from declared permissions.
 3. **Migrate in this order**, each behind a parallel-registration flag so old and new run side by
    side until verified:
-   `whiteboard` (cleanest boundary) → `poll` → the four framework games (chess, uno, typing, bingo —
+   ~~`whiteboard`~~ (server done; client still on socket.js) → ~~`poll`~~ ✅ **done, client+server
+   (see PROJECT_NOTES §47)** → the four framework games (chess, uno, typing, bingo —
    near-mechanical) → `draw-guess` → `ludo` → **`smash-karts` last**.
+
+   **The flag is per-plugin and so is the migration.** Enabling a plugin switches the *server* to
+   the host; its *client* must already speak `sdk.socket`, or the two halves desynchronise and the
+   activity dies silently. Whiteboard is the live example: server module done since Phase 2, but
+   `WhiteboardPanel` still imports `socket.js`, so `ACTIVITY_PLUGINS=whiteboard` would break it.
+
+   Poll also forced a real SDK addition: **`sdk.socket.detached()`**, a broadcaster that outlives the
+   request, for plugins that must speak from a timer with no socket in scope. Every remaining
+   timer-based plugin needs it — which is what migrating in size order is for.
 4. Kart's `destroy()` clearing its `setInterval` physics loop is the reference lifecycle test.
 
 *Risk: medium-high — this is where regressions live.* Mitigation: one plugin per commit, parallel

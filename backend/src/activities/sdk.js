@@ -75,6 +75,40 @@ function makeSocketApi(manifest, ctx) {
       const sockets = await io.in(key).fetchSockets();
       return sockets.length;
     },
+
+    /**
+     * A broadcaster that OUTLIVES this request.
+     *
+     * Everything above is scoped to the socket that triggered the current
+     * event, which is correct for the request/response path and useless the
+     * moment a plugin needs to speak later: a poll auto-closing on a timer, a
+     * game advancing a turn clock, Kart's physics tick. Those fire with no
+     * socket in scope.
+     *
+     * Without this the plugin's only options were to capture `io` (breaking
+     * capability isolation — a plugin holding io can address every room on the
+     * server) or to keep the whole sdk alive past its request, which pins the
+     * socket and the room document in memory for as long as the timer runs.
+     *
+     * So: a tiny frozen object closing over the activity key alone. It can
+     * reach this plugin in this room and nothing else, which is the same
+     * boundary as the rest of the socket API — just without an expiry.
+     */
+    detached() {
+      const pluginId = manifest.id;
+      return Object.freeze({
+        broadcast(event, payload) {
+          io.to(key).emit(wireEvent(pluginId, event), payload);
+        },
+        toRoom(event, payload) {
+          io.to(roomKey(roomId)).emit(wireEvent(pluginId, event), payload);
+        },
+        async participantCount() {
+          const sockets = await io.in(key).fetchSockets();
+          return sockets.length;
+        },
+      });
+    },
   };
 }
 

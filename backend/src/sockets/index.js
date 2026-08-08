@@ -69,7 +69,7 @@ export function initSocket(httpServer) {
     registerUnoHandlers(io, socket);
     registerTypingHandlers(io, socket);
     registerBingoHandlers(io, socket);
-    registerPollHandlers(io, socket);
+    if (legacyHandlerEnabled("poll")) registerPollHandlers(io, socket);
     registerCaptionHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {

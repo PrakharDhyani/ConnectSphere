@@ -3316,6 +3316,129 @@ layers the suite cannot see.
 
 ---
 
+## 47. Migration: Polls onto the plugin host (first client+server migration)
+
+**Goal.** Move an existing activity — server *and* client — fully onto the
+plugin system. Sticky Notes proved a new plugin could be built on it; this
+proves an old one can be moved onto it without changing what users see.
+
+Poll is second in the migration order for one reason: **it is the first plugin
+with a timer.** A poll can auto-close after a duration, so its `destroy()` must
+clear a pending `setTimeout`. That is the same failure mode as Kart's
+`setInterval` physics loop at a quarter of the size — a rehearsal for the hard
+one, deliberately scheduled before it.
+
+### The gap the timer exposed: `sdk.socket.detached()`
+
+Every socket capability was scoped to the socket that triggered the current
+event. Correct for request/response, and useless the moment a plugin needs to
+speak *later* — a poll auto-closing, a turn clock expiring, a physics tick. Those
+fire with no socket in scope.
+
+My first draft reached for `sdk.__internal.io`, which does not exist and should
+not: a plugin holding `io` can address every room on the server, which breaks
+capability isolation (guarantee #5). Keeping the whole sdk alive past its request
+is no better — it pins the socket and the room document in memory for as long as
+the timer runs.
+
+So the SDK gained a **detached broadcaster**: a frozen object closing over the
+activity key alone, able to reach this plugin in this room and nothing else — the
+same boundary as the rest of the socket API, without the expiry.
+
+```js
+const wire = sdk.socket.detached();          // captured while the request lives
+poll.timer = setTimeout(() => closePoll(wire, roomId), dur * 1000);
+```
+
+This is platform work every remaining timer-based plugin needs, which is exactly
+what migrating in size order is for.
+
+### Decisions
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Poll state | (a) `sdk.storage` (b) module-level `Map` | **(b)**, the opposite of Sticky Notes. Polls are explicitly ephemeral — "a poll that outlives the hangout has no value". `sdk.storage` writes through to Mongo, so using it would *change* behaviour. A migration moves where code lives; it does not quietly alter what it does |
+| Who may close | creator only → **creator or owner** | the old handler allowed only the creator, which left a room stuck with an open poll if they disconnected. The owner can always end something disruptive in their own room |
+| `maxOptions` config | trusted vs clamped | config may only **tighten** the ceiling, never raise it past the server's hard 6 — a room setting is not a licence to make the server serialize more |
+
+### What the client migration actually removed
+
+`usePoll` lost a **400 ms sleep**. It used to `setTimeout(..., 400)` before
+`poll:sync`, because sync needed room membership and the room join was issued by
+`useRoomChat` on the same `connect` tick — so it raced, and the fix was to guess
+a delay. `sdk.socket.join()` *is* the sync: one access-controlled round trip
+returning current state in its ack. Nothing to race, no number to guess.
+
+It also lost the `p.roomId === roomId` filter on every inbound event, because
+namespaced sockets deliver only this room's activity traffic. The check became
+structural instead of remembered.
+
+### Two bugs caught while migrating
+
+**`room:announce` nearly went missing.** The old `create` emitted it so the room
+got a tap-to-join toast. It is **core**, not plugin traffic — every activity
+emits it (call, board, ludo…) — so dropping it during the rewrite would have
+silently removed "started Polls 📊" for anyone not already on the room tab.
+
+**`PollPanel` mounted unconditionally.** Harmless while polls were a global
+socket event; after the migration it means joining an activity the room may not
+have installed. `overlayActivities` was computed by `buildRoomView` and never
+consumed — so the overlay surface got the same registry-driven treatment the
+tabs did, and RoomPage stopped naming `PollPanel` at all.
+
+### The flag is per-plugin, and so is the migration
+
+`ACTIVITY_PLUGINS` switches the **server** to the host. The **client** must
+already speak the plugin protocol, or the halves desynchronise: the server stops
+listening for the legacy events the client still emits, and the activity dies
+silently. I set `ACTIVITY_PLUGINS=whiteboard,poll` locally and immediately
+reverted to `poll` — whiteboard's server module is done but `WhiteboardPanel`
+still imports `socket.js`, so enabling it would have broken the whiteboard.
+Now documented at the flag itself.
+
+### Verification
+
+- **500 tests / 24 suites green** (was 481 / 23); 19 new.
+- The auto-close test **waits the real 15 seconds**. Jest fake timers were the
+  obvious shortcut and do not work: freezing the clock also freezes socket.io's
+  delivery, so the broadcast never arrives and the test fails for a reason
+  unrelated to the code. A test-only seam to shrink `MIN_DURATION` would be
+  worse — production bent to suit a test.
+- `destroy()` test proves the pending timer is cleared and the poll freed when
+  the room empties. A leak would hold the broadcaster and the poll alive for up
+  to ten minutes, then broadcast into an empty room.
+- **10/10 live checks** against the running dev server: create, live delivery to
+  the other user, vote counting with voter names, retract-on-same-option, late
+  joiner, concurrent-poll refusal, close, and votes rejected after close.
+
+### Interview Q&A
+
+**Q: Why did poll keep a module-level Map when Sticky Notes was told not to?**
+Because they mean different things. Sticky Notes is a shared artefact people
+expect to find later, so it belongs in `sdk.storage` with its debounced
+write-behind. A poll is a moment — the original handler says so explicitly. Using
+storage would have persisted something the product deliberately does not persist,
+which is a behaviour change smuggled inside a refactor. The rule I applied is
+that a migration moves code, and any change in what users experience has to be a
+separate, visible decision.
+
+**Q: Why not just give the plugin `io` for its timer?**
+Because `io` addresses every room on the server. The whole point of building the
+SDK from declared capabilities is that a plugin's reach is bounded by what it
+asked for; handing over `io` to solve a scheduling problem would make that
+boundary decorative. `detached()` keeps the same reach as the plugin's normal
+socket API — this plugin, this room — and only relaxes the *lifetime*, which is
+the single thing the timer actually needed.
+
+**Q: The client migration deleted a 400ms setTimeout. Why does that matter?**
+Because it was a guess standing in for a guarantee. The old sync raced the room
+join, and 400ms was a number that made the race usually come out right — on a
+fast local connection. The SDK replaced it with a round trip whose ack *is* the
+state, so the ordering is enforced rather than hoped for. Deleting a magic
+number is usually a sign the design underneath got more honest.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -3383,14 +3506,20 @@ live activity management (§45) · **Sticky Notes, the first genuinely new plugi
 which failed the guarantee-#1 test and got the architecture fixed first** (§46).
 **481 tests / 23 suites green.**
 
+**Done — Polls migrated, client + server (§47).** First activity moved fully
+onto the host. Added `sdk.socket.detached()` for plugins that must speak after
+their request ends (timers, turn clocks, physics ticks). **500 tests / 24 suites.**
+
 **Next — Activity Platform, Phase 7 + the remaining migrations:**
-- Migrate the rest onto the host, in this order: `poll` → the four framework
-  games (chess/uno/typing/bingo — near-mechanical) → `skribbl` → `ludo` →
-  **`kart` last** (478 bespoke lines running its own `setInterval` physics loop;
-  its `destroy()` clearing that interval is the reference lifecycle test).
-- Migrate the existing panels onto the **client SDK** built in §46 — today only
-  Sticky Notes uses it; every other panel still imports `socket.js` directly, so
-  the whiteboard "migration" remains server-side only.
+- Migrate the rest onto the host: ~~`poll`~~ → the four framework games
+  (chess/uno/typing/bingo — near-mechanical) → `skribbl` → `ludo` → **`kart`
+  last** (478 bespoke lines running its own `setInterval` physics loop; its
+  `destroy()` clearing that interval is the reference lifecycle test, now
+  rehearsed by poll's timer).
+- **Migrate `WhiteboardPanel` onto the client SDK.** Its server module has been
+  done since Phase 2, but the panel still imports `socket.js`, so
+  `ACTIVITY_PLUGINS=whiteboard` would break it. Server and client must migrate
+  together — see §47.
 - Phase 7 marketplace seams: version resolution, dependency graph, plugin state
   behind an interface (an in-process `Map` today — pre-existing, does not survive
   a restart or scale horizontally), manifest signature hook, remote manifests.
@@ -3425,4 +3554,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-07 (Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
+*Last updated: 2026-08-08 (Polls migrated onto the plugin host, client + server — §47. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*

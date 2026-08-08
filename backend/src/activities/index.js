@@ -18,17 +18,31 @@
  * Default is "none": Phase 2 ships dark. The new path is opt-in until it has
  * been exercised, because "the old code still runs by default" is the only
  * rollback that cannot itself fail.
+ *
+ * ── THE FLAG IS PER-PLUGIN, AND SO IS THE MIGRATION ──────────────────────────
+ * Enabling a plugin here switches the SERVER to the host. Its CLIENT must
+ * already speak the plugin protocol (sdk.socket / activity:event) or the two
+ * halves desynchronise: the server stops listening for the legacy events the
+ * client is still emitting, and the activity dies silently with nothing in the
+ * logs — the same failure mode NATIVE_PLUGIN_IDS exists to prevent.
+ *
+ * As of the poll migration: `poll` and `sticky-notes` have migrated clients.
+ * `whiteboard`'s server module is done but WhiteboardPanel still imports
+ * socket.js directly, so turning whiteboard on here WOULD break it. Migrate the
+ * client first, then flip the flag.
  */
 import { registerActivityModule } from "./host.js";
 import { logger } from "../utils/logger.js";
 
 import whiteboardServer from "./whiteboard/server.js";
 import stickyNotesServer from "./sticky-notes/server.js";
+import pollServer from "./poll/server.js";
 
 // pluginId -> server module. Only these can be enabled by the flag.
 const SERVER_MODULES = {
   whiteboard: whiteboardServer,
   "sticky-notes": stickyNotesServer,
+  poll: pollServer,
 };
 
 /**
