@@ -113,6 +113,22 @@ export function createClientSdk({ activityId, roomId, config = {}, user = null, 
         return emitWithAck(socket, "activity:event", { activityId, roomId, event, payload });
       },
 
+      /**
+       * Send without awaiting an ack — for high-rate, best-effort traffic.
+       *
+       * `emit()` arms a 10s timeout per call so a caller that awaits can tell a
+       * dropped connection from a refusal. That is right for a move or a save,
+       * and wrong for a stream: the whiteboard sends ~20 scene updates and ~16
+       * pointer moves a second, which would keep hundreds of timers alive for
+       * results nobody reads. Cursor positions and scene deltas are superseded
+       * by the next one anyway — a lost frame is invisible, a leaked timer is
+       * not.
+       */
+      post(event, payload) {
+        if (destroyed) return;
+        socket.emit("activity:event", { activityId, roomId, event, payload });
+      },
+
       /** Subscribe to one of this plugin's server broadcasts. */
       on(event, fn) {
         const wire = wireEvent(activityId, event);

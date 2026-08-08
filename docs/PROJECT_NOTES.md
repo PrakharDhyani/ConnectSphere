@@ -3753,6 +3753,61 @@ answer to the question a plugin is actually asking.
 
 ---
 
+## 51. Migration: the whiteboard client, and `sdk.socket.post()`
+
+The whiteboard's **server** module has been a plugin since Phase 2. Its
+**panel** was the last piece still speaking raw `whiteboard:*` socket events —
+which is why `ACTIVITY_PLUGINS=whiteboard` would have broken it, and why §47
+had to document "the flag is per-plugin and so is the migration". Both halves
+now speak the same protocol, and the flag is finally safe to turn on for it.
+
+The mapping was direct: `update` / `pointer` / `pointerLeft` / `save` already
+existed on the server module, so the panel lost its `whiteboard:join` round
+trip (the join ack carries the scene) and its manual listener teardown.
+
+### The one thing that needed a new capability: `post()`
+
+`sdk.socket.emit()` returns a promise and arms a **10-second timeout per call**,
+so a caller that awaits can tell a dropped connection from a refusal. Right for
+a move or a save. Wrong for a stream: the whiteboard sends ~20 scene updates and
+~16 pointer moves per second, which would keep *hundreds* of timers alive for
+results nobody reads.
+
+So the client SDK gained `post()` — fire-and-forget, no ack, no timer. The
+distinction is not laziness but semantics:
+
+> Cursor positions and scene deltas are **superseded by the next one**. A lost
+> frame is invisible; a leaked timer is not. A move or a save has no successor,
+> so it must be acknowledged.
+
+Every high-rate plugin from here on wants this, which is why it belongs in the
+SDK rather than in the whiteboard.
+
+### Verification
+
+- **520 tests / 24 suites** still green (no new tests: the whiteboard's server
+  behaviour was already covered by `activities.host.test.js`, and this change is
+  entirely client-side).
+- **6/6 live checks** against the running server with two users: both join, a
+  new board starts empty, a scene update reaches the other user, a live cursor
+  is relayed with identity, an explicit save reports its element count, and —
+  the one that matters — **the scene survives everyone leaving**, proving
+  `destroy()` still flushes to Mongo through the plugin path.
+- The dev server now serves six plugins: `sticky-notes, whiteboard, chess, uno,
+  typing, bingo`.
+
+### Interview Q&A
+
+**Q: Why add `post()` rather than just ignoring the promise `emit()` returns?**
+Because ignoring it does not stop the cost. `emit()` allocates a promise and a
+10s timer per call whether or not anyone awaits them; at 36 messages a second
+that is a few hundred live timers on a busy board, all to resolve values that
+are discarded. The fix had to be at the point where the timer is armed. It also
+makes the intent legible: `post` says "this is a frame in a stream", `emit` says
+"I need to know this landed" — and a reader can tell which one a call site meant.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -3834,14 +3889,18 @@ per-game plugin code. Required splitting seat rules from transport in the
 framework (`lobby.seats`) so both paths share one implementation.
 **520 tests / 24 suites, 16/16 live checks.**
 
+**Done — whiteboard client (§51).** Both halves are now plugins; added
+`sdk.socket.post()` for high-rate fire-and-forget traffic. Six plugins served:
+`sticky-notes, whiteboard, chess, uno, typing, bingo`.
+
 **Next — Activity Platform, Phase 7 + the remaining migrations:**
-- `skribbl` → `ludo` → **`kart` last** (478 bespoke lines running its own
-  `setInterval` physics loop; its `destroy()` clearing that interval is the
-  reference lifecycle test, now rehearsed twice — by poll's timer and by
-  bingo's tick through the adapter).
-- **Migrate `WhiteboardPanel` onto the client SDK.** Its server module has been
-  done since Phase 2, but the panel still imports `socket.js`, so
-  `ACTIVITY_PLUGINS=whiteboard` would break it.
+- `skribbl` → `ludo` → **`kart` last**. These three are the genuinely bespoke
+  ones. Skribbl (311 lines) is not a lobbyGame config: it has 9 socket events
+  and **five interlocking timers** (word choice, turn clock, two hint reveals,
+  round reveal), each closing over `io` — so it needs the `detached()` treatment
+  throughout rather than an adapter. Kart is last and hardest: 478 lines with a
+  `setInterval` physics loop whose `destroy()` is the reference lifecycle test
+  (now rehearsed three times — poll's timer, bingo's tick, and skribbl next).
 - **Migrate `WhiteboardPanel` onto the client SDK.** Its server module has been
   done since Phase 2, but the panel still imports `socket.js`, so
   `ACTIVITY_PLUGINS=whiteboard` would break it. Server and client must migrate
@@ -3880,4 +3939,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-08 (§50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
+*Last updated: 2026-08-08 (§51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*

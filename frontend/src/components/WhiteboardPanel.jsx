@@ -13,12 +13,25 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Excalidraw } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
-import { connectSocket, getSocket } from "@/lib/socket.js";
+import { getSocket } from "@/lib/socket.js";
+import { useActivitySdk } from "@/activities/useActivitySdk.js";
+import { useAuthStore } from "@/stores/auth.store.js";
 
 const CURSOR_COLORS = ["#e03131", "#2f9e44", "#1971c2", "#f08c00", "#ae3ec9", "#0c8599", "#e8590c"];
 const colorFor = (id) => CURSOR_COLORS[[...id].reduce((a, c) => a + c.charCodeAt(0), 0) % CURSOR_COLORS.length];
 
 export default function WhiteboardPanel({ roomId }) {
+  const me = useAuthStore((s) => s.user);
+  /**
+   * The whiteboard's SERVER module has been a plugin since Phase 2; this panel
+   * was the last piece still speaking raw `whiteboard:*` socket events, which
+   * is why `ACTIVITY_PLUGINS=whiteboard` would previously have broken it. Both
+   * halves now speak the same protocol.
+   *
+   * The join ack carries the current scene, so a late joiner is caught up by
+   * the same access-controlled round trip that admits them — no separate fetch.
+   */
+  const { sdk, state: joined } = useActivitySdk("whiteboard", roomId, { user: me });
   const api = useRef(null);
   const suppress = useRef(false); // don't rebroadcast changes we applied from remote
   const collaborators = useRef(new Map());
@@ -42,66 +55,61 @@ export default function WhiteboardPanel({ roomId }) {
     }, 0);
   }, []);
 
+  // The scene arrives with the join ack, not a separate request.
   useEffect(() => {
-    if (!roomId) return;
-    const socket = connectSocket();
+    if (joined?.elements?.length) applyRemote(joined.elements);
+  }, [joined, applyRemote]);
 
-    const onUpdate = ({ elements }) => applyRemote(elements);
-    const onPointer = ({ socketId, name, pointer }) => {
-      if (!pointer) return;
-      collaborators.current.set(socketId, {
-        username: name,
-        pointer,
-        color: { background: colorFor(socketId), stroke: colorFor(socketId) },
-      });
-      api.current?.updateScene({ collaborators: new Map(collaborators.current) });
-    };
-    const onPointerLeft = ({ socketId }) => {
-      collaborators.current.delete(socketId);
-      api.current?.updateScene({ collaborators: new Map(collaborators.current) });
-    };
-
-    socket.on("whiteboard:update", onUpdate);
-    socket.on("whiteboard:pointer", onPointer);
-    socket.on("whiteboard:pointerLeft", onPointerLeft);
-
-    const join = () => {
-      socket.emit("whiteboard:join", roomId, (res) => {
-        if (res?.elements?.length) applyRemote(res.elements);
-      });
-      socket.emit("room:announce", { roomId, activity: "board" }); // notify the room
-    };
-    if (socket.connected) join();
-    else socket.once("connect", join);
+  useEffect(() => {
+    if (!sdk?.socket) return undefined;
+    const offs = [
+      sdk.socket.on("update", ({ elements }) => applyRemote(elements)),
+      sdk.socket.on("pointer", ({ socketId, name, pointer }) => {
+        if (!pointer) return;
+        collaborators.current.set(socketId, {
+          username: name,
+          pointer,
+          color: { background: colorFor(socketId), stroke: colorFor(socketId) },
+        });
+        api.current?.updateScene({ collaborators: new Map(collaborators.current) });
+      }),
+      sdk.socket.on("pointerLeft", ({ socketId }) => {
+        collaborators.current.delete(socketId);
+        api.current?.updateScene({ collaborators: new Map(collaborators.current) });
+      }),
+    ];
+    // `room:announce` is CORE room traffic, not plugin traffic — it drives the
+    // tap-to-join toast for people who are not looking at the board tab. The
+    // legacy id "board" is kept: older clients and the room-view aliases map it
+    // onto the whiteboard manifest.
+    getSocket().emit("room:announce", { roomId, activity: "board" });
 
     const collab = collaborators.current;
     return () => {
-      socket.emit("whiteboard:leave", roomId);
-      socket.off("whiteboard:update", onUpdate);
-      socket.off("whiteboard:pointer", onPointer);
-      socket.off("whiteboard:pointerLeft", onPointerLeft);
+      offs.forEach((off) => off());
       collab.clear();
     };
-  }, [roomId, applyRemote]);
+  }, [sdk, roomId, applyRemote]);
 
   const handleChange = useCallback(() => {
-    if (suppress.current || !api.current) return;
+    if (suppress.current || !api.current || !sdk?.socket) return;
     const now = Date.now();
     if (now - lastSceneSend.current < 50) return; // ~20 updates/sec max
     lastSceneSend.current = now;
     // Include deleted elements so deletions propagate to peers.
     const elements = api.current.getSceneElementsIncludingDeleted?.() || [];
-    getSocket().emit("whiteboard:update", { roomId, elements });
-  }, [roomId]);
+    sdk.socket.post("update", { elements });
+  }, [sdk]);
 
   const handlePointer = useCallback(
     (payload) => {
+      if (!sdk?.socket) return;
       const now = Date.now();
       if (now - lastPointerSend.current < 60) return;
       lastPointerSend.current = now;
-      getSocket().emit("whiteboard:pointer", { roomId, pointer: payload?.pointer });
+      sdk.socket.post("pointer", { pointer: payload?.pointer });
     },
-    [roomId]
+    [sdk]
   );
 
   return (
