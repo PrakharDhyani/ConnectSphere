@@ -3569,6 +3569,77 @@ nobody asked for.
 
 ---
 
+## 49. Groundwork: the SDK gains a deferred private channel (games migration, part 1)
+
+**Goal.** Start migrating the four framework games (chess, uno, typing, bingo).
+Ended up establishing *how* they can be migrated at all, which was the real
+blocker.
+
+### The finding: the games cannot migrate without a decision about `io`
+
+`sockets/lobbyGame.js` is already a plugin framework — the migration plan says
+so (§1.2): games supply pure callbacks and never touch socket.io. So the honest
+migration is **one adapter, not four rewrites**; writing four near-identical
+server modules would duplicate the seat/bot/timer logic the framework exists to
+share, and every future lobby game would pay the same tax.
+
+The obstacle is that the framework's `ctx` — `broadcast`, `notice`, `emit`,
+`endGame` — is built by `makeCtx(io, roomId)`, and **`io` addresses every room
+on the server.** Handing it to a plugin would make guarantee #5 (a plugin cannot
+reach app internals) decorative. I caught myself writing `sdk.socket.__io` twice
+before naming the problem: an invented back door is still a back door.
+
+The resolution: every game callback uses those four methods and nothing else, so
+`ctx` can be **rebuilt on the detached broadcaster**, which reaches this plugin,
+in this room, and nothing else. No new hole; the framework's shared `games` Map
+keeps state identical to the legacy path, so only the transport differs.
+
+### What shipped: `detached()` completed
+
+`sdk.socket.detached()` (added in §47 for poll's auto-close timer) gained the
+two things a seat-based game needs from outside a request:
+
+| Added | Why a request-scoped version cannot do it |
+|---|---|
+| `toUser(userId, event, payload)` | UNO's private hand is dealt by a **bot timer**, not by the player's own request — there is no socket to answer |
+| `roomMembers()` | send each seated player their own private state in one pass; returns `{userId, socketId}` only, never socket objects, which would carry `.server` and arbitrary `emit` |
+
+That is the whole diff. The adapter itself is **not** in this commit.
+
+### Why the adapter was parked rather than shipped
+
+It is half-built. Moves, lobby settings, sync, reactions and `destroy()` are
+done and lint clean — but the **seat lifecycle** (join/leave/start/reset/bots)
+still lives inside the framework's `register()`, which the host bypasses.
+Finishing it means either reimplementing that lifecycle in the adapter — the
+duplication this approach exists to avoid — or refactoring `lobbyGame.js` to
+separate its transport from its seat logic.
+
+That is a real piece of design, not a finishing touch, and the four games work
+correctly today on their legacy handlers. Shipping a half-adapter would have put
+a second, partial code path next to a working one for no user-visible gain.
+**490 tests / 23 suites still green**; the parked work is in the session
+scratchpad.
+
+### Interview Q&A
+
+**Q: You set out to migrate four games and shipped two SDK methods. Is that a failure?**
+It is the phase finding what it was for. The interesting output was not code but
+a decision: that the games can migrate *without* weakening capability isolation,
+and how. The two methods are the part of that answer which stands on its own and
+is needed regardless of when the adapter lands. The alternative — passing `io`
+to plugins — would have shipped all four games this session and quietly voided
+the guarantee the whole architecture is built to keep.
+
+**Q: Why not just finish the adapter?**
+Because the remaining piece is not adapter work, it is a refactor of
+`lobbyGame.js` to split transport from seat management. Doing that badly, at the
+end of a long session, next to four games that currently work, is how you get a
+regression nobody notices until a game night. The parked file loses nothing —
+the hard part (rebuilding `ctx` without `io`) is done and written down.
+
+---
+
 ## Current Status / Next Steps
 
 **Done — `feature/auth` (merged to develop, PR #7):** User model · register · login ·
@@ -3645,11 +3716,14 @@ the activity manager to a 🧩 Plugins header button, and fixed the config-form
 toggle overflow. **490 tests / 23 suites green, 8/8 browser checks.**
 
 **Next — Activity Platform, Phase 7 + the remaining migrations:**
-- Migrate the rest onto the host: ~~`poll`~~ → the four framework games
-  (chess/uno/typing/bingo — near-mechanical) → `skribbl` → `ludo` → **`kart`
-  last** (478 bespoke lines running its own `setInterval` physics loop; its
-  `destroy()` clearing that interval is the reference lifecycle test, now
-  rehearsed by poll's timer).
+- **The four framework games via ONE adapter, not four rewrites** (§49). The
+  hard part is done — `ctx` can be rebuilt on `sdk.socket.detached()` without
+  giving plugins `io`. What remains is splitting transport from seat management
+  in `lobbyGame.js`, because join/leave/start/reset/bots still live inside its
+  `register()`. Partial adapter is in the session scratchpad.
+- Then `skribbl` → `ludo` → **`kart` last** (478 bespoke lines running its own
+  `setInterval` physics loop; its `destroy()` clearing that interval is the
+  reference lifecycle test, now rehearsed by poll's timer).
 - **Migrate `WhiteboardPanel` onto the client SDK.** Its server module has been
   done since Phase 2, but the panel still imports `socket.js`, so
   `ACTIVITY_PLUGINS=whiteboard` would break it. Server and client must migrate

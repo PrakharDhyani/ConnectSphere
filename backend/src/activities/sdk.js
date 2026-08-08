@@ -103,6 +103,27 @@ function makeSocketApi(manifest, ctx) {
         toRoom(event, payload) {
           io.to(roomKey(roomId)).emit(wireEvent(pluginId, event), payload);
         },
+        /**
+         * One user, on all their devices — the deferred counterpart of
+         * `toUser` above. UNO's private hand is dealt by a bot timer, not by
+         * the player's own request, so the request-scoped version cannot reach
+         * them. Same per-user room, same bound plugin namespace; only the
+         * lifetime differs.
+         */
+        toUser(userId, event, payload) {
+          io.to(`user:${userId}`).emit(wireEvent(pluginId, event), payload);
+        },
+        /**
+         * Every socket currently in the ROOM, so a plugin can send each seated
+         * player their own private state in one pass. Returns the minimum a
+         * plugin needs to address them — never the socket objects themselves,
+         * which would carry `join`, `emit` to arbitrary events, and the whole
+         * server behind `.server`.
+         */
+        async roomMembers() {
+          const sockets = await io.in(roomKey(roomId)).fetchSockets();
+          return sockets.map((s) => ({ userId: s.user?.id, socketId: s.id })).filter((m) => m.userId);
+        },
         async participantCount() {
           const sockets = await io.in(key).fetchSockets();
           return sockets.length;
