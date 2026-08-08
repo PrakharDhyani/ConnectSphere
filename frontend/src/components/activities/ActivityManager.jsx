@@ -51,8 +51,23 @@ export default function ActivityManager({ room, onClose }) {
     onError: (err) => setError(err.response?.data?.error?.message || "Could not save activities."),
   });
 
-  const toggle = (id) =>
+  /**
+   * Members can LOOK; only the owner can change.
+   *
+   * The panel used to be owner-only, so a member had no way to see what the
+   * room even has — and anyone opening a room they did not create found no
+   * Plugins button at all, which reads as "the feature is missing" rather than
+   * "this is not yours to change". Read-only is the honest middle.
+   *
+   * This is presentation, not enforcement: PUT /rooms/:id/activities checks
+   * ownership server-side regardless of what this component renders.
+   */
+  const canEdit = Boolean(room.isOwner);
+
+  const toggle = (id) => {
+    if (!canEdit) return;
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  };
 
   const dirty =
     JSON.stringify([...selected].sort()) !==
@@ -76,7 +91,9 @@ export default function ActivityManager({ room, onClose }) {
       </div>
 
       <p className="text-[11px] text-gray-500">
-        Choose what this room can do. Turning something off hides its tab for everyone.
+        {canEdit
+          ? "Choose what this room can do. Turning something off hides its tab for everyone."
+          : "What this room can do. Only the room owner can add or remove activities."}
       </p>
 
       <div className="space-y-3 max-h-[45vh] overflow-y-auto pr-1">
@@ -95,7 +112,10 @@ export default function ActivityManager({ room, onClose }) {
                         type="button"
                         onClick={() => toggle(a.id)}
                         aria-pressed={on}
-                        className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                        disabled={!canEdit}
+                        className={`flex items-center gap-2 flex-1 min-w-0 text-left ${
+                          canEdit ? "" : "cursor-default"
+                        }`}
                       >
                         <span className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${
                           on ? "bg-brand-500 border-brand-500 text-white" : "border-gray-600"
@@ -130,7 +150,7 @@ export default function ActivityManager({ room, onClose }) {
         ))}
       </div>
 
-      {selected.length === 0 && (
+      {selected.length === 0 && canEdit && (
         <p className="text-[11px] text-amber-400/80">
           With nothing selected this becomes a chat-only room.
         </p>
@@ -138,13 +158,23 @@ export default function ActivityManager({ room, onClose }) {
       {error && <p className="text-xs text-red-400">{error}</p>}
 
       <div className="flex items-center gap-2">
-        <Button onClick={() => save.mutate()} loading={save.isPending} className="flex-1">
-          Save{dirty ? " changes" : ""}
-        </Button>
-        {onClose && (
-          <button type="button" onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 px-2">
-            Cancel
-          </button>
+        {!canEdit ? (
+          // No disabled Save for a member: a greyed-out button invites clicking
+          // and then explains nothing. Close is the only action they have.
+          <Button onClick={onClose} variant="secondary" className="flex-1">
+            Close
+          </Button>
+        ) : (
+          <>
+            <Button onClick={() => save.mutate()} loading={save.isPending} className="flex-1">
+              Save{dirty ? " changes" : ""}
+            </Button>
+            {onClose && (
+              <button type="button" onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 px-2">
+                Cancel
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

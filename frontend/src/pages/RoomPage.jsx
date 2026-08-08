@@ -597,19 +597,25 @@ export default function RoomPage() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {/* 🧩 Plugins — the room's activity manager, one click from anywhere
-              in the room. It used to live at the bottom of the sidebar, behind
-              a scroll and a toggle, which is why nobody found it. Owner-only:
-              installing changes the room for everyone. */}
-          {room.isOwner && (
-            <button
-              onClick={() => setManagingActivities(true)}
-              title="Add or remove this room's activities"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium text-gray-300 bg-gray-900/70 border border-white/10 hover:text-white hover:border-brand-500/60 transition-colors"
-            >
-              <span>🧩</span>
-              <span className="hidden sm:inline">Plugins</span>
-            </button>
-          )}
+              in the room. It used to live at the bottom of the sidebar behind a
+              scroll and a toggle, which is why nobody found it.
+
+              Shown to EVERY member, not just the owner. Gating the button on
+              ownership meant a member had no way to see what the room even has,
+              and someone opening a room they did not create found no Plugins
+              button at all and reasonably concluded the feature was missing.
+              Editing is still owner-only — enforced on the server and reflected
+              in the panel — but looking is not a privilege. */}
+          <button
+            onClick={() => setManagingActivities(true)}
+            title={room.isOwner ? "Add or remove this room's activities" : "See this room's activities"}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium text-gray-300 bg-gray-900/70 border border-white/10 hover:text-white hover:border-brand-500/60 transition-colors"
+          >
+            <span>🧩</span>
+            {/* Always render the word: on a narrow screen an unlabelled emoji
+                is not a discoverable button. */}
+            <span>Plugins</span>
+          </button>
           <Link to={me?.isGuest ? "/" : "/dashboard"} className="text-sm text-gray-400 hover:text-brand-400 hidden sm:block">
             {me?.isGuest ? "← Home" : "← Dash"}
           </Link>
@@ -619,7 +625,7 @@ export default function RoomPage() {
       {/* Activity manager, as a modal rather than a sidebar panel: it is a
           room-wide decision, so it deserves the foreground and enough width to
           show every activity's settings without squeezing them into 260px. */}
-      {managingActivities && room.isOwner && (
+      {managingActivities && (
         <div
           className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-6"
           onClick={() => setManagingActivities(false)}
