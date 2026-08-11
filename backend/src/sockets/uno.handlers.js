@@ -232,12 +232,10 @@ const uno = createLobbyGame({
   },
 });
 
-export function registerUnoHandlers(io, socket) {
-  uno.register(io, socket);
-}
-
-// Exported so the plugin adapter can host this game through the activity
-// host (activities/lobbyGameAdapter.js). The legacy registration above stays
-// until the flag flips, so both paths serve the same instance and the same
-// table — never two copies of the game.
+/**
+ * The game DEFINITION, hosted by the activity host through
+ * `activities/lobbyGameAdapter.js`. The legacy `registerUnoHandlers` is gone
+ * (§56) — every activity is a plugin now, so its socket registration was dead
+ * code. This file is the rules, and only the rules.
+ */
 export { uno };

@@ -6,9 +6,8 @@
  * refused, that a flood is dropped, that one plugin cannot hear another. A unit
  * test of the dispatcher would prove none of those.
  *
- * The whiteboard plugin is enabled explicitly via ACTIVITY_PLUGINS so this file
- * exercises the NEW path regardless of the ambient default (which is "none" —
- * Phase 2 ships dark).
+ * Every plugin is served unconditionally since §56 removed the migration flag,
+ * so this file no longer has to opt itself in.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, jest } from "@jest/globals";
 import http from "http";
@@ -16,14 +15,11 @@ import request from "supertest";
 import { io as ioClient } from "socket.io-client";
 import { startHarness } from "./helpers/harness.js";
 
-import { enabledPluginIds, legacyHandlerEnabled, SERVER_MODULES } from "../src/activities/index.js";
+import { enabledPluginIds, SERVER_MODULES } from "../src/activities/index.js";
 import { createServerSdk, activityKey, wireEvent } from "../src/activities/sdk.js";
 import { getRoomBus, __resetBuses, BUS_EVENTS } from "../src/activities/eventBus.js";
 import { registerActivityModule, __resetModules, getRegisteredModuleIds } from "../src/activities/host.js";
 import { getPlugin } from "../../shared/activities/index.js";
-
-// Serve whiteboard through the new host for this file.
-process.env.ACTIVITY_PLUGINS = "whiteboard";
 
 const h = startHarness();
 
@@ -87,51 +83,31 @@ const join = (s, activityId, roomId) => ack(s, "activity:join", { activityId, ro
 const send = (s, activityId, roomId, event, payload) =>
   ack(s, "activity:event", { activityId, roomId, event, payload });
 
-describe("migration flag", () => {
+describe("server module registration", () => {
   /**
-   * The flag governs MIGRATED plugins — ones with a legacy handler to fall back
-   * to. Native plugins (born after the plugin system) have no fallback, so
-   * "off" would mean dead rather than legacy, and they are always served.
+   * The `ACTIVITY_PLUGINS` flag is gone (§56).
+   *
+   * It was a per-plugin rollback to the `sockets/*.handlers.js` registrations,
+   * and those no longer exist — so "off" would have meant the activity was
+   * silently dead rather than served by the old path. What replaced a suite of
+   * flag-parsing tests is the single invariant that now matters: every plugin
+   * with a server module is served, unconditionally.
    */
-  const NATIVE = ["sticky-notes"];
-  const migrated = (ids) => ids.filter((id) => !NATIVE.includes(id));
+  it("serves every plugin that has a server module", () => {
+    expect(enabledPluginIds().sort()).toEqual(Object.keys(SERVER_MODULES).sort());
+  });
 
-  it("defaults to none for migrated plugins, so Phase 2 ships dark", () => {
-    expect(migrated(enabledPluginIds("none"))).toEqual([]);
-    expect(migrated(enabledPluginIds(""))).toEqual([]);
-    // `undefined` falls through to process.env.ACTIVITY_PLUGINS, which THIS
-    // FILE sets to "whiteboard" at import time — so assert the unset default
-    // by clearing the env rather than passing undefined and reading the
-    // suite's own override back.
-    const saved = process.env.ACTIVITY_PLUGINS;
-    delete process.env.ACTIVITY_PLUGINS;
-    try {
-      expect(migrated(enabledPluginIds())).toEqual([]);
-    } finally {
-      process.env.ACTIVITY_PLUGINS = saved;
+  it("serves all nine, including the ones that used to be flag-gated", () => {
+    const ids = enabledPluginIds();
+    for (const id of ["whiteboard", "sticky-notes", "skribbl", "ludo", "kart", "chess", "uno", "typing", "bingo"]) {
+      expect(ids).toContain(id);
     }
   });
 
-  it("serves a native plugin regardless of the flag", () => {
-    // Sticky Notes has no sockets/*.handlers.js. If the flag could switch it
-    // off, the tab would render and silently never sync — a failure with
-    // nothing in the logs, which is worse than not shipping it.
-    for (const raw of ["none", "", "whiteboard", "all"]) {
-      expect(enabledPluginIds(raw)).toContain("sticky-notes");
-    }
-  });
-
-  it("parses a list, 'all', and ignores unknown ids", () => {
-    expect(migrated(enabledPluginIds("whiteboard"))).toEqual(["whiteboard"]);
-    expect(enabledPluginIds("all").sort()).toEqual(Object.keys(SERVER_MODULES).sort());
-    // A typo must not silently mean "old handler still running" without a warning.
-    expect(migrated(enabledPluginIds("whiteboard, nonsense"))).toEqual(["whiteboard"]);
-  });
-
-  it("turns the legacy handler off exactly when the plugin is served", () => {
-    expect(legacyHandlerEnabled("whiteboard", "none")).toBe(true);
-    expect(legacyHandlerEnabled("whiteboard", "whiteboard")).toBe(false);
-    // Both registered would double-broadcast every stroke.
+  it("takes no argument — there is no longer anything to configure", () => {
+    // Guards against a caller passing a stale flag value and quietly getting
+    // the full list back while believing they scoped it.
+    expect(enabledPluginIds.length).toBe(0);
   });
 
   it("registered the whiteboard module for this suite", () => {
@@ -167,25 +143,50 @@ describe("host authorization", () => {
   /**
    * A plugin with a manifest but NO registered server module must be refused.
    *
-   * Regression: the host used to accept these. Every plugin is "installed" in a
-   * legacy room (absence means everything), so `activity:join` for e.g. ludo
+   * Regression the host used to have: every plugin is "installed" in a legacy
+   * room (absence means everything), so `activity:join` for an unserved plugin
    * returned {ok:true, state:null} and put the socket in the activity room —
-   * while the real ludo handler was the legacy one. Harmless in isolation,
-   * but it is the first half of a double-broadcast bug, and it made the
-   * migration flag look like it had not taken effect.
+   * a lie to the client, and the first half of a double-broadcast bug.
    *
-   * Missed by the rest of this suite because it always runs with the flag ON.
-   * Found by driving the live server with ACTIVITY_PLUGINS=none.
+   * Originally written against `ludo`, which had a manifest and no server
+   * module. Ludo is a plugin now (§53) and every manifest in the build has a
+   * module (§54), so the case is reproduced with a CLIENT-ONLY manifest —
+   * still the real shape of the bug, and the shape a marketplace will produce
+   * routinely: a manifest this server does not implement.
    */
-  it("refuses a plugin that has no server module (flag off for it)", async () => {
+  it("refuses a plugin that has a manifest but no server module", async () => {
     const owner = await reg("Owner");
     const room = await createRoom(owner.token);
     const s = await connect(owner.token);
-    // ludo has a manifest and is "installed" in every legacy room, but is not
-    // migrated — the legacy handler owns it.
-    expect(getPlugin("ludo")).not.toBeNull();
-    expect(getRegisteredModuleIds()).not.toContain("ludo");
-    expect((await join(s, "ludo", room.id)).error).toBeTruthy();
+
+    const registry = await import("../../shared/activities/registry.js");
+    registry.registerPlugin({
+      id: "client-only-demo",
+      version: "1.0.0",
+      name: "Client Only",
+      description: "A manifest this server does not implement.",
+      icon: "👻",
+      category: "productivity",
+      surface: "tab",
+      // `room:read` is mandatory for any rendered surface — the validator
+      // rejects the manifest without it.
+      permissions: ["room:read", "socket:namespaced"],
+    });
+    try {
+      expect(getPlugin("client-only-demo")).not.toBeNull();
+      expect(getRegisteredModuleIds()).not.toContain("client-only-demo");
+      expect((await join(s, "client-only-demo", room.id)).error).toBeTruthy();
+    } finally {
+      /**
+       * Remove ONLY the synthetic plugin.
+       *
+       * `__resetRegistry()` + `registerBuiltInActivities()` looks like the
+       * tidier undo and is a trap: `registerBuiltInActivities` short-circuits
+       * on its own `registered` flag, so the re-register is a no-op and every
+       * later test in this file would run against an EMPTY catalogue.
+       */
+      registry.__unregisterPlugin?.("client-only-demo");
+    }
   });
 
   it("refuses a malformed or missing roomId", async () => {

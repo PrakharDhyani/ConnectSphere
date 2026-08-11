@@ -27,10 +27,6 @@ import { getPlugin } from "../../shared/activities/index.js";
 import { getRegisteredModuleIds } from "../src/activities/host.js";
 import { enabledPluginIds } from "../src/activities/index.js";
 
-// Deliberately NOT set to "sticky-notes": a native plugin must be served even
-// with the flag at its default, and this suite is where that is proven.
-process.env.ACTIVITY_PLUGINS = "none";
-
 const h = startHarness();
 
 let server, ioServer, port;
@@ -137,10 +133,12 @@ async function twoInARoom() {
 }
 
 describe("registration", () => {
-  it("is served even though the flag is 'none'", () => {
-    // The flag is a migration rollback. Sticky Notes has no legacy handler, so
-    // "off" would mean silently dead rather than "the old path runs".
-    expect(enabledPluginIds("none")).toContain(ID);
+  it("is served by the host", () => {
+    // This used to assert it survived `ACTIVITY_PLUGINS=none`, because a plugin
+    // with no legacy handler would otherwise have been silently dead. §56
+    // removed the flag for exactly that reason — once nothing had a legacy
+    // handler, every plugin was in Sticky Notes' position.
+    expect(enabledPluginIds()).toContain(ID);
     expect(getRegisteredModuleIds()).toContain(ID);
   });
 

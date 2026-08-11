@@ -556,32 +556,21 @@ describe("call presence + ring", () => {
   });
 });
 
-describe("whiteboard over sockets", () => {
-  it("syncs an update to another viewer and rejects non-members", async () => {
-    const owner = await reg("WbOwner");
-    const room = await createRoom(owner.token);
-    const member = await reg("WbMember");
-    await request(h.app).post("/api/rooms/join").set("Authorization", `Bearer ${member.token}`).send({ code: room.code });
-
-    const s1 = await connect(owner.token);
-    const s2 = await connect(member.token);
-    await ack(s1, "room:join", room.id);
-    await ack(s2, "room:join", room.id);
-    await ack(s1, "whiteboard:join", room.id);
-    await ack(s2, "whiteboard:join", room.id);
-
-    const got = once(s2, "whiteboard:update");
-    s1.emit("whiteboard:update", { roomId: room.id, elements: [{ id: "r1", type: "rectangle", version: 1 }] });
-    const update = await got;
-    expect(update.elements).toHaveLength(1);
-
-    // non-member is refused
-    const stranger = await reg("WbStranger");
-    const s3 = await connect(stranger.token);
-    const res = await ack(s3, "whiteboard:join", room.id);
-    expect(res.error).toBeTruthy();
-  });
-});
+/**
+ * The "whiteboard over sockets" suite that lived here is gone (§56).
+ *
+ * It drove the legacy `whiteboard:*` events from
+ * `sockets/whiteboard.handlers.js`, which has been deleted — the whiteboard is
+ * a plugin and speaks `activity:whiteboard:*`. Both of its assertions (an
+ * update reaches another viewer; a non-member is refused) are covered by the
+ * "whiteboard over sockets" suite in `activities.host.test.js`, against the
+ * path the client actually uses.
+ *
+ * Worth noting how this one failed once the handler was deleted: it did not
+ * error, it HUNG for the full 30s timeout, because the test awaited an ack from
+ * an event nobody was listening for. A deleted socket handler has no stack
+ * trace — the symptom is silence.
+ */
 
 describe("polls over sockets", () => {
   it("runs a full create â†’ vote â†’ retract â†’ close cycle", async () => {
@@ -665,30 +654,12 @@ describe("caption relay over sockets", () => {
   });
 });
 
-describe("game lobby over sockets", () => {
-  it("only starts once all players are ready (2+)", async () => {
-    const owner = await reg("GOwner");
-    const room = await createRoom(owner.token);
-    const member = await reg("GMember");
-    await request(h.app).post("/api/rooms/join").set("Authorization", `Bearer ${member.token}`).send({ code: room.code });
-
-    const s1 = await connect(owner.token);
-    const s2 = await connect(member.token);
-    await ack(s1, "room:join", room.id);
-    await ack(s2, "room:join", room.id);
-    s1.emit("game:join", { roomId: room.id });
-    s2.emit("game:join", { roomId: room.id });
-    await new Promise((r) => setTimeout(r, 150));
-
-    // not ready â†’ start blocked
-    let res = await ack(s1, "game:start", { roomId: room.id, rounds: 1 });
-    expect(res.error).toBeTruthy();
-
-    // both ready â†’ start ok
-    s1.emit("game:ready", { roomId: room.id, ready: true });
-    s2.emit("game:ready", { roomId: room.id, ready: true });
-    await new Promise((r) => setTimeout(r, 150));
-    res = await ack(s1, "game:start", { roomId: room.id, rounds: 1 });
-    expect(res.ok).toBe(true);
-  });
-});
+/**
+ * The "game lobby over sockets" suite that lived here is gone (§56).
+ *
+ * It drove the legacy `game:*` events from `sockets/game.handlers.js`, which
+ * has been deleted — draw-guess is a plugin (§52) and speaks
+ * `activity:skribbl:*`. Its one assertion (a game only starts once 2+ players
+ * are ready) is covered by `activities.skribbl.test.js`, which tests the same
+ * rule against the path the client actually uses.
+ */

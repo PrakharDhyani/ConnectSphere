@@ -34,10 +34,6 @@ import { __games } from "../src/activities/skribbl/server.js";
 
 const ID = "skribbl";
 
-// This plugin IS a migration — it has a legacy handler to fall back to — so
-// unlike sticky-notes it must be named explicitly for the host to serve it.
-process.env.ACTIVITY_PLUGINS = ID;
-
 const h = startHarness();
 
 let server, ioServer, port;
@@ -168,8 +164,8 @@ async function readyBoth({ room, a, b }) {
 }
 
 describe("registration", () => {
-  it("is served when the flag names it", () => {
-    expect(enabledPluginIds(ID)).toContain(ID);
+  it("is served by the host", () => {
+    expect(enabledPluginIds()).toContain(ID);
     expect(getRegisteredModuleIds()).toContain(ID);
   });
 
@@ -180,11 +176,9 @@ describe("registration", () => {
     expect(getPlugin("draw-guess")).toBeNull();
   });
 
-  it("falls back to the legacy handler when the flag omits it", () => {
-    // Unlike a native plugin, this one HAS a legacy handler — so "off" must
-    // mean "the old path runs", not "silently dead".
-    expect(enabledPluginIds("none")).not.toContain(ID);
-  });
+  // The "falls back to the legacy handler" test that lived here is gone with
+  // the flag and game.handlers.js itself (§56): there is nothing to fall back
+  // to, which is exactly why the flag had to go.
 });
 
 describe("lobby", () => {

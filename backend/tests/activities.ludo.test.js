@@ -33,10 +33,6 @@ import { __games } from "../src/activities/ludo/server.js";
 
 const ID = "ludo";
 
-// A migration, not a native plugin — it has a legacy handler to fall back to,
-// so the host only serves it when the flag names it.
-process.env.ACTIVITY_PLUGINS = ID;
-
 const h = startHarness();
 
 let server, ioServer, port;
@@ -177,11 +173,11 @@ async function twoInARoom(activities) {
 }
 
 describe("registration", () => {
-  it("is served when the flag names it, and falls back when it does not", () => {
-    expect(enabledPluginIds(ID)).toContain(ID);
+  it("is served by the host", () => {
+    // The "falls back when the flag omits it" half of this test went with
+    // ludo.handlers.js in §56 — there is no second path left.
+    expect(enabledPluginIds()).toContain(ID);
     expect(getRegisteredModuleIds()).toContain(ID);
-    // It HAS a legacy handler, so "off" means the old path runs — not dead.
-    expect(enabledPluginIds("none")).not.toContain(ID);
   });
 
   it("caps seats at four, because the board has four colours", () => {

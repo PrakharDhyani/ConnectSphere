@@ -9,27 +9,20 @@
  *   2. two lines here (import + register)
  * Nothing else. Not sockets/index.js, not the host, not RoomPage.
  *
- * ── MIGRATION FLAG ───────────────────────────────────────────────────────────
- * ACTIVITY_PLUGINS is a comma-separated list of plugin ids to serve through the
- * new host (or "all"/"none"). Anything NOT listed keeps its original
- * sockets/*.handlers.js registration, so old and new run side by side and a
- * migration can be reverted with an env var instead of a deploy.
+ * ── THE MIGRATION FLAG IS GONE (§56) ─────────────────────────────────────────
+ * `ACTIVITY_PLUGINS` was a per-plugin rollback: anything not listed kept its
+ * original `sockets/*.handlers.js` registration, so old and new ran side by
+ * side and a migration reverted with an env var instead of a deploy. It did
+ * exactly that job through eight migrations.
  *
- * Default is "none": Phase 2 ships dark. The new path is opt-in until it has
- * been exercised, because "the old code still runs by default" is the only
- * rollback that cannot itself fail.
+ * It is gone because the thing it fell back TO is gone. With every activity a
+ * plugin (§54), "off" no longer meant "run the old handler" — it meant the
+ * activity was silently dead, which is the precise failure NATIVE_PLUGIN_IDS
+ * was invented to prevent. A rollback switch whose fallback no longer exists is
+ * not a safety feature; it is a loaded gun pointed at production.
  *
- * ── THE FLAG IS PER-PLUGIN, AND SO IS THE MIGRATION ──────────────────────────
- * Enabling a plugin here switches the SERVER to the host. Its CLIENT must
- * already speak the plugin protocol (sdk.socket / activity:event) or the two
- * halves desynchronise: the server stops listening for the legacy events the
- * client is still emitting, and the activity dies silently with nothing in the
- * logs — the same failure mode NATIVE_PLUGIN_IDS exists to prevent.
- *
- * As of the poll migration: `poll` and `sticky-notes` have migrated clients.
- * `whiteboard`'s server module is done but WhiteboardPanel still imports
- * socket.js directly, so turning whiteboard on here WOULD break it. Migrate the
- * client first, then flip the flag.
+ * Every server module is therefore served unconditionally. Rollback is now what
+ * it is for the rest of the codebase: deploy the previous commit.
  */
 import { registerActivityModule } from "./host.js";
 import { logger } from "../utils/logger.js";
@@ -41,7 +34,7 @@ import ludoServer from "./ludo/server.js";
 import kartServer from "./kart/server.js";
 import { chessServer, unoServer, typingServer, bingoServer } from "./framework-games/server.js";
 
-// pluginId -> server module. Only these can be enabled by the flag.
+// pluginId -> server module. Every entry is served; see the header.
 const SERVER_MODULES = {
   whiteboard: whiteboardServer,
   "sticky-notes": stickyNotesServer,
@@ -64,60 +57,21 @@ const SERVER_MODULES = {
   bingo: bingoServer,
 };
 
-/**
- * Plugins that exist ONLY as plugins — no sockets/*.handlers.js to fall back to.
- *
- * The flag is a MIGRATION rollback: turning a plugin off means "run the old
- * handler instead". A plugin born after the plugin system has no old handler,
- * so "off" would not mean legacy behaviour, it would mean the activity is
- * silently dead — a tab that renders and never syncs, with nothing in the logs.
- *
- * These are therefore always served. The flag still governs everything being
- * migrated FROM something, which is the only case it was built for.
- */
-const NATIVE_PLUGIN_IDS = Object.freeze(["sticky-notes"]);
-
-/** Which plugins the new host should serve, parsed from the env flag. */
-export function enabledPluginIds(raw = process.env.ACTIVITY_PLUGINS) {
-  const value = String(raw ?? "none").trim().toLowerCase();
-  // Native plugins are not opt-in: there is nothing else that could serve them.
-  const native = NATIVE_PLUGIN_IDS.filter((id) => SERVER_MODULES[id]);
-  const withNative = (ids) => [...new Set([...native, ...ids])];
-
-  if (value === "none" || value === "") return withNative([]);
-  if (value === "all") return withNative(Object.keys(SERVER_MODULES));
-  return withNative(
-    value
-      .split(",")
-      .map((s) => s.trim())
-      .filter((id) => {
-        if (!id) return false;
-        if (!SERVER_MODULES[id]) {
-          // Loud, because a typo here silently means "the old handler is still
-          // running" — which looks exactly like success.
-          logger.warn(`ACTIVITY_PLUGINS names "${id}", which has no server module — ignoring`);
-          return false;
-        }
-        return true;
-      })
-  );
+/** Every plugin with a server module — which, since §54, is every plugin. */
+export function enabledPluginIds() {
+  return Object.keys(SERVER_MODULES);
 }
 
 let registered = null;
 
-/** Register the enabled modules with the host. Idempotent. */
-export function registerActivityServerModules(raw) {
+/** Register every server module with the host. Idempotent. */
+export function registerActivityServerModules() {
   if (registered) return registered;
-  const ids = enabledPluginIds(raw);
+  const ids = enabledPluginIds();
   for (const id of ids) registerActivityModule(id, SERVER_MODULES[id]);
   registered = ids;
   if (ids.length) logger.info(`✅ activity host serving: ${ids.join(", ")}`);
   return ids;
-}
-
-/** True when the ORIGINAL handler for this plugin should still be registered. */
-export function legacyHandlerEnabled(pluginId, raw) {
-  return !enabledPluginIds(raw).includes(pluginId);
 }
 
 export function __resetRegistration() {

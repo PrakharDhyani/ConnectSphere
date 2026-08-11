@@ -205,12 +205,13 @@ const chess = createLobbyGame({
   },
 });
 
-export function registerChessHandlers(io, socket) {
-  chess.register(io, socket);
-}
-
-// Exported so the plugin adapter can host this game through the activity
-// host (activities/lobbyGameAdapter.js). The legacy registration above stays
-// until the flag flips, so both paths serve the same instance and the same
-// table — never two copies of the game.
+/**
+ * The game DEFINITION, hosted by the activity host through
+ * `activities/lobbyGameAdapter.js`.
+ *
+ * The legacy `registerChessHandlers` that used to live here is gone (§56):
+ * every activity is a plugin now, so the socket registration it performed is
+ * dead code. This file is no longer a "handler" file at all — it is the rules,
+ * and only the rules. It keeps its name so the diff stays reviewable.
+ */
 export { chess };

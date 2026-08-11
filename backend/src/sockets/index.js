@@ -15,18 +15,11 @@ import { logger } from "../utils/logger.js";
 import { authenticateSocket } from "./auth.js";
 import { registerChatHandlers } from "./chat.handlers.js";
 import { registerMediaHandlers } from "./media.handlers.js";
-import { registerWhiteboardHandlers } from "./whiteboard.handlers.js";
-import { registerGameHandlers } from "./game.handlers.js";
-import { registerLudoHandlers } from "./ludo.handlers.js";
-import { registerKartHandlers } from "./kart.handlers.js";
-import { registerChessHandlers } from "./chess.handlers.js";
-import { registerUnoHandlers } from "./uno.handlers.js";
-import { registerTypingHandlers } from "./typing.handlers.js";
-import { registerBingoHandlers } from "./bingo.handlers.js";
 import { registerPollHandlers } from "./poll.handlers.js";
 import { registerCaptionHandlers } from "./caption.handlers.js";
+import { registerLeaderboardHandlers } from "./leaderboard.handlers.js";
 import { registerActivityHost } from "../activities/host.js";
-import { registerActivityServerModules, legacyHandlerEnabled } from "../activities/index.js";
+import { registerActivityServerModules } from "../activities/index.js";
 
 let io;
 
@@ -44,9 +37,9 @@ export function initSocket(httpServer) {
   // Gate every connection on a valid access token (see auth.js).
   io.use(authenticateSocket);
 
-  // Activity plugins served through the new host (ACTIVITY_PLUGINS env flag).
-  // Anything not listed keeps its original handler below, so the two paths can
-  // run side by side and a migration reverts with an env var, not a deploy.
+  // Every activity is a plugin now (Phase 2 completed in §54), so this serves
+  // all of them unconditionally. The parallel-registration flag it used to
+  // consult is gone — see §56.
   registerActivityServerModules();
 
   io.on("connection", (socket) => {
@@ -56,24 +49,21 @@ export function initSocket(httpServer) {
     socket.join(`user:${socket.user.id}`);
     registerChatHandlers(io, socket);
     registerMediaHandlers(io, socket);
-    // One dispatcher for every migrated plugin — this call does not grow as
-    // plugins are added, which is the whole point.
+    /**
+     * ONE dispatcher for every activity. This call does not grow as plugins are
+     * added — which was the entire point of the platform, and is now literally
+     * true: the twelve `registerXHandlers` lines that used to sit here are gone.
+     */
     registerActivityHost(io, socket);
-    // Legacy handlers, skipped once their plugin is served by the host.
-    // Registering both would double-broadcast every event.
-    if (legacyHandlerEnabled("whiteboard")) registerWhiteboardHandlers(io, socket);
-    registerGameHandlers(io, socket);
-    registerLudoHandlers(io, socket);
-    registerKartHandlers(io, socket);
-    if (legacyHandlerEnabled("chess")) registerChessHandlers(io, socket);
-    if (legacyHandlerEnabled("uno")) registerUnoHandlers(io, socket);
-    if (legacyHandlerEnabled("typing")) registerTypingHandlers(io, socket);
-    if (legacyHandlerEnabled("bingo")) registerBingoHandlers(io, socket);
     // Polls are CORE, not a plugin — always registered. See the note in
     // shared/activities/index.js on why polls came back out of the plugin
     // system: a room without polls is a downgrade, not a configuration.
     registerPollHandlers(io, socket);
     registerCaptionHandlers(io, socket);
+    // Global (not per-room) leaderboards. Core for the same reason polls are:
+    // the plugin host would refuse this to anyone whose room has not installed
+    // the typing activity, which is wrong for a server-wide scoreboard.
+    registerLeaderboardHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {
       logger.info(`Socket disconnected: ${socket.id} — reason: ${reason}`);

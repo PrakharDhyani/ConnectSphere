@@ -133,23 +133,14 @@ const typing = createLobbyGame({
   },
 });
 
-export function registerTypingHandlers(io, socket) {
-  typing.register(io, socket);
-
-  // Global top-10 speed records (from the 60s timed mode). Public to any
-  // authenticated socket — it's a leaderboard, not a secret.
-  socket.on("typing:leaderboard", async (_payload, cb) => {
-    try {
-      const top = await TypingRecord.topTen();
-      cb?.({ ok: true, top });
-    } catch {
-      cb?.({ error: "Leaderboard unavailable" });
-    }
-  });
-}
-
-// Exported so the plugin adapter can host this game through the activity
-// host (activities/lobbyGameAdapter.js). The legacy registration above stays
-// until the flag flips, so both paths serve the same instance and the same
-// table — never two copies of the game.
+/**
+ * The game DEFINITION, hosted by the activity host through
+ * `activities/lobbyGameAdapter.js`.
+ *
+ * `registerTypingHandlers` is gone (§56). It did two things: register the game
+ * on sockets — now the host's job — and serve `typing:leaderboard`, which is
+ * NOT per-room and therefore moved to `leaderboard.handlers.js` as core rather
+ * than into the plugin. Deleting it wholesale would have silently broken the
+ * records panel, which is the trap this cleanup had to avoid.
+ */
 export { typing };

@@ -30,8 +30,6 @@ import { __games } from "../src/activities/kart/server.js";
 
 const ID = "kart";
 
-process.env.ACTIVITY_PLUGINS = ID;
-
 const h = startHarness();
 
 let server, ioServer, port;
@@ -163,15 +161,15 @@ async function startAndWait(ctx) {
 }
 
 describe("registration", () => {
-  it("is served when the flag names it, and falls back when it does not", () => {
-    expect(enabledPluginIds(ID)).toContain(ID);
+  it("is served by the host", () => {
+    expect(enabledPluginIds()).toContain(ID);
     expect(getRegisteredModuleIds()).toContain(ID);
-    expect(enabledPluginIds("none")).not.toContain(ID);
   });
 
-  it("completes the migration — every plugin with a server module is a plugin", () => {
-    // The point of the whole phase: `all` now genuinely means all of them.
-    expect(enabledPluginIds("all")).toEqual(
+  it("completes the migration — every activity is a plugin", () => {
+    // The point of the whole phase, and since §56 there is no flag to qualify
+    // it: this IS the list, unconditionally.
+    expect(enabledPluginIds()).toEqual(
       expect.arrayContaining(["whiteboard", "sticky-notes", "chess", "uno", "typing", "bingo", "skribbl", "ludo", "kart"])
     );
   });

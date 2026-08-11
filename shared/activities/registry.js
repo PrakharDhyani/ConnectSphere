@@ -137,3 +137,16 @@ export function validateDependencies() {
 export function __resetRegistry() {
   plugins.clear();
 }
+
+/**
+ * Test-only: drop ONE plugin, leaving the rest of the catalogue intact.
+ *
+ * `__resetRegistry()` is the blunt instrument, and it has a trap — the built-in
+ * registration short-circuits on its own `registered` flag, so clearing the map
+ * and calling `registerBuiltInActivities()` again is a no-op and leaves an
+ * EMPTY catalogue for everything that follows. A test that only needs to add a
+ * synthetic manifest should remove exactly that one instead.
+ */
+export function __unregisterPlugin(id) {
+  return plugins.delete(id);
+}

@@ -3923,11 +3923,15 @@ one VM, mediasoup pins to a single node), and it would be untestable with no
 second process. The seam is what the phase owed and the seam stands.
 **608 tests / 28 suites green.**
 
-**Next — cleanup and the deferred backlog:**
-- **Retire the legacy handlers.** Every game now has a plugin, so the
-  `sockets/*.handlers.js` files exist only as the flag's rollback path. Once the
-  plugins have run in production for a while, deleting them (and the flag) is
-  the last cleanup — it would remove roughly 2,000 lines.
+**Done — legacy handlers and the migration flag deleted (§56).** ~1,550 net
+lines gone; `sockets/index.js` names no game at all. Surfaced a live bug on the
+way: skribbl/ludo/kart were registering their legacy handler AND their plugin
+(no `legacyHandlerEnabled` guard), so each room held two independent game
+instances. `typing:leaderboard` was rescued out of `registerTypingHandlers` into
+core `leaderboard.handlers.js` — it is global, not per-room, so it could not
+become a plugin event. **604 tests / 28 suites green.**
+
+**Next — the deferred backlog:**
 - **Manual browser pass.** Three migrations (§52–54) are verified by socket-level
   tests only. The 3D arena's pause-on-hidden in particular is a battery fix you
   can only really confirm by watching it.
@@ -4323,6 +4327,96 @@ it works.
 
 ---
 
+## 56. Cleanup: deleting the legacy handlers and the migration flag
+
+The last step of the Activity Platform. **~1,550 net lines deleted** (1,738
+removed, 186 added), and `sockets/index.js` no longer names a single game.
+
+### The flag had to go because its fallback did
+
+`ACTIVITY_PLUGINS` was a per-plugin rollback: anything not listed kept its
+original `sockets/*.handlers.js` registration, so old and new ran side by side
+and a migration reverted with an env var instead of a deploy. It did that job
+honestly through eight migrations.
+
+Once every activity was a plugin (§54), "off" no longer meant "run the old
+handler" — it meant **the activity is silently dead**, which is the precise
+failure `NATIVE_PLUGIN_IDS` was invented to prevent. A rollback switch whose
+fallback no longer exists is not a safety feature; it is a loaded gun pointed at
+production. Rollback is now what it is everywhere else: deploy the last commit.
+
+### A live bug the cleanup surfaced
+
+`registerGameHandlers`, `registerLudoHandlers` and `registerKartHandlers` were
+registered **unconditionally** — they never got the `legacyHandlerEnabled()`
+guard the other four had. So after §52–54, skribbl, ludo and kart were each
+running a plugin AND a legacy handler, with separate `games` Maps: two
+independent game instances per room.
+
+It was not user-visible, because the two halves listen on different event names
+(`ludo:*` vs `activity:ludo:*`) and every migrated client speaks only the
+latter. But the legacy handlers still registered listeners, still held state,
+and still ran timers for any socket that spoke the old protocol. I introduced
+that when adding the plugins without gating their predecessors; deleting the
+files fixes it by construction, which is the argument for doing this cleanup
+now rather than "once it has soaked".
+
+### What could NOT be deleted
+
+The four framework games' rule definitions live in `chess.handlers.js` and
+friends and are imported by `lobbyGameAdapter`. Only their `register*Handlers`
+exports were dead. Those files are now the rules and nothing else — they keep
+their `.handlers.js` names so the diff stays reviewable, which is a small lie in
+the filename worth less than a confusing rename in the same commit.
+
+### The trap: a live feature hiding inside a dead function
+
+`registerTypingHandlers` did two things — register the game (dead) and serve
+`typing:leaderboard` (very much alive; `TypingPanel` calls it after every timed
+run). Deleting the function wholesale would have broken the records panel with
+nothing in the logs.
+
+It did not move into the typing plugin either, because **it is not per-room**: a
+leaderboard is global, readable by anyone authenticated, and the plugin host
+correctly refuses an activity event from someone whose room has not installed
+that activity. Right rule for gameplay, wrong rule for a scoreboard. So it moved
+to `sockets/leaderboard.handlers.js` as core, alongside chat and polls, and is
+verified against the running server rather than only in tests.
+
+### How the dead tests failed, which is the interesting part
+
+Two suites drove the deleted events. The whiteboard one did not error — it
+**hung for the full 30s timeout**, because it awaited an ack from an event
+nobody was listening for. A deleted socket handler produces no stack trace; the
+symptom is silence. That is worth remembering as the signature of this class of
+mistake, and it is why the leaderboard got a live check rather than trust.
+
+Both suites' assertions were already covered against the plugin path
+(`activities.skribbl.test.js`, `activities.host.test.js`), so they were deleted
+rather than ported.
+
+### A test-only trap I nearly walked into
+
+Replacing the "plugin with no server module" test needed a synthetic manifest.
+The tidy-looking undo — `__resetRegistry()` then `registerBuiltInActivities()` —
+is a trap: the latter short-circuits on its own `registered` flag, so the
+re-register is a no-op and every later test in the file would run against an
+EMPTY catalogue. Added `__unregisterPlugin(id)` to remove exactly one instead.
+
+**604 tests / 28 suites green.** Nine plugins, one dispatcher, no flag.
+
+### Interview answer: "when do you delete the old path?"
+
+The instinct is "after it has soaked" — keep the fallback until the new code has
+proven itself. That is right while the fallback is *reachable*. It inverts the
+moment the fallback stops being a fallback: three handlers here were running in
+parallel with their replacements, holding duplicate state, because the guard
+that was supposed to disable them was never applied. Dead code that still
+executes is worse than deleted code, and you cannot tell the difference by
+reading the config — only by reading the registration.
+
+---
+
 ## Note: No Paid Cloud Services
 
 The user has no paid cloud accounts (no AWS, etc.) — every feature that would normally
@@ -4340,4 +4434,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-11 (§55 — Phase 7 marketplace seams, so THE ACTIVITY PLATFORM IS COMPLETE (all 7 phases). Two of the three items were already standing (version field, requires[] with cycle detection, the storage interface) — auditing before building was most of the value. What was genuinely missing: nothing ever COMPARED the pinned version, so a plugin could go 1.x→2.x and every room would silently adopt the new grammar, which is the exact scenario pinning existed to prevent. shared/activities/version.js now compares them and resolveActivities carries {pinned,current,status,compatible,needsAttention}; only MAJOR counts as breaking, `ahead` is its own status (rolled-back server, fix is server-side not room-side), unparseable sorts EQUAL not lower. Provenance gates at registerPlugin() — the one path every manifest takes — and FAILS CLOSED: remote origin refused unless a verifier is installed, because the opposite default means remote manifests are trusted by default the day they become possible. Redis-backed state audited and deliberately NOT built: Mongo already gives durability, no socket.io Redis adapter exists so nothing could share state anyway, deployment is one VM with mediasoup pinning to one node, and it would ship untested with no second process to verify against. Also fixed a genuine pre-existing flake — the whiteboard rate-limit test failed on toBeGreaterThan(0) (nothing relayed) not the cap, because 120 fire-and-forget events raced the join; confirmed against a stash that it predated the change. 608 tests / 28 suites. Previously §54 — Smash Karts migrated, client AND server: THE LAST MIGRATION, so PHASE 2 IS COMPLETE and ACTIVITY_PLUGINS=all finally means all nine. The only activity running its own simulation (30Hz setInterval physics), which is why its destroy() was always the reference lifecycle test — asserted by recording g.tick, tearing down, waiting and checking the tick has NOT moved, because a nulled handle with a live closure would pass a naive check and still burn a core forever. Added two SDK capabilities: detached().stream() for volatile/lossy high-rate traffic (reliable delivery on bad wifi builds a backlog the player can never catch up from), and sdk.lifecycle.onHidden/onShown, which finally gave plugins a door into the activity:hidden DOM events ActivityHost had been dispatching since Phase 3 with no way for a panel to reach them — unblocking the kart manifest's obligation #2, a hidden 3D game rendering at full frame rate into a canvas nobody can see. The legacy hand-rolled reconnect re-sync deleted itself: useActivitySdk rejoins and the join ack carries the snapshot. 581 tests / 27 suites, nine plugins served. Previously §53 — Ludo migrated, client AND server: the second bespoke plugin. NOT an adaptLobbyGame() one-liner because its seats are colour-keyed (four fixed board positions, turn order is a list of colours) while lobby.seats models an ordered array of users — adapting would have meant colour↔index translation on every call. Six timers (turn, AFK, auto-move, bot roll, bot move, dead-dice) all on detached(); the bot/human shared code path — doRoll/doMove take no socket, so bots cannot make a move a human couldn't — survives untouched. The host's teardown deleted the legacy "is any HUMAN still connected?" check outright. maxPlayers/allowBots/botDifficulty/turnTimer were declared in Phase 1 with no reader and are now live, with turnTimer:0 ("Off") read through Number.isFinite so `|| DEFAULT` cannot silently re-enable the AFK clock. 560 tests / 26 suites, eight plugins served. Previously §52 — Draw & Guess migrated, client AND server: the first BESPOKE plugin, with no framework underneath it. Game logic ported verbatim so the diff against game.handlers.js is reviewable; only the transport lines changed. Five interlocking timers run on `sdk.socket.detached()`, stored per-room and refreshed on join so the chain survives the drawer disconnecting mid-turn; the private `toUser()` word channel is now load-bearing and pinned by two tests. maxRounds/turnSeconds/hints were hardcoded constants and are now read from the manifest's configSchema. On the client the hook WAS the seam: GameCanvas took its transport as props and GamePanel was untouched apart from forwarding it. 537 tests / 25 suites, seven plugins served. Previously §51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
+*Last updated: 2026-08-11 (§56 — legacy handlers and the ACTIVITY_PLUGINS flag DELETED: ~1,550 net lines gone (1,738 removed, 186 added), and sockets/index.js no longer names a single game. The flag had to go because the thing it fell back TO was gone — with every activity a plugin, "off" meant the activity was silently dead rather than served by the old path, which is a loaded gun rather than a safety feature. The cleanup surfaced a LIVE bug: registerGameHandlers/registerLudoHandlers/registerKartHandlers were registered unconditionally, never given the legacyHandlerEnabled() guard the other four had, so skribbl/ludo/kart each ran a plugin AND a legacy handler with separate games Maps — two independent instances per room, invisible only because the halves listen on different event names. Deleting the files fixes it by construction. The trap avoided: typing:leaderboard lived inside registerTypingHandlers and is a live feature, so it moved to core leaderboard.handlers.js rather than dying with the function — it is global, not per-room, so it could not become a plugin event; verified against the running server. Note how the dead tests failed: the whiteboard one HUNG for its full 30s timeout rather than erroring, because it awaited an ack from an event nobody was listening for. A deleted socket handler has no stack trace; the symptom is silence. 604 tests / 28 suites. Previously §55 — Phase 7 marketplace seams, so THE ACTIVITY PLATFORM IS COMPLETE (all 7 phases). Two of the three items were already standing (version field, requires[] with cycle detection, the storage interface) — auditing before building was most of the value. What was genuinely missing: nothing ever COMPARED the pinned version, so a plugin could go 1.x→2.x and every room would silently adopt the new grammar, which is the exact scenario pinning existed to prevent. shared/activities/version.js now compares them and resolveActivities carries {pinned,current,status,compatible,needsAttention}; only MAJOR counts as breaking, `ahead` is its own status (rolled-back server, fix is server-side not room-side), unparseable sorts EQUAL not lower. Provenance gates at registerPlugin() — the one path every manifest takes — and FAILS CLOSED: remote origin refused unless a verifier is installed, because the opposite default means remote manifests are trusted by default the day they become possible. Redis-backed state audited and deliberately NOT built: Mongo already gives durability, no socket.io Redis adapter exists so nothing could share state anyway, deployment is one VM with mediasoup pinning to one node, and it would ship untested with no second process to verify against. Also fixed a genuine pre-existing flake — the whiteboard rate-limit test failed on toBeGreaterThan(0) (nothing relayed) not the cap, because 120 fire-and-forget events raced the join; confirmed against a stash that it predated the change. 608 tests / 28 suites. Previously §54 — Smash Karts migrated, client AND server: THE LAST MIGRATION, so PHASE 2 IS COMPLETE and ACTIVITY_PLUGINS=all finally means all nine. The only activity running its own simulation (30Hz setInterval physics), which is why its destroy() was always the reference lifecycle test — asserted by recording g.tick, tearing down, waiting and checking the tick has NOT moved, because a nulled handle with a live closure would pass a naive check and still burn a core forever. Added two SDK capabilities: detached().stream() for volatile/lossy high-rate traffic (reliable delivery on bad wifi builds a backlog the player can never catch up from), and sdk.lifecycle.onHidden/onShown, which finally gave plugins a door into the activity:hidden DOM events ActivityHost had been dispatching since Phase 3 with no way for a panel to reach them — unblocking the kart manifest's obligation #2, a hidden 3D game rendering at full frame rate into a canvas nobody can see. The legacy hand-rolled reconnect re-sync deleted itself: useActivitySdk rejoins and the join ack carries the snapshot. 581 tests / 27 suites, nine plugins served. Previously §53 — Ludo migrated, client AND server: the second bespoke plugin. NOT an adaptLobbyGame() one-liner because its seats are colour-keyed (four fixed board positions, turn order is a list of colours) while lobby.seats models an ordered array of users — adapting would have meant colour↔index translation on every call. Six timers (turn, AFK, auto-move, bot roll, bot move, dead-dice) all on detached(); the bot/human shared code path — doRoll/doMove take no socket, so bots cannot make a move a human couldn't — survives untouched. The host's teardown deleted the legacy "is any HUMAN still connected?" check outright. maxPlayers/allowBots/botDifficulty/turnTimer were declared in Phase 1 with no reader and are now live, with turnTimer:0 ("Off") read through Number.isFinite so `|| DEFAULT` cannot silently re-enable the AFK clock. 560 tests / 26 suites, eight plugins served. Previously §52 — Draw & Guess migrated, client AND server: the first BESPOKE plugin, with no framework underneath it. Game logic ported verbatim so the diff against game.handlers.js is reviewable; only the transport lines changed. Five interlocking timers run on `sdk.socket.detached()`, stored per-room and refreshed on join so the chain survives the drawer disconnecting mid-turn; the private `toUser()` word channel is now load-bearing and pinned by two tests. maxRounds/turnSeconds/hints were hardcoded constants and are now read from the manifest's configSchema. On the client the hook WAS the seam: GameCanvas took its transport as props and GamePanel was untouched apart from forwarding it. 537 tests / 25 suites, seven plugins served. Previously §51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*

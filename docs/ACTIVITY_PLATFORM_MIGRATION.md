@@ -426,9 +426,14 @@ Tests: manifest validation, legacy vs new resolution.
    activity with its own simulation; added `detached().stream()` (volatile) and
    `sdk.lifecycle` to the SDK**.
 
-   ✅ **PHASE 2 COMPLETE.** All nine plugins are served by the host; `ACTIVITY_PLUGINS=all`
-   means all. The `sockets/*.handlers.js` game files now exist solely as the flag's rollback
-   path, and deleting them (with the flag) is the last cleanup once the plugins have soaked.
+   ✅ **PHASE 2 COMPLETE.** All nine plugins are served by the host.
+
+   ✅ **AND CLEANED UP (§56).** The legacy handlers and the `ACTIVITY_PLUGINS` flag are deleted —
+   ~1,550 net lines, and `sockets/index.js` names no game at all. The flag went because its
+   fallback did: once every activity was a plugin, "off" meant *silently dead*, not "the old path
+   runs". The cleanup also fixed a live bug — skribbl/ludo/kart were registering their legacy
+   handler AND their plugin (the `legacyHandlerEnabled` guard was never applied to them), so each
+   room held two independent game instances.
 
    §50 confirmed §1.2's prediction literally: because `lobbyGame.js` was already an SDK, extending
    it beat replacing it. The enabling refactor was splitting its **seat rules** (join/leave/start/

@@ -23,10 +23,7 @@ import { startHarness } from "./helpers/harness.js";
 
 import { getPlugin } from "../../shared/activities/index.js";
 import { getRegisteredModuleIds } from "../src/activities/host.js";
-import { enabledPluginIds, legacyHandlerEnabled } from "../src/activities/index.js";
-
-// Serve all four through the new host for this file.
-process.env.ACTIVITY_PLUGINS = "chess,uno,typing,bingo";
+import { enabledPluginIds } from "../src/activities/index.js";
 
 const h = startHarness();
 
@@ -114,14 +111,14 @@ async function table(gameId) {
 
 describe("registration", () => {
   it("serves all four through one adapter", () => {
-    const ids = enabledPluginIds("chess,uno,typing,bingo");
+    const ids = enabledPluginIds();
     for (const g of GAMES) {
       expect(ids).toContain(g);
       expect(getRegisteredModuleIds()).toContain(g);
-      // Both paths registered would double-broadcast every move.
-      expect(legacyHandlerEnabled(g, "chess,uno,typing,bingo")).toBe(false);
-      expect(legacyHandlerEnabled(g, "none")).toBe(true);
     }
+    // The `legacyHandlerEnabled` assertions that used to live here (both paths
+    // registered would double-broadcast every move) are gone with the flag in
+    // §56 — there is no longer a second path that could be registered.
   });
 
   it("keeps every game on the game surface", () => {
