@@ -44,7 +44,7 @@ function HoldButton({ onHold, className, children, label }) {
 }
 
 export default function KartPanel({ roomId, onExit }) {
-  const { me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig, setTeam, addBot, removeBot } =
+  const { sdk, me, status, view, snapRef, killFeedRef, boomsRef, joined, isHost, error, join, leave, start, reset, sendInput, setConfig, setTeam, addBot, removeBot } =
     useKart(roomId);
   const [botDiff, setBotDiff] = useState("medium");
   // Team-name drafts live locally while typing; commit to the server on blur.
@@ -375,7 +375,9 @@ export default function KartPanel({ roomId, onExit }) {
           </div>
         )}
         <Suspense fallback={<div className="text-center py-16 text-gray-500">Loading arena…</div>}>
-          <KartArena3D snapRef={snapRef} killFeedRef={killFeedRef} boomsRef={boomsRef} myId={me?.id} />
+          {/* sdk is passed for lifecycle only — the arena pauses rendering when
+              the room switches to another tab. See KartArena3D. */}
+          <KartArena3D snapRef={snapRef} killFeedRef={killFeedRef} boomsRef={boomsRef} myId={me?.id} sdk={sdk} />
         </Suspense>
 
         {showTouch && (

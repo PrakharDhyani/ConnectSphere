@@ -306,9 +306,46 @@ function checkerTexture() {
   return tex;
 }
 
-export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
+export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId, sdk = null }) {
   const mountRef = useRef(null);
   const [hud, setHud] = useState({ timeLeft: 0, board: [], me: null, feed: [], mode: "ffa", teamScores: null });
+  /**
+   * Set while this activity is mounted-but-hidden (the room switched tabs).
+   *
+   * A ref, not state: the render loop reads it every frame and re-rendering
+   * React to flip a boolean the canvas owns would be pure overhead. See the
+   * `activity:hidden` subscription below.
+   */
+  const hiddenRef = useRef(false);
+
+  /**
+   * Pause rendering while the activity is backgrounded.
+   *
+   * `ActivityHost` keeps a hidden activity mounted under `display:none` rather
+   * than unmounting it — dropping a live match to glance at chat would be worse
+   * than the battery cost. But a 3D scene happily renders at full frame rate
+   * into a canvas nobody can see, which is a drain no user would ever attribute
+   * to switching tabs. This is obligation #2 from the kart manifest, and the
+   * reason `sdk.lifecycle` exists at all.
+   *
+   * Also stops the engine sound: audio from an invisible tab is worse than
+   * wasted GPU, because the user can actually perceive it.
+   */
+  useEffect(() => {
+    if (!sdk?.lifecycle) return undefined;
+    const node = mountRef.current;
+    const offHidden = sdk.lifecycle.onHidden(node, () => {
+      hiddenRef.current = true;
+      sfx.engine.stop();
+    });
+    const offShown = sdk.lifecycle.onShown(node, () => {
+      hiddenRef.current = false;
+    });
+    return () => {
+      offHidden();
+      offShown();
+    };
+  }, [sdk]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -2041,8 +2078,15 @@ export default function KartArena3D({ snapRef, killFeedRef, boomsRef, myId }) {
         ex.light.intensity *= Math.max(0, 1 - fdt * 5);
       }
 
-      composer.render();
-      governFrame(frameMs, now);
+      // Mounted but hidden: keep the loop ALIVE (so returning to the tab is
+      // instant — a full teardown/rebuild of the scene would take seconds and
+      // lose the match) but skip the expensive part. `composer.render()` is
+      // essentially all of the GPU cost; the simulation is the server's job, so
+      // nothing desynchronises while we sit this out.
+      if (!hiddenRef.current) {
+        composer.render();
+        governFrame(frameMs, now);
+      }
       raf = requestAnimationFrame(render);
     };
     raf = requestAnimationFrame(render);

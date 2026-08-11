@@ -61,6 +61,29 @@ function emitWithAck(socket, event, payload) {
 }
 
 /**
+ * Bind a lifecycle listener to the ActivityHost wrapper above `node`.
+ *
+ * The events do not bubble (the host dispatches them with `bubbles: false`, so
+ * one activity cannot hear another's), which is why this resolves the wrapper
+ * by `closest("[data-activity]")` rather than listening on the node itself.
+ * A node that is not inside a host — a panel rendered directly in a test, or
+ * outside the activity runtime — simply never fires, which is the right
+ * degradation: no crash, no listener, no leak.
+ */
+function listenLifecycle(bag, node, type, fn) {
+  const host = node?.closest?.("[data-activity]");
+  if (!host || typeof fn !== "function") return () => {};
+  host.addEventListener(type, fn);
+  const entry = [host, type, fn];
+  bag.push(entry);
+  return () => {
+    host.removeEventListener(type, fn);
+    const i = bag.indexOf(entry);
+    if (i !== -1) bag.splice(i, 1);
+  };
+}
+
+/**
  * Build the SDK for one plugin instance in one room.
  *
  * @param {object} opts
@@ -91,6 +114,9 @@ export function createClientSdk({ activityId, roomId, config = {}, user = null, 
   const listeners = [];
   let destroyed = false;
 
+  /** DOM listeners from `sdk.lifecycle`, torn down alongside the socket ones. */
+  const domListeners = [];
+
   const sdk = {
     meta: Object.freeze({ id: manifest.id, version: manifest.version, config }),
     user: user ? Object.freeze({ ...user }) : null,
@@ -98,6 +124,32 @@ export function createClientSdk({ activityId, roomId, config = {}, user = null, 
       info: (...a) => console.info(`[${manifest.id}]`, ...a),
       warn: (...a) => console.warn(`[${manifest.id}]`, ...a),
       error: (...a) => console.error(`[${manifest.id}]`, ...a),
+    },
+
+    /**
+     * Mounted-but-hidden notifications.
+     *
+     * `ActivityHost` keeps a backgrounded activity in the tree under
+     * `display:none` — unmounting a live game to glance at chat would drop the
+     * match — and dispatches `activity:hidden`/`activity:shown` on its wrapper
+     * element. That contract has existed since Phase 3 with no way for a plugin
+     * to *reach* it: the events fire on a DOM node the panel does not own a
+     * reference to. Panels that wanted them had to walk up the DOM with
+     * `closest("[data-activity]")`, which is exactly the kind of shell-coupling
+     * guarantee #1 exists to prevent.
+     *
+     * So the SDK does the walking. A plugin passes any node inside itself and
+     * gets an unsubscribe back:
+     *
+     *   useEffect(() => sdk.lifecycle.onHidden(ref.current, pause), [sdk]);
+     *
+     * This matters most for anything driving a render loop: a hidden 3D game
+     * happily renders at full frame rate into a canvas nobody can see, which is
+     * a battery drain no user would ever attribute to switching tabs.
+     */
+    lifecycle: {
+      onHidden: (node, fn) => listenLifecycle(domListeners, node, "activity:hidden", fn),
+      onShown: (node, fn) => listenLifecycle(domListeners, node, "activity:shown", fn),
     },
   };
 
@@ -180,6 +232,10 @@ export function createClientSdk({ activityId, roomId, config = {}, user = null, 
     if (destroyed) return;
     destroyed = true;
     for (const [wire, fn] of listeners.splice(0)) socket.off(wire, fn);
+    // DOM listeners leak the same way socket ones do — the host element
+    // outlives a plugin remount, so a stale handler would keep firing into a
+    // dead closure.
+    for (const [host, type, fn] of domListeners.splice(0)) host.removeEventListener(type, fn);
     if (sdk.socket) emitWithAck(socket, "activity:leave", { activityId, roomId });
   };
 

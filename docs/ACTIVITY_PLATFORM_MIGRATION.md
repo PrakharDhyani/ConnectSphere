@@ -422,7 +422,13 @@ Tests: manifest validation, legacy vs new resolution.
    ~~`draw-guess`~~ ✅ **done client+server in §52 — the first BESPOKE migration, no framework
    underneath: logic ported verbatim, only the transport changed** → ~~`ludo`~~ ✅ **done
    client+server in §53 — colour-keyed seats made `lobby.seats` the wrong shape to adapt to;
-   six timers on `detached()`** → **`smash-karts` last — the only one left**.
+   six timers on `detached()`** → ~~`smash-karts`~~ ✅ **done client+server in §54 — the only
+   activity with its own simulation; added `detached().stream()` (volatile) and
+   `sdk.lifecycle` to the SDK**.
+
+   ✅ **PHASE 2 COMPLETE.** All nine plugins are served by the host; `ACTIVITY_PLUGINS=all`
+   means all. The `sockets/*.handlers.js` game files now exist solely as the flag's rollback
+   path, and deleting them (with the flag) is the last cleanup once the plugins have soaked.
 
    §50 confirmed §1.2's prediction literally: because `lobbyGame.js` was already an SDK, extending
    it beat replacing it. The enabling refactor was splitting its **seat rules** (join/leave/start/
@@ -439,6 +445,8 @@ Tests: manifest validation, legacy vs new resolution.
    request, for plugins that must speak from a timer with no socket in scope. Every remaining
    timer-based plugin needs it — which is what migrating in size order is for.
 4. Kart's `destroy()` clearing its `setInterval` physics loop is the reference lifecycle test.
+   ✅ Landed in §54, and asserted by watching the tick **stop** rather than by reading the
+   handle — `g.loop = null` with a live closure would pass the naive check and still burn a core.
 
 *Risk: medium-high — this is where regressions live.* Mitigation: one plugin per commit, parallel
 registration, existing socket tests pass untouched at every step.
@@ -524,7 +532,7 @@ swappable interface later.
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | RoomPage refactor breaks the fixed-header layout | high | CDP layout test per commit |
-| Kart migration leaks its physics interval | medium | `destroy()` is the reference lifecycle test |
+| ~~Kart migration leaks its physics interval~~ | ~~medium~~ | ✅ **retired** — §54 shipped it; the test observes the tick stopping, not the handle |
 | Ludo/Kart/draw-guess take longer than the framework games | **high** | they are 3× the size and bespoke; schedule accordingly |
 | Scope creep into new plugins mid-migration | high | freeze the catalogue at the existing 9 until Phase 3 lands |
 | Bundle grows from registry | low | manifests are data-only; components stay `lazy()` |

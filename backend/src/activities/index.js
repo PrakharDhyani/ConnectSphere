@@ -38,6 +38,7 @@ import whiteboardServer from "./whiteboard/server.js";
 import stickyNotesServer from "./sticky-notes/server.js";
 import skribblServer from "./skribbl/server.js";
 import ludoServer from "./ludo/server.js";
+import kartServer from "./kart/server.js";
 import { chessServer, unoServer, typingServer, bingoServer } from "./framework-games/server.js";
 
 // pluginId -> server module. Only these can be enabled by the flag.
@@ -51,6 +52,10 @@ const SERVER_MODULES = {
   // lobbyGame.js but was never moved onto it, and its seats are colour-keyed
   // rather than a flat list. See ludo/server.js.
   ludo: ludoServer,
+  // The only activity running its own server-side simulation: a 30Hz
+  // setInterval physics loop whose destroy() is the reference lifecycle test.
+  // See kart/server.js.
+  kart: kartServer,
   // All four come from ONE adapter over the existing lobbyGame framework —
   // no per-game server code. See framework-games/server.js.
   chess: chessServer,

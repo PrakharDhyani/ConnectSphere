@@ -140,6 +140,26 @@ function makeSocketApi(manifest, ctx) {
           const sockets = await io.in(key).fetchSockets();
           return sockets.length;
         },
+
+        /**
+         * Like `broadcast`, but frames are DROPPED for a client whose socket
+         * buffer is congested rather than queued behind it.
+         *
+         * For a continuous simulation this is the difference between a game
+         * that degrades and one that breaks. Kart streams a world snapshot at
+         * 15 Hz; on bad wifi or after a tab hiccup, reliable delivery builds a
+         * backlog and the player ends up watching a game seconds behind real
+         * time, with the lag never recovering because the queue only grows.
+         * Dropping is correct precisely because every field is superseded 66ms
+         * later — a lost frame is invisible, a growing backlog is not.
+         *
+         * Deliberately NOT the default: lobby and end-of-match broadcasts must
+         * arrive, and a plugin author reaching for "send this fast" should have
+         * to say that they mean "and losing it is fine".
+         */
+        stream(event, payload) {
+          io.to(key).volatile.emit(wireEvent(pluginId, event), payload);
+        },
       });
     },
   };
