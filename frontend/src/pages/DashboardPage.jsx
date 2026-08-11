@@ -6,6 +6,8 @@ import { disconnectSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useFriends } from "@/hooks/useFriends.js";
 import { useConversations } from "@/hooks/useDirectMessages.js";
+import { useRoomActivity } from "@/hooks/useRoomActivity.js";
+import RoomActivityPill from "@/components/RoomActivityPill.jsx";
 import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
 import Logo from "@/components/Logo.jsx";
@@ -43,6 +45,14 @@ export default function DashboardPage() {
   });
   const myRoomIds = new Set(rooms.map((r) => r.id));
   const discoverable = publicRooms.filter((r) => !myRoomIds.has(r.id));
+
+  /**
+   * Live activity for my rooms. The REST list already carries a snapshot so the
+   * first paint is truthful; this keeps it moving. Only MY rooms are watched —
+   * the server refuses rooms you are not a member of, which stops the feed
+   * being a presence oracle for private rooms you happen to know the id of.
+   */
+  const liveActivity = useRoomActivity(rooms.map((r) => r.id));
 
   // After a successful mutation, invalidate ["rooms"] — react-query refetches
   // the list automatically; no manual state juggling.
@@ -192,24 +202,35 @@ export default function DashboardPage() {
             </p>
           ) : (
             <ul className="divide-y divide-gray-800">
-              {rooms.map((room) => (
-                <li key={room.id}>
-                  <Link to={`/room/${room.id}`}
-                    className="flex items-center justify-between py-3 px-2 rounded-lg hover:bg-gray-800/60 hover:translate-x-1 border border-transparent hover:border-brand-500/30 transition-all duration-200">
-                    <div>
-                      <p className="font-medium">
-                        {room.name}
-                        <span className="ml-2 text-[11px] text-gray-500">{room.visibility === "public" ? "🌐" : "🔒"}</span>
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        code <span className="font-mono text-gray-400">{room.code}</span>
-                        {" · "}{room.memberCount} member{room.memberCount === 1 ? "" : "s"}
-                      </p>
-                    </div>
-                    <span className="text-brand-400 text-sm">Open →</span>
-                  </Link>
-                </li>
-              ))}
+              {rooms.map((room) => {
+                // Live snapshot wins; the one from the REST list is the seed.
+                const activity = liveActivity[room.id] || room.activity;
+                return (
+                  <li key={room.id}>
+                    <Link to={`/room/${room.id}`}
+                      className="flex items-center justify-between gap-3 py-3 px-2 rounded-lg hover:bg-gray-800/60 hover:translate-x-1 border border-transparent hover:border-brand-500/30 transition-all duration-200">
+                      <div className="min-w-0">
+                        <p className="font-medium">
+                          {room.name}
+                          <span className="ml-2 text-[11px] text-gray-500">{room.visibility === "public" ? "🌐" : "🔒"}</span>
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          code <span className="font-mono text-gray-400">{room.code}</span>
+                          {" · "}{room.memberCount} member{room.memberCount === 1 ? "" : "s"}
+                          {/* `memberCount` is the roster ("ever joined"); the pill
+                              below is who is in there RIGHT NOW. Both are shown
+                              because they answer different questions. */}
+                          {activity?.present > 0 && (
+                            <span className="text-green-400">{" · "}{activity.present} active</span>
+                          )}
+                        </p>
+                        <span className="block mt-1"><RoomActivityPill activity={activity} /></span>
+                      </div>
+                      <span className="text-brand-400 text-sm shrink-0">Open →</span>
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

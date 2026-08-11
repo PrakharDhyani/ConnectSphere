@@ -19,6 +19,7 @@ import { registerPollHandlers } from "./poll.handlers.js";
 import { registerCaptionHandlers } from "./caption.handlers.js";
 import { registerLeaderboardHandlers } from "./leaderboard.handlers.js";
 import { registerDmHandlers } from "./dm.handlers.js";
+import { registerDashboardHandlers } from "./dashboard.handlers.js";
 import { registerActivityHost } from "../activities/host.js";
 import { registerActivityServerModules } from "../activities/index.js";
 
@@ -69,6 +70,10 @@ export function initSocket(httpServer) {
     // a per-thread socket.io room, so a DM arrives while you are looking at
     // something else entirely — which is the point of an inbox.
     registerDmHandlers(io, socket);
+    // Live "what's happening in my rooms" feed for the dashboard cards. The
+    // dashboard is in none of the room/activity socket rooms, so it subscribes
+    // explicitly rather than overhearing them.
+    registerDashboardHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {
       logger.info(`Socket disconnected: ${socket.id} — reason: ${reason}`);

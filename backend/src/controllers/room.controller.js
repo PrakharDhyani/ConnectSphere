@@ -5,6 +5,7 @@ import { Report } from "../models/Report.js";
 import { io } from "../sockets/index.js";
 import { roomKey } from "../sockets/chat.handlers.js";
 import { isScopedGuest, canAccessRoom } from "../utils/roomAccess.js";
+import { roomActivitySnapshots, emptySnapshot } from "../services/roomActivity.service.js";
 import { getPlugin, coerceConfig, isValidPurpose, PURPOSE_IDS, resolveInstalled } from "../../../shared/activities/index.js";
 
 // Lightweight shape for lists/create/join — one place decides what a room looks
@@ -527,11 +528,31 @@ export async function createRoom(req, res, next) {
   }
 }
 
-// Rooms the caller belongs to (owner is always a member — model invariant).
+/**
+ * Rooms the caller belongs to (owner is always a member — model invariant).
+ *
+ * Each room carries a LIVE `activity` snapshot alongside its static
+ * `memberCount`. The two answer different questions and the card shows both:
+ * `memberCount` is "who has ever joined", `activity.present` is "who is in
+ * there now". Conflating them was the original problem — a room with three
+ * members looked identical whether it was empty or mid-game.
+ *
+ * Computed here rather than in a second request so the first paint is already
+ * truthful; the socket feed then keeps it live.
+ */
 export async function listMyRooms(req, res, next) {
   try {
     const rooms = await Room.find({ members: req.user.id }).sort({ createdAt: -1 });
-    res.json({ success: true, data: { rooms: rooms.map(toSafeRoom) } });
+    const activity = await roomActivitySnapshots(io, rooms.map((r) => r._id));
+    res.json({
+      success: true,
+      data: {
+        rooms: rooms.map((r) => ({
+          ...toSafeRoom(r),
+          activity: activity[String(r._id)] || emptySnapshot(),
+        })),
+      },
+    });
   } catch (error) {
     next(error);
   }

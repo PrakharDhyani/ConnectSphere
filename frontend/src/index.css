@@ -77,6 +77,16 @@ body {
   opacity: 0;
   animation: fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
+/* Plain fade, no movement — for text that REPLACES other text in place (the
+   rotating room-activity pill). A rise would read as a new element arriving
+   rather than the same line changing what it says. */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.anim-fade-in {
+  animation: fade-in 0.35s ease-out forwards;
+}
 .d1 { animation-delay: 0.08s; }
 .d2 { animation-delay: 0.16s; }
 .d3 { animation-delay: 0.24s; }
@@ -115,7 +125,8 @@ body {
 
 /* Accessibility: honor users who ask for less motion. */
 @media (prefers-reduced-motion: reduce) {
-  .anim-fade-up { animation: none; opacity: 1; }
-  .aurora-blob, .anim-float, .gradient-text { animation: none; }
+  .anim-fade-up, .anim-fade-in { animation: none; opacity: 1; }
+  /* The live dot's ping is decorative; the dot itself stays visible. */
+  .aurora-blob, .anim-float, .gradient-text, .animate-ping { animation: none; }
   * { transition-duration: 0.01ms !important; }
 }
