@@ -17,6 +17,7 @@
 import { validateManifest, freezeManifest } from "./manifest.js";
 import { SCORABLE_PURPOSE_IDS } from "./purposes.js";
 import { defaultsFor } from "./config-schema.js";
+import { verifyManifestOrigin } from "./provenance.js";
 
 const plugins = new Map();
 
@@ -29,6 +30,16 @@ const plugins = new Map();
  */
 export function registerPlugin(manifest) {
   validateManifest(manifest);
+  /**
+   * Provenance is checked HERE because registration is the only path every
+   * manifest takes — server boot and bundle init both funnel through it, so a
+   * verifier installed by the host cannot be bypassed by a caller who forgot
+   * to ask. Same reasoning that put shape validation here rather than at each
+   * call site. With no verifier installed this accepts built-ins and refuses
+   * anything claiming a remote origin; see provenance.js for why it fails
+   * closed rather than open.
+   */
+  const provenance = verifyManifestOrigin(manifest);
   if (plugins.has(manifest.id)) {
     throw new Error(`Duplicate plugin id "${manifest.id}" — ids must be unique across the registry`);
   }
@@ -40,7 +51,11 @@ export function registerPlugin(manifest) {
       );
     }
   }
-  plugins.set(manifest.id, freezeManifest({ ...manifest }));
+  // `provenance` is derived, not client-supplied: storing it on the frozen
+  // entry means a later consumer (a marketplace UI, an audit log) reads the
+  // verified answer rather than re-deriving it from the raw manifest and
+  // possibly disagreeing with the gate above.
+  plugins.set(manifest.id, freezeManifest({ ...manifest, provenance }));
   return plugins.get(manifest.id);
 }
 

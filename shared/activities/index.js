@@ -78,4 +78,6 @@ export * from "./registry.js";
 export * from "./compat.js";
 export * from "./purposes.js";
 export { validateManifest, CAPABILITIES, CATEGORIES, SURFACES } from "./manifest.js";
+export * from "./version.js";
+export * from "./provenance.js";
 export { validateConfigSchema, coerceConfig, defaultsFor, FIELD_TYPES } from "./config-schema.js";

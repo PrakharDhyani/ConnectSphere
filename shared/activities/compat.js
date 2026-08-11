@@ -17,6 +17,7 @@
  */
 import { getPlugin, getAllPlugins } from "./registry.js";
 import { defaultsFor } from "./config-schema.js";
+import { describeVersion } from "./version.js";
 
 /**
  * What a pre-plugin room implicitly had: everything that existed at the time.
@@ -107,6 +108,12 @@ export function getActivityConfig(room, activityId) {
  * surfacing it lets the UI say "Whiteboard is unavailable on this server".
  * Dropping the entry is also how you get an activity that cannot be
  * uninstalled, because the management UI can no longer see it.
+ *
+ * Each entry also carries `version: {pinned, current, status, compatible,
+ * needsAttention}` — the room's pin compared against what this build ships.
+ * Computed here rather than at each call site because "which version is this
+ * room on?" is the same question everywhere it is asked, and two
+ * implementations of it would drift the way the id→tab maps used to.
  */
 export function resolveActivities(room) {
   return resolveInstalled(room).map((entry) => {
@@ -115,6 +122,7 @@ export function resolveActivities(room) {
       ...entry,
       manifest,
       unavailable: !manifest,
+      version: describeVersion(entry.version, manifest?.version),
       config: manifest ? { ...defaultsFor(manifest.configSchema), ...entry.config } : entry.config,
     };
   });

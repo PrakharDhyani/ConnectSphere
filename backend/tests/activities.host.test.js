@@ -348,6 +348,25 @@ describe("whiteboard plugin behaviour (migrated)", () => {
     const { room, a, b } = await twoInRoom();
     let seen = 0;
     b.on(wireEvent("whiteboard", "update"), () => { seen += 1; });
+
+    /**
+     * Send ONE event and await its ack before opening the throttle.
+     *
+     * The 120 below are fire-and-forget by design (a flood is the thing under
+     * test), but that made the whole test a race: `twoInRoom` resolves when the
+     * join ACK arrives, which is not the same instant as the sender's own
+     * `activity:event` path being ready. When the burst won that race every
+     * event was refused and `seen` was 0 — failing on
+     * `toBeGreaterThan(0)`, i.e. reporting "nothing was relayed" for a test
+     * whose subject is "too much was relayed". Roughly 1 run in 3.
+     *
+     * One awaited round-trip removes the race without weakening the assertion:
+     * the burst is still a burst, it just starts from a known-open channel.
+     * A sleep here would have been the same race with a longer fuse.
+     */
+    const primed = await send(a, "whiteboard", room.id, "update", { elements: [{ id: "primer" }] });
+    expect(primed.ok).toBe(true);
+
     // The cap is 40/sec; 120 in one burst must not all get through.
     for (let i = 0; i < 120; i++) a.emit("activity:event", { activityId: "whiteboard", roomId: room.id, event: "update", payload: { elements: [{ id: i }] } });
     await new Promise((r) => setTimeout(r, 600));

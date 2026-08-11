@@ -499,13 +499,18 @@ plugin id, so it cannot quietly regress. See PROJECT_NOTES §46.
 Version resolution, dependency graph, plugin state store interface (in-memory now, Redis later),
 manifest signature hook.
 
-**Partly standing already**, as a by-product of earlier phases rather than deliberate Phase 7 work:
-`version` is a required semver field on every manifest (validated in `manifest.js`), `requires[]`
-is validated and resolved by `registry.validateDependencies()`, and plugin state already routes
-through the `storage.js` interface rather than bare `Map`s in each plugin. What is genuinely absent
-is **version *resolution*** (pinning `installed[].version` at install and honouring it), the **Redis
-backing** behind the storage interface, and the **manifest signature hook**. None is needed until
-third-party plugins are real; all three are seams, not features.
+✅ **DONE in §55 — and with that, all seven phases are complete.**
+
+Two of the three were already standing as a by-product of earlier phases: `version` is a required
+semver field (validated in `manifest.js`), `requires[]` is validated with cycle detection by
+`registry.validateDependencies()`, and plugin state already routes through `storage.js` rather than
+bare `Map`s. Auditing before building was most of this phase's value.
+
+| Item | Outcome |
+|---|---|
+| **Version resolution** | ✅ `shared/activities/version.js`. The pin was written since Phase 4 and **compared by nothing** — a 1.x→2.x bump would have been adopted silently by every room. `resolveActivities()` now carries `{pinned, current, status, compatible, needsAttention}`. Only MAJOR is breaking; `ahead` (pin newer than build) is its own status because the fix is server-side |
+| **Manifest signature hook** | ✅ `shared/activities/provenance.js`, gated at `registerPlugin()` — the one path every manifest takes. **Fails closed**: a remote origin is refused unless a verifier is installed, so remote manifests cannot be trusted-by-default the day they become possible |
+| **Redis-backed state** | ⏸️ **Deliberately deferred.** Mongo already provides durability (3s debounced write-behind); the only benefit is cross-process sharing and nothing shares — there is no `@socket.io/redis-adapter`, deployment is one VM, and mediasoup pins to a single node. The in-process layer is the authority between flushes, so doing it properly means Redis becomes the source of truth, not a driver swap. The **seam** is what this phase owed, and the seam stands: swapping the backing is a change to one file |
 
 ---
 
@@ -519,7 +524,7 @@ third-party plugins are real; all three are seams, not features.
 | Paid plugins | `installed[]` subdoc has room for entitlement fields | 0 |
 | Versioned plugins | `installed[].version` pinned at install | 1 field |
 | Dependencies | `manifest.requires[]` + resolver | small |
-| Horizontal scaling | plugin state behind an interface, not a bare `Map` | Phase 7 |
+| Horizontal scaling | plugin state behind an interface, not a bare `Map` | ✅ seam stands (§55); the Redis backing waits for a second instance to exist |
 
 Note: server plugin state is currently an in-process `Map`, so it does not survive a restart or
 scale horizontally. That is **pre-existing**, not introduced here — the plan just makes it a

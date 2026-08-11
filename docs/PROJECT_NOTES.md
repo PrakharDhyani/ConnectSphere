@@ -3913,15 +3913,26 @@ by reading the handle. Added two SDK capabilities: `detached().stream()`
 `ActivityHost` had been dispatching, unused, since Phase 3. **581 tests / 27
 suites green.** Nine plugins served; `ACTIVITY_PLUGINS=all` now means all.
 
-**Next — Activity Platform, Phase 7 (the only phase left):**
-- Version *resolution* (pin `installed[].version` at install and honour it),
-  Redis behind the `storage.js` interface, manifest signature hook. `version`,
-  `requires[]` and the storage interface itself already stand. None is needed
-  until third-party plugins are real — these are seams, not features.
+**Done — Phase 7 marketplace seams (§55). THE ACTIVITY PLATFORM IS COMPLETE.**
+Version drift is now legible (`shared/activities/version.js`; `resolveActivities`
+carries a `version` record per entry) and manifest provenance is gated at
+`registerPlugin()`, failing CLOSED — a remote origin is refused unless a verifier
+is installed. Redis-backed state was audited and deliberately NOT built: Mongo
+already provides durability, nothing shares state (no socket.io Redis adapter,
+one VM, mediasoup pins to a single node), and it would be untestable with no
+second process. The seam is what the phase owed and the seam stands.
+**608 tests / 28 suites green.**
+
+**Next — cleanup and the deferred backlog:**
 - **Retire the legacy handlers.** Every game now has a plugin, so the
   `sockets/*.handlers.js` files exist only as the flag's rollback path. Once the
   plugins have run in production for a while, deleting them (and the flag) is
-  the last cleanup.
+  the last cleanup — it would remove roughly 2,000 lines.
+- **Manual browser pass.** Three migrations (§52–54) are verified by socket-level
+  tests only. The 3D arena's pause-on-hidden in particular is a battery fix you
+  can only really confirm by watching it.
+- Redis behind `storage.js` **if and when** a second backend instance becomes
+  real — which also needs `@socket.io/redis-adapter` and a mediasoup story.
 - Phase 7 marketplace seams: version resolution, dependency graph, plugin state
   behind an interface (an in-process `Map` today — pre-existing, does not survive
   a restart or scale horizontally), manifest signature hook, remote manifests.
@@ -4198,6 +4209,120 @@ it took the plugin that needed them to notice nobody could listen.
 
 ---
 
+## 55. Phase 7: marketplace seams — and one deliberately not built
+
+The last phase of the Activity Platform. It is explicitly **"architecture
+only"**: there is no marketplace, no remote manifest and no signing key, so the
+work is not a feature but a set of decisions that are expensive to retrofit.
+
+### Two of the three were already standing
+
+Auditing before building was most of the value here. `version` was already a
+required semver field validated in `manifest.js`; `requires[]` was already
+validated with cycle detection in `registry.validateDependencies()`; plugin
+state already routed through the `storage.js` interface rather than bare `Map`s.
+The migration doc had listed all three as "to do" since Phase 1.
+
+What was genuinely missing was smaller and sharper than the plan implied.
+
+### Version resolution: a pin nobody read
+
+`installed[].version` has been pinned at install since Phase 4, preserved across
+every edit, and carried by the compat resolver. **Nothing ever compared it.** So
+a plugin could go 1.0.0 → 2.0.0, rewrite its config grammar, and every existing
+room would silently adopt the new one — precisely the scenario pinning was
+introduced to prevent. A pin nobody reads is a comment.
+
+`shared/activities/version.js` compares them and `resolveActivities()` now
+carries `version: {pinned, current, status, compatible, needsAttention}` on
+every entry. Design calls worth recording:
+
+- **Only the MAJOR matters.** A major bump is the author declaring a break;
+  minor and patch are by definition safe to adopt, which is what makes them
+  minor and patch. Treating every bump as a migration would turn a typo fix in a
+  description into an upgrade prompt, and a badge that cries wolf gets ignored.
+- **`ahead` is its own status**, not "breaking". A pin *newer* than the build
+  means a rolled-back server or a room synced from another environment — the fix
+  is on the server, not in the room, and merging the two would send someone to
+  the wrong place.
+- **Unparseable sorts EQUAL, not lower.** "I cannot tell" and "this is older"
+  are different claims; conflating them makes a corrupt pin look like a pending
+  upgrade.
+- **Not a resolver that runs old code.** One build ships one implementation per
+  plugin. Keeping several live needs versioned modules and a loader — a
+  marketplace might justify that, a single-server hangout app never will. This
+  makes drift *legible*; policy sits on top.
+
+### Provenance: the hook, and why it fails closed
+
+`shared/activities/provenance.js` installs a verifier at `registerPlugin()` —
+the one path every manifest takes, on both server boot and bundle init, so it
+cannot be bypassed by a caller who forgets to ask. Same reasoning that put shape
+validation there rather than at each call site.
+
+The load-bearing decision is the **default with no verifier installed**: a
+manifest with no `origin` is treated as built-in and accepted; one claiming a
+remote origin is **refused**. The opposite default — allow everything until
+someone installs a policy — means that the day remote manifests become possible
+they are trusted by default, and the security review happens after the feature
+ships. Failing closed costs nothing today (nothing has a remote origin) and is
+the only default that stays correct if this seam is forgotten for a year.
+
+An installed verifier applies to **built-ins too**, not just strangers. A policy
+that cannot inspect first-party plugins is a filter, not a kill switch.
+
+### The one I did NOT build: Redis-backed plugin state
+
+The plan says "plugin state store interface (in-memory now, Redis later)". I
+audited it and did not build it, because the premise does not hold yet:
+
+1. **Durability already exists.** `storage.js` write-behinds to Mongo on a 3s
+   debounce with a final flush on release. Redis would add no durability.
+2. **The only benefit is cross-process sharing, and nothing shares.** There is
+   no `@socket.io/redis-adapter` in the stack, so a second backend instance
+   could not route sockets today regardless of where plugin state lived.
+   `DEPLOYMENT.md` is explicit: one Oracle Always-Free VM, one backend, with
+   mediasoup pinning the architecture to a single node anyway.
+3. **Doing it properly is a bigger change than it sounds.** The in-process
+   memory layer is the *authority* between flushes. Making a second server
+   correct means Redis becomes the source of truth rather than a cache — which
+   is a redesign of the hot path, not a driver swap.
+
+So the honest state is: the **seam** is what Phase 7 owed, and the seam exists —
+every plugin goes through `createStorage()` and none holds a `Map` of its own.
+Swapping the backing is a change to one file whenever a second instance becomes
+real. Building it now would be speculative work with no consumer, and it would
+be *unverifiable* work: there is no second process to test it against.
+
+### A real flake, found and fixed on the way
+
+The whiteboard rate-limit test failed intermittently (2 runs in 6). The
+tempting read was "my change broke it" — but the failing assertion was
+`toBeGreaterThan(0)`: **nothing** was relayed, in a test whose subject is that
+*too much* is relayed. Checking against a stash confirmed it failed identically
+without the change.
+
+Cause: the test fires 120 fire-and-forget events immediately after
+`twoInRoom()`, which resolves on the join ack — not the instant the sender's own
+event path is ready. When the burst won that race every event was refused. The
+fix is one awaited round-trip before the flood: the burst is still a burst, it
+just starts from a known-open channel. 8/8 green after. A sleep would have been
+the same race with a longer fuse.
+
+**608 tests / 28 suites green** (27 new).
+
+### Interview answer: "how do you decide what NOT to build?"
+
+By asking what would *verify* it. Version resolution and the provenance hook are
+both testable today: I can pin a room to 0.9.0 and assert the drift is reported,
+install a hostile verifier and assert registration refuses. Redis-backed state
+has no such test available — there is no second process — so it would ship as
+untested code defending against a scenario the deployment cannot produce. The
+seam is the deliverable; the implementation waits for a consumer that can prove
+it works.
+
+---
+
 ## Note: No Paid Cloud Services
 
 The user has no paid cloud accounts (no AWS, etc.) — every feature that would normally
@@ -4215,4 +4340,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-11 (§54 — Smash Karts migrated, client AND server: THE LAST MIGRATION, so PHASE 2 IS COMPLETE and ACTIVITY_PLUGINS=all finally means all nine. The only activity running its own simulation (30Hz setInterval physics), which is why its destroy() was always the reference lifecycle test — asserted by recording g.tick, tearing down, waiting and checking the tick has NOT moved, because a nulled handle with a live closure would pass a naive check and still burn a core forever. Added two SDK capabilities: detached().stream() for volatile/lossy high-rate traffic (reliable delivery on bad wifi builds a backlog the player can never catch up from), and sdk.lifecycle.onHidden/onShown, which finally gave plugins a door into the activity:hidden DOM events ActivityHost had been dispatching since Phase 3 with no way for a panel to reach them — unblocking the kart manifest's obligation #2, a hidden 3D game rendering at full frame rate into a canvas nobody can see. The legacy hand-rolled reconnect re-sync deleted itself: useActivitySdk rejoins and the join ack carries the snapshot. 581 tests / 27 suites, nine plugins served. Previously §53 — Ludo migrated, client AND server: the second bespoke plugin. NOT an adaptLobbyGame() one-liner because its seats are colour-keyed (four fixed board positions, turn order is a list of colours) while lobby.seats models an ordered array of users — adapting would have meant colour↔index translation on every call. Six timers (turn, AFK, auto-move, bot roll, bot move, dead-dice) all on detached(); the bot/human shared code path — doRoll/doMove take no socket, so bots cannot make a move a human couldn't — survives untouched. The host's teardown deleted the legacy "is any HUMAN still connected?" check outright. maxPlayers/allowBots/botDifficulty/turnTimer were declared in Phase 1 with no reader and are now live, with turnTimer:0 ("Off") read through Number.isFinite so `|| DEFAULT` cannot silently re-enable the AFK clock. 560 tests / 26 suites, eight plugins served. Previously §52 — Draw & Guess migrated, client AND server: the first BESPOKE plugin, with no framework underneath it. Game logic ported verbatim so the diff against game.handlers.js is reviewable; only the transport lines changed. Five interlocking timers run on `sdk.socket.detached()`, stored per-room and refreshed on join so the chain survives the drawer disconnecting mid-turn; the private `toUser()` word channel is now load-bearing and pinned by two tests. maxRounds/turnSeconds/hints were hardcoded constants and are now read from the manifest's configSchema. On the client the hook WAS the seam: GameCanvas took its transport as props and GamePanel was untouched apart from forwarding it. 537 tests / 25 suites, seven plugins served. Previously §51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
+*Last updated: 2026-08-11 (§55 — Phase 7 marketplace seams, so THE ACTIVITY PLATFORM IS COMPLETE (all 7 phases). Two of the three items were already standing (version field, requires[] with cycle detection, the storage interface) — auditing before building was most of the value. What was genuinely missing: nothing ever COMPARED the pinned version, so a plugin could go 1.x→2.x and every room would silently adopt the new grammar, which is the exact scenario pinning existed to prevent. shared/activities/version.js now compares them and resolveActivities carries {pinned,current,status,compatible,needsAttention}; only MAJOR counts as breaking, `ahead` is its own status (rolled-back server, fix is server-side not room-side), unparseable sorts EQUAL not lower. Provenance gates at registerPlugin() — the one path every manifest takes — and FAILS CLOSED: remote origin refused unless a verifier is installed, because the opposite default means remote manifests are trusted by default the day they become possible. Redis-backed state audited and deliberately NOT built: Mongo already gives durability, no socket.io Redis adapter exists so nothing could share state anyway, deployment is one VM with mediasoup pinning to one node, and it would ship untested with no second process to verify against. Also fixed a genuine pre-existing flake — the whiteboard rate-limit test failed on toBeGreaterThan(0) (nothing relayed) not the cap, because 120 fire-and-forget events raced the join; confirmed against a stash that it predated the change. 608 tests / 28 suites. Previously §54 — Smash Karts migrated, client AND server: THE LAST MIGRATION, so PHASE 2 IS COMPLETE and ACTIVITY_PLUGINS=all finally means all nine. The only activity running its own simulation (30Hz setInterval physics), which is why its destroy() was always the reference lifecycle test — asserted by recording g.tick, tearing down, waiting and checking the tick has NOT moved, because a nulled handle with a live closure would pass a naive check and still burn a core forever. Added two SDK capabilities: detached().stream() for volatile/lossy high-rate traffic (reliable delivery on bad wifi builds a backlog the player can never catch up from), and sdk.lifecycle.onHidden/onShown, which finally gave plugins a door into the activity:hidden DOM events ActivityHost had been dispatching since Phase 3 with no way for a panel to reach them — unblocking the kart manifest's obligation #2, a hidden 3D game rendering at full frame rate into a canvas nobody can see. The legacy hand-rolled reconnect re-sync deleted itself: useActivitySdk rejoins and the join ack carries the snapshot. 581 tests / 27 suites, nine plugins served. Previously §53 — Ludo migrated, client AND server: the second bespoke plugin. NOT an adaptLobbyGame() one-liner because its seats are colour-keyed (four fixed board positions, turn order is a list of colours) while lobby.seats models an ordered array of users — adapting would have meant colour↔index translation on every call. Six timers (turn, AFK, auto-move, bot roll, bot move, dead-dice) all on detached(); the bot/human shared code path — doRoll/doMove take no socket, so bots cannot make a move a human couldn't — survives untouched. The host's teardown deleted the legacy "is any HUMAN still connected?" check outright. maxPlayers/allowBots/botDifficulty/turnTimer were declared in Phase 1 with no reader and are now live, with turnTimer:0 ("Off") read through Number.isFinite so `|| DEFAULT` cannot silently re-enable the AFK clock. 560 tests / 26 suites, eight plugins served. Previously §52 — Draw & Guess migrated, client AND server: the first BESPOKE plugin, with no framework underneath it. Game logic ported verbatim so the diff against game.handlers.js is reviewable; only the transport lines changed. Five interlocking timers run on `sdk.socket.detached()`, stored per-room and refreshed on join so the chain survives the drawer disconnecting mid-turn; the private `toUser()` word channel is now load-bearing and pinned by two tests. maxRounds/turnSeconds/hints were hardcoded constants and are now read from the manifest's configSchema. On the client the hook WAS the seam: GameCanvas took its transport as props and GamePanel was untouched apart from forwarding it. 537 tests / 25 suites, seven plugins served. Previously §51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
