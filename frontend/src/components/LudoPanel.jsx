@@ -161,11 +161,13 @@ const BOT_LEVELS = [
 ];
 
 export default function LudoPanel({ roomId }) {
-  const { state, me, myColor, isMyTurn, join, leave, start, roll, move, reset, addBot, removeBot, notices } = useLudo(roomId);
+  const { sdk, state, me, myColor, isMyTurn, join, leave, start, roll, move, reset, addBot, removeBot, notices } = useLudo(roomId);
   const [error, setError] = useState(null);
   const [botDiff, setBotDiff] = useState("medium");
   // Shared animated sticker reactions (same system as UNO/chess/bingo/typing).
-  const rx = useReactions("ludo", roomId);
+  // Passing the sdk routes sends through the plugin host; the hook listens on
+  // both channels either way, so this works with the flag on or off.
+  const rx = useReactions("ludo", roomId, sdk);
 
   // Sounds come from STATE DIFFS, so bot moves are audible exactly like human
   // ones (the server doesn't tell us who acted — the board changing does).

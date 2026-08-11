@@ -36,12 +36,21 @@ import { logger } from "../utils/logger.js";
 
 import whiteboardServer from "./whiteboard/server.js";
 import stickyNotesServer from "./sticky-notes/server.js";
+import skribblServer from "./skribbl/server.js";
+import ludoServer from "./ludo/server.js";
 import { chessServer, unoServer, typingServer, bingoServer } from "./framework-games/server.js";
 
 // pluginId -> server module. Only these can be enabled by the flag.
 const SERVER_MODULES = {
   whiteboard: whiteboardServer,
   "sticky-notes": stickyNotesServer,
+  // Bespoke, not framework-derived: draw-guess predates lobbyGame.js and owns
+  // its own lobby, timers and scoring. See skribbl/server.js.
+  skribbl: skribblServer,
+  // Also bespoke: Ludo GREW the seat/bot/AFK logic that later became
+  // lobbyGame.js but was never moved onto it, and its seats are colour-keyed
+  // rather than a flat list. See ludo/server.js.
+  ludo: ludoServer,
   // All four come from ONE adapter over the existing lobbyGame framework —
   // no per-game server code. See framework-games/server.js.
   chess: chessServer,

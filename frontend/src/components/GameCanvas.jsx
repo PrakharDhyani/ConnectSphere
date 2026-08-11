@@ -8,10 +8,16 @@
  * while you draw.
  *
  * Only the drawer's pointer draws + broadcasts; everyone renders incoming
- * `game:draw` segments and clears on `game:clear`.
+ * draw segments and clears on clear.
+ *
+ * TRANSPORT COMES IN AS PROPS, NOT FROM A SOCKET. Since the Phase 2 migration
+ * the wire is the activity SDK, and this component takes the four senders it
+ * needs (`draw`/`clear`/`onDraw`/`onClear`) from `useSkribbl`. That keeps the
+ * plugin's whole socket surface in one file — and means this component would
+ * work unchanged over any transport, which is what made the migration a
+ * two-file change instead of a hunt through the canvas code.
  */
 import { useEffect, useRef, useState } from "react";
-import { getSocket } from "@/lib/socket.js";
 import Button from "@/components/ui/Button.jsx";
 
 const W = 1000;
@@ -22,7 +28,7 @@ const PALETTE = [
   "#a0522d", "#ffffff",
 ];
 
-export default function GameCanvas({ roomId, isDrawer }) {
+export default function GameCanvas({ isDrawer, draw, clear: sendClear, onDraw, onClear }) {
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
   const drawing = useRef(false);
@@ -44,16 +50,16 @@ export default function GameCanvas({ roomId, isDrawer }) {
       ctx.lineTo(s.x1 * W, s.y1 * H);
       ctx.stroke();
     };
-    const socket = getSocket();
-    const onDraw = ({ stroke }) => seg(stroke);
-    const onClear = () => ctx.clearRect(0, 0, W, H);
-    socket.on("game:draw", onDraw);
-    socket.on("game:clear", onClear);
+    // The SDK's `on` returns its own unsubscribe, so there is no off() pairing
+    // to get wrong. Both are optional: the sdk is null for the first render,
+    // before useActivitySdk has built it.
+    const offDraw = onDraw?.(({ stroke }) => seg(stroke));
+    const offClear = onClear?.(() => ctx.clearRect(0, 0, W, H));
     return () => {
-      socket.off("game:draw", onDraw);
-      socket.off("game:clear", onClear);
+      offDraw?.();
+      offClear?.();
     };
-  }, []);
+  }, [onDraw, onClear]);
 
   const drawSeg = (s) => {
     const ctx = ctxRef.current;
@@ -81,7 +87,7 @@ export default function GameCanvas({ roomId, isDrawer }) {
     const p = norm(e);
     const stroke = { x0: last.current.x, y0: last.current.y, x1: p.x, y1: p.y, color, size };
     drawSeg(stroke);
-    getSocket().emit("game:draw", { roomId, stroke });
+    draw?.(stroke);
     last.current = p;
   };
   const onUp = () => {
@@ -91,7 +97,7 @@ export default function GameCanvas({ roomId, isDrawer }) {
 
   const clear = () => {
     ctxRef.current.clearRect(0, 0, W, H);
-    getSocket().emit("game:clear", { roomId });
+    sendClear?.();
   };
 
   return (

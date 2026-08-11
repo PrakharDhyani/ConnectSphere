@@ -10,8 +10,15 @@ import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
 
 export default function GamePanel({ roomId }) {
-  const { state, choices, myWord, feed, isDrawer, iGuessed, me, spectating, start, setReady, chooseWord, guess } =
-    useSkribbl(roomId);
+  const {
+    state, choices, myWord, feed, isDrawer, iGuessed, me, spectating,
+    start, setReady, chooseWord, guess,
+    // Canvas transport — forwarded to GameCanvas, which owns no socket itself.
+    draw, clear, onDraw, onClear,
+  } = useSkribbl(roomId);
+  // One object so the canvas props are identical on every render; the senders
+  // are already useCallback-stable, so this never re-subscribes needlessly.
+  const canvas = { draw, clear, onDraw, onClear };
   const [rounds, setRounds] = useState(3);
   const [draft, setDraft] = useState("");
   const [startError, setStartError] = useState(null);
@@ -61,7 +68,7 @@ export default function GamePanel({ roomId }) {
         <div className="bg-amber-500/10 border border-amber-500/40 text-amber-300 rounded-xl px-4 py-2 text-sm text-center">
           👀 Round in progress — you&apos;re spectating and will join automatically when it ends.
         </div>
-        <GameCanvas roomId={roomId} isDrawer={false} />
+        <GameCanvas isDrawer={false} {...canvas} />
       </div>
     );
   }
@@ -174,7 +181,7 @@ export default function GamePanel({ roomId }) {
             </div>
           </div>
         ) : (
-          <GameCanvas roomId={roomId} isDrawer={isDrawer} />
+          <GameCanvas isDrawer={isDrawer} {...canvas} />
         )}
       </div>
 

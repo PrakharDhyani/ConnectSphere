@@ -3893,18 +3893,23 @@ framework (`lobby.seats`) so both paths share one implementation.
 `sdk.socket.post()` for high-rate fire-and-forget traffic. Six plugins served:
 `sticky-notes, whiteboard, chess, uno, typing, bingo`.
 
-**Next — Activity Platform, Phase 7 + the remaining migrations:**
-- `skribbl` → `ludo` → **`kart` last**. These three are the genuinely bespoke
-  ones. Skribbl (311 lines) is not a lobbyGame config: it has 9 socket events
-  and **five interlocking timers** (word choice, turn clock, two hint reveals,
-  round reveal), each closing over `io` — so it needs the `detached()` treatment
-  throughout rather than an adapter. Kart is last and hardest: 478 lines with a
+**Done — Draw & Guess, client + server (§52).** The first bespoke migration: no
+framework underneath, five interlocking timers on `detached()`, and the first
+plugin whose correctness depends on the private `toUser()` channel. Logic ported
+verbatim so the diff against `game.handlers.js` is reviewable.
+**537 tests / 25 suites green.** Seven plugins served.
+
+**Done — Ludo, client + server (§53).** Colour-keyed seats (so `lobby.seats` was
+the wrong shape to adapt to) and six timers on `detached()`. The bot/human shared
+code path survives untouched. Four config fields declared in Phase 1 finally have
+a reader. **560 tests / 26 suites green.** Eight plugins served.
+
+**Next — Activity Platform, Phase 7 + the last migration:**
+- **`kart`** — the only migration left, and the hardest: 478 lines with a
   `setInterval` physics loop whose `destroy()` is the reference lifecycle test
-  (now rehearsed three times — poll's timer, bingo's tick, and skribbl next).
-- **Migrate `WhiteboardPanel` onto the client SDK.** Its server module has been
-  done since Phase 2, but the panel still imports `socket.js`, so
-  `ACTIVITY_PLUGINS=whiteboard` would break it. Server and client must migrate
-  together — see §47.
+  (now rehearsed five times — poll's timer, bingo's tick, skribbl's five clocks
+  and ludo's six). Needs no new SDK capability; this is labour, not design.
+  Finishing it completes Phase 2 and empties `sockets/*.handlers.js` of games.
 - Phase 7 marketplace seams: version resolution, dependency graph, plugin state
   behind an interface (an in-process `Map` today — pre-existing, does not survive
   a restart or scale horizontally), manifest signature hook, remote manifests.
@@ -3921,6 +3926,184 @@ framework (`lobby.seats`) so both paths share one implementation.
 2. **Manual browser tests** across all activities (2 tabs) + guest link.
 3. **Responsive pass** polish; watch-party (synced YouTube); rename (French, TBD).
 4. Merge the branch chain into `develop`; later coturn (TURN) for real-network calls.
+
+## 52. Migration: Draw & Guess — the first bespoke plugin (client + server)
+
+Skribbl now runs through the plugin host, both halves. It is the first migration
+with **no framework underneath it**: the four framework games cost one adapter
+line each because `lobbyGame.js` was already an SDK, and whiteboard's server
+module had existed since Phase 2. This one is 311 lines of its own lobby, its
+own scoring, and five interlocking timers.
+
+### Options considered
+
+| Option | Verdict |
+|---|---|
+| Rewrite the game on `lobbyGame.js` first, then adapt | **No.** Skribbl's lobby is genuinely different — spectators, per-turn drawer rotation, ready-flags that reset on game end. Forcing it into the seat framework would have been a rewrite disguised as a migration, with the regressions hidden inside the "improvement" |
+| Port the logic verbatim, change only the transport | **Yes.** The diff against `game.handlers.js` is then reviewable line by line: same scoring curve, same hint schedule, same spectator policy, same host election |
+| Keep `io` in the module for the timers | No — a plugin holding `io` can address every room on the server, which is the capability boundary the SDK exists to draw |
+
+### What actually changed
+
+Only the lines that named the transport:
+
+```
+io.to(roomKey(roomId)).emit("game:x")  →  bus.broadcast("x")
+io.to(`user:${id}`).emit("game:x")     →  bus.toUser(id, "x")
+canAccessRoom / socket.rooms / allow() →  deleted — the host does all three
+```
+
+The third line is the payoff: the legacy handler re-implemented access control
+and rate limiting by hand in nine places. The plugin implements none of it.
+
+### `detached()` is the whole story
+
+**Every** state transition in this game fires from a timer, not a request: the
+15s choose clock, the 75s turn clock, two hint reveals at 50%/75%, the 5s reveal
+gap. Request-scoped `sdk.socket` is dead the moment its event returns, so a
+timer holding one emits into the void — and the failure is *silent*: the game
+just stops advancing, with nothing in the logs. `sdk.socket.detached()` (built
+for polls in §49, generalised in §50) is exactly the broadcaster a turn clock
+needs, and this plugin is its heaviest user.
+
+The bus is stored **per room and refreshed on every join**, not captured
+per-event. That is what makes the timer chain survive the drawer disconnecting
+mid-turn — the object only closes over the activity key, so any member's is
+equivalent, but one built from a socket that has since dropped is not guaranteed
+to outlive it.
+
+### The private channel, finally exercised
+
+The migration plan scheduled draw-guess *after* the framework games for one
+reason: the drawer must learn the real word while guessers see only a mask. That
+is `sdk.socket.toUser()`, and this is the first plugin to depend on it for
+correctness rather than convenience. Two tests pin it down — one asserts the
+non-drawer never receives `choices`, the other that the guesser's state carries
+`word: null` and a mask that is not the word. Both would pass a one-player smoke
+test regardless, which is why they are assertions and not eyeballing.
+
+### Ephemeral state is a decision, not an oversight
+
+Sticky Notes routes through `sdk.storage` so a board survives a restart. This
+one deliberately does not: a half-finished turn restored after a crash resumes
+with a word nobody is drawing and a clock that already expired. Games are
+ephemeral; `destroy()` clearing the five timers is the only cleanup that matters.
+
+### Config the legacy handler hardcoded
+
+`maxRounds`, `turnSeconds` and `hints` were constants in `game.handlers.js`
+(3, 75_000, always-on). The manifest had declared them as `configSchema` since
+Phase 1 with nothing reading it; the plugin now reads all three from
+`sdk.meta.config`, so the wizard's per-room settings finally do something.
+
+### Client: the hook was the seam
+
+`useSkribbl.js` held the entire socket surface, so migrating it migrated the
+game. `GamePanel` was written against the hook's return value and needed only
+the canvas transport forwarded. `GameCanvas` was the one component reaching for
+`getSocket()` directly — it now takes `draw`/`clear`/`onDraw`/`onClear` as
+props, which means it would work over any transport at all.
+
+Also gone: the separate `game:sync` round-trip. `sdk.socket.join()` returns the
+state in its ack, so there is no window where the UI is mounted but stateless.
+
+`room:announce` stays on the core socket — it is room traffic that drives the
+tap-to-join toast, not plugin traffic, and the plugin SDK deliberately cannot
+send it. Same precedent as `WhiteboardPanel` (§51).
+
+**537 tests / 25 suites green** (17 new). Seven plugins served:
+`sticky-notes, whiteboard, chess, uno, typing, bingo, skribbl`.
+
+### Interview answer: "what makes a migration safe to review?"
+
+That the diff is boring. Every interesting decision in this one was made in the
+*plan* — migrate in size order, build `detached()` before the timer-heavy
+plugins, build `toUser()` before the one with a private channel — so by the time
+the code was written there was nothing left to invent. The two plugins left
+(`ludo`, `kart`) need no new SDK capability, which is the actual evidence the
+platform is finished: the last two migrations are labour, not design.
+
+---
+
+## 53. Migration: Ludo — colour-keyed seats and six timers
+
+Ludo now runs through the plugin host, both halves. Second bespoke migration,
+and the last one before Kart.
+
+### Why this is not an `adaptLobbyGame()` one-liner
+
+Ludo **grew** the seat/bot/AFK logic that later became `lobbyGame.js`, but was
+never moved onto it — so the resemblance is ancestral, not structural. Its seats
+are **colour-keyed** (red/green/yellow/blue), not a flat player list: the board
+has four fixed positions, turn order is a list of colours, and a token's legal
+moves are computed from its colour's track. `lobby.seats` models seats as an
+ordered array of users, which is exactly the wrong shape. Adapting would have
+meant translating colour↔index on every call — more code than the transport
+swap, and a fresh class of off-by-one bug in the turn rotation.
+
+So: the same choice as §52. Port the rules verbatim, change only the transport.
+
+### Six timers, all on `detached()`
+
+Turn clock, AFK clock, auto-move, bot roll, bot move, and the 1.2s dead-dice
+pause. Every one fires with no socket in scope. The failure mode if this is got
+wrong is the nastiest kind: a bot game simply **stops advancing**, silently,
+with nothing in the logs — so the test that matters is "a bot seated first takes
+its turn with no human input at all". That one assertion exercises the whole
+detached chain end to end.
+
+### The invariant worth preserving
+
+`doRoll`/`doMove` take no socket: a human's event validates identity and then
+calls them, and a bot's timer calls the same functions. Bots therefore
+**physically cannot make a move a human couldn't** — they only choose among
+`g.movable`, which the server built. That property survives the migration
+untouched, because those functions never knew about sockets in the first place.
+They take the bus instead of `io` now: same shape of dependency, far smaller
+blast radius.
+
+### What the host deleted
+
+The legacy `disconnecting` handler had to ask *"is any HUMAN seated player still
+connected?"* so a table of bots would not run forever. The host's teardown
+already answers the stronger question — is *anyone* still in this activity — so
+that logic is gone entirely and a bot-only table is freed for the same reason an
+empty one is.
+
+`onJoin` deliberately does **not** seat you, unlike skribbl. That matches the
+legacy split (`ludo:sync` read state; `ludo:join` took a colour) and it matters
+here because four seats are scarce: someone opening the tab to watch must not
+consume one.
+
+### Config that was declared in Phase 1 and read by nothing
+
+`maxPlayers`, `allowBots`, `botDifficulty` and `turnTimer` were all in the
+manifest's `configSchema` with no reader. All four are now live. `turnTimer: 0`
+("Off") is the one with a trap — the idiomatic `Number(cfg.turnTimer) || DEFAULT`
+turns 0 into 30s and silently re-enables auto-play in a room that switched it
+off. It reads through `Number.isFinite` instead, and there is a test pinning it.
+
+### The test race worth writing down
+
+Five tests hung on a game that had started perfectly well. `start` broadcasts
+its state **synchronously**, so a listener armed after `await send(…, "start")`
+has already missed it. The fix is a `startAndWait()` helper that arms the
+listener *before* sending. The tempting alternative — a short sleep — is the
+same race with a longer fuse, and it would have passed locally and flaked in CI.
+
+**560 tests / 26 suites green** (23 new). Eight plugins served:
+`sticky-notes, whiteboard, chess, uno, typing, bingo, skribbl, ludo`.
+
+### Interview answer: "how do you know a migration preserved behaviour?"
+
+You don't, from the diff alone — you know it from what the diff *can't* touch.
+Both bespoke migrations moved zero rules: the scoring curves, the capture
+logic, the AFK strike counting are byte-identical, so the only thing review has
+to check is the transport. Everything genuinely new (per-room config) is
+additive and separately tested. That is what makes "the diff is boring" a safety
+property rather than a compliment.
+
+---
 
 ## Note: No Paid Cloud Services
 
@@ -3939,4 +4122,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-08 (§51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
+*Last updated: 2026-08-11 (§53 — Ludo migrated, client AND server: the second bespoke plugin. NOT an adaptLobbyGame() one-liner because its seats are colour-keyed (four fixed board positions, turn order is a list of colours) while lobby.seats models an ordered array of users — adapting would have meant colour↔index translation on every call. Six timers (turn, AFK, auto-move, bot roll, bot move, dead-dice) all on detached(); the bot/human shared code path — doRoll/doMove take no socket, so bots cannot make a move a human couldn't — survives untouched. The host's teardown deleted the legacy "is any HUMAN still connected?" check outright. maxPlayers/allowBots/botDifficulty/turnTimer were declared in Phase 1 with no reader and are now live, with turnTimer:0 ("Off") read through Number.isFinite so `|| DEFAULT` cannot silently re-enable the AFK clock. 560 tests / 26 suites, eight plugins served. Previously §52 — Draw & Guess migrated, client AND server: the first BESPOKE plugin, with no framework underneath it. Game logic ported verbatim so the diff against game.handlers.js is reviewable; only the transport lines changed. Five interlocking timers run on `sdk.socket.detached()`, stored per-room and refreshed on join so the chain survives the drawer disconnecting mid-turn; the private `toUser()` word channel is now load-bearing and pinned by two tests. maxRounds/turnSeconds/hints were hardcoded constants and are now read from the manifest's configSchema. On the client the hook WAS the seam: GameCanvas took its transport as props and GamePanel was untouched apart from forwarding it. 537 tests / 25 suites, seven plugins served. Previously §51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*

@@ -416,10 +416,13 @@ Tests: manifest validation, legacy vs new resolution.
 2. Server SDK (socket, room, storage, presence, events) built from declared permissions.
 3. **Migrate in this order**, each behind a parallel-registration flag so old and new run side by
    side until verified:
-   ~~`whiteboard`~~ (server done; client still on socket.js) → ~~`poll`~~ **migrated in §47 and
+   ~~`whiteboard`~~ ✅ **done client+server (§51)** → ~~`poll`~~ **migrated in §47 and
    deliberately REVERTED in §48 — polls are core, see §0** → ~~the four framework games~~ ✅
    **done client+server in §50, via ONE adapter — one line per game, no per-game plugin code** →
-   `draw-guess` → `ludo` → **`smash-karts` last**.
+   ~~`draw-guess`~~ ✅ **done client+server in §52 — the first BESPOKE migration, no framework
+   underneath: logic ported verbatim, only the transport changed** → ~~`ludo`~~ ✅ **done
+   client+server in §53 — colour-keyed seats made `lobby.seats` the wrong shape to adapt to;
+   six timers on `detached()`** → **`smash-karts` last — the only one left**.
 
    §50 confirmed §1.2's prediction literally: because `lobbyGame.js` was already an SDK, extending
    it beat replacing it. The enabling refactor was splitting its **seat rules** (join/leave/start/
@@ -428,8 +431,9 @@ Tests: manifest validation, legacy vs new resolution.
 
    **The flag is per-plugin and so is the migration.** Enabling a plugin switches the *server* to
    the host; its *client* must already speak `sdk.socket`, or the two halves desynchronise and the
-   activity dies silently. Whiteboard is the live example: server module done since Phase 2, but
-   `WhiteboardPanel` still imports `socket.js`, so `ACTIVITY_PLUGINS=whiteboard` would break it.
+   activity dies silently. Whiteboard was the live example — its server module was done in Phase 2
+   while `WhiteboardPanel` still imported `socket.js`, so `ACTIVITY_PLUGINS=whiteboard` would have
+   broken it. Both halves landed together in §51; every plugin now on the flag has a migrated client.
 
    Poll also forced a real SDK addition: **`sdk.socket.detached()`**, a broadcaster that outlives the
    request, for plugins that must speak from a timer with no socket in scope. Every remaining
@@ -486,6 +490,14 @@ plugin id, so it cannot quietly regress. See PROJECT_NOTES §46.
 ### Phase 7 — Marketplace seams (architecture only)
 Version resolution, dependency graph, plugin state store interface (in-memory now, Redis later),
 manifest signature hook.
+
+**Partly standing already**, as a by-product of earlier phases rather than deliberate Phase 7 work:
+`version` is a required semver field on every manifest (validated in `manifest.js`), `requires[]`
+is validated and resolved by `registry.validateDependencies()`, and plugin state already routes
+through the `storage.js` interface rather than bare `Map`s in each plugin. What is genuinely absent
+is **version *resolution*** (pinning `installed[].version` at install and honouring it), the **Redis
+backing** behind the storage interface, and the **manifest signature hook**. None is needed until
+third-party plugins are real; all three are seams, not features.
 
 ---
 
