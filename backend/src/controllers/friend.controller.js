@@ -51,20 +51,39 @@ export async function searchUsers(req, res, next) {
     const links = await Friendship.find({
       $or: [{ requester: req.user.id }, { recipient: req.user.id }],
     }).lean();
-    const relOf = (uid) => {
-      const f = links.find(
+    const linkTo = (uid) =>
+      links.find(
         (l) =>
           (l.requester.toString() === uid && l.recipient.toString() === req.user.id) ||
           (l.recipient.toString() === uid && l.requester.toString() === req.user.id)
       );
+    const relOf = (uid) => {
+      const f = linkTo(uid);
       if (!f) return "none";
+      if (f.status === "blocked") {
+        // I blocked them → say so, so the UI can offer "Unblock".
+        return String(f.blockedBy) === req.user.id ? "blocked" : "none";
+      }
       if (f.status === "accepted") return "friends";
       return f.requester.toString() === req.user.id ? "outgoing" : "incoming";
     };
 
+    /**
+     * Someone who blocked ME is hidden from search entirely.
+     *
+     * Showing them with an "Add" button that always fails would be worse than
+     * useless — it would be a way to confirm the block by probing. The block is
+     * one-directional in effect: my blocks are visible to me (so I can lift
+     * them), theirs are invisible.
+     */
+    const visible = users.filter((u) => {
+      const f = linkTo(u._id.toString());
+      return !(f?.status === "blocked" && String(f.blockedBy) !== req.user.id);
+    });
+
     res.json({
       success: true,
-      data: { users: users.map((u) => ({ ...publicUser(u), relationship: relOf(u._id.toString()) })) },
+      data: { users: visible.map((u) => ({ ...publicUser(u), relationship: relOf(u._id.toString()) })) },
     });
   } catch (error) {
     next(error);
@@ -83,6 +102,16 @@ export async function sendRequest(req, res, next) {
 
     const existing = await Friendship.findOne(betweenQuery(req.user.id, userId));
     if (existing) {
+      /**
+       * A blocked pair cannot be re-requested — that is the whole point of a
+       * block outliving an unfriend.
+       *
+       * The error is deliberately "User not found", the same 404 an unknown id
+       * gets: telling someone "you are blocked" turns a block into a
+       * notification, and a persistent one at that. From the blocked side it is
+       * indistinguishable from the account having gone away.
+       */
+      if (existing.status === "blocked") throw err("User not found", 404);
       throw err(existing.status === "accepted" ? "You're already friends" : "A request is already pending", 409);
     }
 
@@ -194,6 +223,106 @@ export async function removeFriend(req, res, next) {
       ...betweenQuery(req.user.id, req.params.userId),
     });
     res.json({ success: true, message: "Removed" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /friends/:userId/block — block someone.
+ *
+ * BLOCK IS NOT A LOUDER UNFRIEND. Unfriend deletes the row, so the other person
+ * can re-request within seconds and the only cost to them is one click. A block
+ * KEEPS the row in a `blocked` state, which does three things at once:
+ *   1. they are no longer an accepted friend, so every friendship check —
+ *      including the DM gate — refuses them without knowing what a block is;
+ *   2. the unique (pair) index means they cannot create a fresh request row;
+ *   3. `blockedBy` records whose decision it was, so only I can lift it.
+ *
+ * Works from ANY prior state (friends, pending either way, or strangers), so
+ * "block" is available the first time someone is a problem rather than only
+ * after accepting them.
+ *
+ * DELIBERATELY NOT SILENT-FAIL: the blocked user is not notified, but nothing
+ * pretends the messages are still arriving either. Their sends are refused with
+ * the same wording as an unfriend, so a block cannot be distinguished from an
+ * unfriend by probing — which is what stops it becoming a taunt.
+ */
+export async function blockUser(req, res, next) {
+  try {
+    const { userId } = req.params;
+    if (!mongoose.isValidObjectId(userId)) throw err("User not found", 404);
+    if (userId === req.user.id) throw err("You can't block yourself", 400);
+
+    const target = await User.findById(userId).select("_id isGuest").lean();
+    if (!target || target.isGuest) throw err("User not found", 404);
+
+    const existing = await Friendship.findOne(betweenQuery(req.user.id, userId));
+    if (existing) {
+      // Already blocked BY THE OTHER PERSON: refuse rather than overwrite, or
+      // the blocked party could seize the block and then lift it themselves.
+      if (existing.status === "blocked" && String(existing.blockedBy) !== req.user.id) {
+        throw err("User not found", 404);
+      }
+      existing.status = "blocked";
+      existing.blockedBy = req.user.id;
+      await existing.save();
+    } else {
+      await Friendship.create({
+        requester: req.user.id,
+        recipient: userId,
+        status: "blocked",
+        blockedBy: req.user.id,
+      });
+    }
+
+    res.json({ success: true, message: "Blocked" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * DELETE /friends/:userId/block — unblock.
+ *
+ * Removes the row entirely rather than restoring the old friendship: a block
+ * ends the relationship, and quietly re-friending someone you had blocked
+ * (because the row happened to say `accepted` beforehand) would be a genuinely
+ * dangerous surprise. After unblocking they are strangers, and either may send
+ * a fresh request.
+ */
+export async function unblockUser(req, res, next) {
+  try {
+    const { userId } = req.params;
+    if (!mongoose.isValidObjectId(userId)) throw err("User not found", 404);
+
+    const removed = await Friendship.findOneAndDelete({
+      status: "blocked",
+      blockedBy: req.user.id, // only the blocker may lift it
+      ...betweenQuery(req.user.id, userId),
+    });
+    if (!removed) throw err("Not blocked", 404);
+
+    res.json({ success: true, message: "Unblocked" });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** GET /friends/blocked — everyone I have blocked, so the UI can undo it. */
+export async function listBlocked(req, res, next) {
+  try {
+    const rows = await Friendship.find({ status: "blocked", blockedBy: req.user.id })
+      .populate("requester", "name avatarUrl")
+      .populate("recipient", "name avatarUrl")
+      .lean();
+
+    const blocked = rows.map((r) => {
+      const other = r.requester._id.toString() === req.user.id ? r.recipient : r.requester;
+      return publicUser(other);
+    });
+
+    res.json({ success: true, data: { blocked } });
   } catch (error) {
     next(error);
   }

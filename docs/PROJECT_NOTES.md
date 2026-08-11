@@ -3931,10 +3931,22 @@ instances. `typing:leaderboard` was rescued out of `registerTypingHandlers` into
 core `leaderboard.handlers.js` — it is global, not per-room, so it could not
 become a plugin event. **604 tests / 28 suites green.**
 
+**Done — direct messages and blocking (§57).** A purpose-built `Conversation`
+model (not a hidden room — `listMyRooms` would have leaked every DM into the
+dashboard), `Message.room` relaxed to "room XOR conversation", pair uniqueness
+enforced by a unique key + upsert so simultaneous opens cannot fork a thread,
+and blocking as a third `Friendship` state that survives re-requests and never
+announces itself. Friends turned out to be **already built** — the roadmap entry
+was stale; what was missing was blocking and a way to message anyone.
+**646 tests / 30 suites, 11/11 live checks.**
+
 **Next — the deferred backlog:**
-- **Manual browser pass.** Three migrations (§52–54) are verified by socket-level
-  tests only. The 3D arena's pause-on-hidden in particular is a battery fix you
-  can only really confirm by watching it.
+- **Disappearing-message timers (24h/7d/30d/90d)** — now unblocked. They belong
+  in a DM where both parties opt in, which is why they waited for §57. Needs a
+  TTL/sweep design that deserves its own pass.
+- **Manual browser pass.** Three migrations (§52–54) and now the DM UI are
+  verified by socket/REST-level tests only. The 3D arena's pause-on-hidden in
+  particular is a battery fix you can only really confirm by watching it.
 - Redis behind `storage.js` **if and when** a second backend instance becomes
   real — which also needs `@socket.io/redis-adapter` and a mediasoup story.
 - Phase 7 marketplace seams: version resolution, dependency graph, plugin state
@@ -4417,6 +4429,129 @@ reading the config — only by reading the registration.
 
 ---
 
+## 57. Feature: Direct messages (1:1) and blocking
+
+The last two items on the deferred list. DMs are a new `Conversation` model
+rather than a hidden room; blocking is a third state on the existing
+`Friendship` row rather than a new collection.
+
+### The friends system was already built
+
+Worth recording, because the roadmap said otherwise: requests, accept/decline,
+unfriend, search with relationship annotation, room invites, guest exclusion and
+a `FriendsPage` all existed and were tested. The note listing it as pending was
+stale. What was genuinely missing was **blocking** and **any way to message
+someone**, so that is what this section is.
+
+### Options for storing a DM
+
+| Option | Verdict |
+|---|---|
+| A hidden `Room` (`visibility: "dm"`) | Tempting — it inherits chat, attachments, voice notes and moderation for free. **Rejected:** the inheritance runs the wrong way. A Room carries an owner, a join code, activities, bans and a growable member list, and every one is meaningless or wrong between two people ("who owns this conversation?"). Worse, `listMyRooms()` is `Room.find({members: userId})`, so every DM would appear in the dashboard until something remembered to filter it — a leak that **fails open** and looks exactly like a room you forgot about |
+| A separate `Conversation` collection | **Chosen.** Purpose-built and small. The cost is that `Message` had to learn a second kind of parent, and that cost turned out to be one hook and one index |
+
+### `Message.room` became "room XOR conversation"
+
+The only schema change DMs needed. Everything else about a message — text,
+attachments, voice notes, edits, tombstones — is identical whether it went to
+nine people or one, and a parallel `DirectMessage` collection would have meant
+maintaining every future chat feature twice.
+
+The XOR is enforced in a pre-validate hook, because "optional on both" permits a
+**parentless message**: a row no query can reach, that nobody can see or delete.
+"Both" is worse — ambiguous, with each reader thinking it owns the message and a
+delete from one side leaving the other intact.
+
+### One thread per pair, enforced by the database
+
+Two people can press "message" on each other in the same instant. A
+find-then-create races into two threads for one pair, after which each person
+types into a thread the other never sees — and **both sides look correct in
+isolation**, which is what makes it so hard to spot.
+
+`key` is the two user ids sorted and joined, so (A,B) and (B,A) produce the same
+string, and a unique index makes the duplicate physically impossible. The open
+handler upserts on that key rather than checking first: the race is resolved
+where it can actually be resolved. A test fires four simultaneous opens from
+both sides and asserts one conversation.
+
+### Friendship is a live gate, not a door you walk through once
+
+Re-checked on every send, not cached at open. Checking once would leave a thread
+opened while friends writable forever — so unfriend and block would remove
+someone from your list while their messages kept arriving. **An unread badge
+from a person you just blocked is precisely what blocking is meant to prevent.**
+
+### Blocking: a third state, not a new collection
+
+`status: "blocked"` on the same `Friendship` row, plus `blockedBy`.
+
+- A separate `Block` collection would mean two sources of truth for "may these
+  two interact?", and every check consulting both and agreeing. Here the one row
+  IS the answer: a blocked pair is not `accepted`, so every existing friendship
+  check — including the DM gate — refuses them without knowing what a block is.
+- It gives blocking the property that matters: it **survives**. Unfriend deletes
+  the row and they can re-add in one click; a block keeps it, and the unique
+  pair index means they cannot create a fresh one either.
+- **It does not announce itself.** A blocked re-request gets the same 404 an
+  unknown user id gets, and a blocked send gets the same wording as an unfriend.
+  Telling someone "you are blocked" turns a block into a notification — a
+  persistent one. From their side it is indistinguishable from the account
+  having gone away.
+- Someone who blocked ME is hidden from search entirely; an "Add" button that
+  always failed would be a way to confirm the block by probing. My own blocks
+  stay visible so I can lift them.
+- Unblocking leaves them **strangers, not friends again**. Silently restoring a
+  friendship you had blocked would be a dangerous surprise.
+
+### Delivery: personal rooms, not a room per conversation
+
+Room chat groups sockets into `room:<id>` because a room has many members coming
+and going. A DM has exactly two participants who already sit in `user:<id>`, so
+delivery is two targeted emits. No join/leave lifecycle per thread — and, more
+importantly, **a DM arrives while the recipient is looking at something else**,
+which is the entire point of an inbox. A per-thread room would only deliver to
+people who already had it open, i.e. the people who least need telling.
+
+The same choice gives multi-device for free: the sender's *other* sockets get
+the message too, but not the sending socket (it already has it from the ack).
+
+### Two smaller decisions worth keeping
+
+**Clearing is per-user.** "Delete conversation" hides everything up to that
+moment for me only; either side being able to erase a shared history unilaterally
+is a footgun. The thread reappears if they write again.
+
+**The inbox does its unread counts in ONE aggregate**, not a `countDocuments`
+per thread. That N+1 only hurts the users with the most conversations — i.e.
+exactly when the inbox has become useful.
+
+### A circular import avoided rather than tiptoed around
+
+`dm.handlers.js` needs `canMessage`/`loadConversation`, and importing them from
+the controller would have closed `sockets/index → dm.handlers → controller →
+sockets/index` (for `io`). ESM tolerates that, which is what makes it dangerous:
+nothing crashes, but `io` is read mid-initialisation and lands `undefined`. The
+symptom would be "DM notifications silently do not send", with a stack trace
+pointing nowhere near the import graph. The shared rules moved to
+`services/conversation.service.js`, a leaf that imports no sockets.
+
+**646 tests / 30 suites green** (42 new), plus **11/11 live checks** against the
+running server — routes actually mounted, handlers actually registered, both
+halves agreeing on one instance.
+
+### Interview answer: "when is reuse the wrong instinct?"
+
+The hidden-room design would have been less code today and more wrong every
+week after. Reuse is right when the new thing IS the old thing with different
+data; it is wrong when it is the old thing minus half its concepts. A DM is a
+Room minus owner, join code, activities, bans and moderation — and "minus" is
+the tell. Every one of those fields would have needed a rule saying "not for
+DMs", and the first one anybody forgot (`listMyRooms`) leaks private
+conversations into a public list.
+
+---
+
 ## Note: No Paid Cloud Services
 
 The user has no paid cloud accounts (no AWS, etc.) — every feature that would normally
@@ -4434,4 +4569,4 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
 | GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-08-11 (§56 — legacy handlers and the ACTIVITY_PLUGINS flag DELETED: ~1,550 net lines gone (1,738 removed, 186 added), and sockets/index.js no longer names a single game. The flag had to go because the thing it fell back TO was gone — with every activity a plugin, "off" meant the activity was silently dead rather than served by the old path, which is a loaded gun rather than a safety feature. The cleanup surfaced a LIVE bug: registerGameHandlers/registerLudoHandlers/registerKartHandlers were registered unconditionally, never given the legacyHandlerEnabled() guard the other four had, so skribbl/ludo/kart each ran a plugin AND a legacy handler with separate games Maps — two independent instances per room, invisible only because the halves listen on different event names. Deleting the files fixes it by construction. The trap avoided: typing:leaderboard lived inside registerTypingHandlers and is a live feature, so it moved to core leaderboard.handlers.js rather than dying with the function — it is global, not per-room, so it could not become a plugin event; verified against the running server. Note how the dead tests failed: the whiteboard one HUNG for its full 30s timeout rather than erroring, because it awaited an ack from an event nobody was listening for. A deleted socket handler has no stack trace; the symptom is silence. 604 tests / 28 suites. Previously §55 — Phase 7 marketplace seams, so THE ACTIVITY PLATFORM IS COMPLETE (all 7 phases). Two of the three items were already standing (version field, requires[] with cycle detection, the storage interface) — auditing before building was most of the value. What was genuinely missing: nothing ever COMPARED the pinned version, so a plugin could go 1.x→2.x and every room would silently adopt the new grammar, which is the exact scenario pinning existed to prevent. shared/activities/version.js now compares them and resolveActivities carries {pinned,current,status,compatible,needsAttention}; only MAJOR counts as breaking, `ahead` is its own status (rolled-back server, fix is server-side not room-side), unparseable sorts EQUAL not lower. Provenance gates at registerPlugin() — the one path every manifest takes — and FAILS CLOSED: remote origin refused unless a verifier is installed, because the opposite default means remote manifests are trusted by default the day they become possible. Redis-backed state audited and deliberately NOT built: Mongo already gives durability, no socket.io Redis adapter exists so nothing could share state anyway, deployment is one VM with mediasoup pinning to one node, and it would ship untested with no second process to verify against. Also fixed a genuine pre-existing flake — the whiteboard rate-limit test failed on toBeGreaterThan(0) (nothing relayed) not the cap, because 120 fire-and-forget events raced the join; confirmed against a stash that it predated the change. 608 tests / 28 suites. Previously §54 — Smash Karts migrated, client AND server: THE LAST MIGRATION, so PHASE 2 IS COMPLETE and ACTIVITY_PLUGINS=all finally means all nine. The only activity running its own simulation (30Hz setInterval physics), which is why its destroy() was always the reference lifecycle test — asserted by recording g.tick, tearing down, waiting and checking the tick has NOT moved, because a nulled handle with a live closure would pass a naive check and still burn a core forever. Added two SDK capabilities: detached().stream() for volatile/lossy high-rate traffic (reliable delivery on bad wifi builds a backlog the player can never catch up from), and sdk.lifecycle.onHidden/onShown, which finally gave plugins a door into the activity:hidden DOM events ActivityHost had been dispatching since Phase 3 with no way for a panel to reach them — unblocking the kart manifest's obligation #2, a hidden 3D game rendering at full frame rate into a canvas nobody can see. The legacy hand-rolled reconnect re-sync deleted itself: useActivitySdk rejoins and the join ack carries the snapshot. 581 tests / 27 suites, nine plugins served. Previously §53 — Ludo migrated, client AND server: the second bespoke plugin. NOT an adaptLobbyGame() one-liner because its seats are colour-keyed (four fixed board positions, turn order is a list of colours) while lobby.seats models an ordered array of users — adapting would have meant colour↔index translation on every call. Six timers (turn, AFK, auto-move, bot roll, bot move, dead-dice) all on detached(); the bot/human shared code path — doRoll/doMove take no socket, so bots cannot make a move a human couldn't — survives untouched. The host's teardown deleted the legacy "is any HUMAN still connected?" check outright. maxPlayers/allowBots/botDifficulty/turnTimer were declared in Phase 1 with no reader and are now live, with turnTimer:0 ("Off") read through Number.isFinite so `|| DEFAULT` cannot silently re-enable the AFK clock. 560 tests / 26 suites, eight plugins served. Previously §52 — Draw & Guess migrated, client AND server: the first BESPOKE plugin, with no framework underneath it. Game logic ported verbatim so the diff against game.handlers.js is reviewable; only the transport lines changed. Five interlocking timers run on `sdk.socket.detached()`, stored per-room and refreshed on join so the chain survives the drawer disconnecting mid-turn; the private `toUser()` word channel is now load-bearing and pinned by two tests. maxRounds/turnSeconds/hints were hardcoded constants and are now read from the manifest's configSchema. On the client the hook WAS the seam: GameCanvas took its transport as props and GamePanel was untouched apart from forwarding it. 537 tests / 25 suites, seven plugins served. Previously §51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*
+*Last updated: 2026-08-11 (§57 — DIRECT MESSAGES (1:1) and BLOCKING. DMs are a purpose-built Conversation model, NOT a hidden Room: a Room carries an owner, join code, activities, bans and a growable member list, all meaningless between two people, and listMyRooms() is Room.find({members:userId}) so every DM would have leaked into the dashboard until something remembered to filter it — a leak that fails OPEN. Message.room relaxed to "room XOR conversation" via a pre-validate hook (optional-on-both would permit a parentless row nothing can query, see or delete). Pair uniqueness is enforced by the DATABASE: `key` is the two ids sorted+joined behind a unique index, and open upserts rather than find-then-create, because two people pressing "message" simultaneously would otherwise fork into two threads where each types into one the other never sees — and both sides look fine in isolation. Friendship is re-checked on every send, not cached at open, or unfriending would leave the thread writable forever. Blocking is a THIRD state on the same Friendship row (+blockedBy) rather than a Block collection, so one row is the single answer to "may these two interact?"; it survives re-requests (unlike unfriend, which deletes the row), never announces itself (a blocked re-request gets the same 404 an unknown id gets; a blocked send gets the same wording as an unfriend), hides the blocker from search, and unblocking leaves them strangers rather than silently restoring a friendship. Delivery is to `user:<id>` personal rooms, not a socket.io room per thread, so a DM arrives while the recipient is looking at something else — the point of an inbox — and multi-device works for free. Also: the friends system was ALREADY BUILT and the roadmap entry was stale. 646 tests / 30 suites, 11/11 live checks. Previously §56 — legacy handlers and the ACTIVITY_PLUGINS flag DELETED: ~1,550 net lines gone (1,738 removed, 186 added), and sockets/index.js no longer names a single game. The flag had to go because the thing it fell back TO was gone — with every activity a plugin, "off" meant the activity was silently dead rather than served by the old path, which is a loaded gun rather than a safety feature. The cleanup surfaced a LIVE bug: registerGameHandlers/registerLudoHandlers/registerKartHandlers were registered unconditionally, never given the legacyHandlerEnabled() guard the other four had, so skribbl/ludo/kart each ran a plugin AND a legacy handler with separate games Maps — two independent instances per room, invisible only because the halves listen on different event names. Deleting the files fixes it by construction. The trap avoided: typing:leaderboard lived inside registerTypingHandlers and is a live feature, so it moved to core leaderboard.handlers.js rather than dying with the function — it is global, not per-room, so it could not become a plugin event; verified against the running server. Note how the dead tests failed: the whiteboard one HUNG for its full 30s timeout rather than erroring, because it awaited an ack from an event nobody was listening for. A deleted socket handler has no stack trace; the symptom is silence. 604 tests / 28 suites. Previously §55 — Phase 7 marketplace seams, so THE ACTIVITY PLATFORM IS COMPLETE (all 7 phases). Two of the three items were already standing (version field, requires[] with cycle detection, the storage interface) — auditing before building was most of the value. What was genuinely missing: nothing ever COMPARED the pinned version, so a plugin could go 1.x→2.x and every room would silently adopt the new grammar, which is the exact scenario pinning existed to prevent. shared/activities/version.js now compares them and resolveActivities carries {pinned,current,status,compatible,needsAttention}; only MAJOR counts as breaking, `ahead` is its own status (rolled-back server, fix is server-side not room-side), unparseable sorts EQUAL not lower. Provenance gates at registerPlugin() — the one path every manifest takes — and FAILS CLOSED: remote origin refused unless a verifier is installed, because the opposite default means remote manifests are trusted by default the day they become possible. Redis-backed state audited and deliberately NOT built: Mongo already gives durability, no socket.io Redis adapter exists so nothing could share state anyway, deployment is one VM with mediasoup pinning to one node, and it would ship untested with no second process to verify against. Also fixed a genuine pre-existing flake — the whiteboard rate-limit test failed on toBeGreaterThan(0) (nothing relayed) not the cap, because 120 fire-and-forget events raced the join; confirmed against a stash that it predated the change. 608 tests / 28 suites. Previously §54 — Smash Karts migrated, client AND server: THE LAST MIGRATION, so PHASE 2 IS COMPLETE and ACTIVITY_PLUGINS=all finally means all nine. The only activity running its own simulation (30Hz setInterval physics), which is why its destroy() was always the reference lifecycle test — asserted by recording g.tick, tearing down, waiting and checking the tick has NOT moved, because a nulled handle with a live closure would pass a naive check and still burn a core forever. Added two SDK capabilities: detached().stream() for volatile/lossy high-rate traffic (reliable delivery on bad wifi builds a backlog the player can never catch up from), and sdk.lifecycle.onHidden/onShown, which finally gave plugins a door into the activity:hidden DOM events ActivityHost had been dispatching since Phase 3 with no way for a panel to reach them — unblocking the kart manifest's obligation #2, a hidden 3D game rendering at full frame rate into a canvas nobody can see. The legacy hand-rolled reconnect re-sync deleted itself: useActivitySdk rejoins and the join ack carries the snapshot. 581 tests / 27 suites, nine plugins served. Previously §53 — Ludo migrated, client AND server: the second bespoke plugin. NOT an adaptLobbyGame() one-liner because its seats are colour-keyed (four fixed board positions, turn order is a list of colours) while lobby.seats models an ordered array of users — adapting would have meant colour↔index translation on every call. Six timers (turn, AFK, auto-move, bot roll, bot move, dead-dice) all on detached(); the bot/human shared code path — doRoll/doMove take no socket, so bots cannot make a move a human couldn't — survives untouched. The host's teardown deleted the legacy "is any HUMAN still connected?" check outright. maxPlayers/allowBots/botDifficulty/turnTimer were declared in Phase 1 with no reader and are now live, with turnTimer:0 ("Off") read through Number.isFinite so `|| DEFAULT` cannot silently re-enable the AFK clock. 560 tests / 26 suites, eight plugins served. Previously §52 — Draw & Guess migrated, client AND server: the first BESPOKE plugin, with no framework underneath it. Game logic ported verbatim so the diff against game.handlers.js is reviewable; only the transport lines changed. Five interlocking timers run on `sdk.socket.detached()`, stored per-room and refreshed on join so the chain survives the drawer disconnecting mid-turn; the private `toUser()` word channel is now load-bearing and pinned by two tests. maxRounds/turnSeconds/hints were hardcoded constants and are now read from the manifest's configSchema. On the client the hook WAS the seam: GameCanvas took its transport as props and GamePanel was untouched apart from forwarding it. 537 tests / 25 suites, seven plugins served. Previously §51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*

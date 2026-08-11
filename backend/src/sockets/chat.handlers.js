@@ -144,7 +144,14 @@ function storageOrigins() {
 const clip = (v, max) => (typeof v === "string" ? v.slice(0, max) : undefined);
 const posInt = (v) => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined);
 
-function sanitizeAttachments(raw) {
+/**
+ * Exported so DMs validate attachments through the SAME function rather than a
+ * copy. This is a trust boundary — it is what stops a client claiming an
+ * arbitrary url, an oversized set, or a "sticker" that is really a link — and a
+ * second implementation would be one tightening away from disagreeing with this
+ * one.
+ */
+export function sanitizeAttachments(raw) {
   if (!Array.isArray(raw) || raw.length === 0) return [];
   const ours = storageOrigins();
   const out = [];

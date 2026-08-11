@@ -18,6 +18,7 @@ import { registerMediaHandlers } from "./media.handlers.js";
 import { registerPollHandlers } from "./poll.handlers.js";
 import { registerCaptionHandlers } from "./caption.handlers.js";
 import { registerLeaderboardHandlers } from "./leaderboard.handlers.js";
+import { registerDmHandlers } from "./dm.handlers.js";
 import { registerActivityHost } from "../activities/host.js";
 import { registerActivityServerModules } from "../activities/index.js";
 
@@ -64,6 +65,10 @@ export function initSocket(httpServer) {
     // the plugin host would refuse this to anyone whose room has not installed
     // the typing activity, which is wrong for a server-wide scoreboard.
     registerLeaderboardHandlers(io, socket);
+    // 1:1 direct messages. Delivered to `user:<id>` personal rooms rather than
+    // a per-thread socket.io room, so a DM arrives while you are looking at
+    // something else entirely — which is the point of an inbox.
+    registerDmHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {
       logger.info(`Socket disconnected: ${socket.id} — reason: ${reason}`);

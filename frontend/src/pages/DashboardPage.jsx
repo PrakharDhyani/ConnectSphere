@@ -5,6 +5,7 @@ import { api } from "@/lib/api.js";
 import { disconnectSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useFriends } from "@/hooks/useFriends.js";
+import { useConversations } from "@/hooks/useDirectMessages.js";
 import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
 import Logo from "@/components/Logo.jsx";
@@ -20,6 +21,9 @@ export default function DashboardPage() {
   const clearAuth = useAuthStore((s) => s.clearAuth);
   const { requests } = useFriends();
   const pendingCount = requests.data?.incoming?.length || 0;
+  // Live: the inbox hook subscribes to dm:new, so this badge updates while the
+  // user sits on the dashboard rather than waiting for a refetch.
+  const { totalUnread: unreadCount } = useConversations();
   const [resent, setResent] = useState(false);
   // Room name/visibility now live inside CreateRoomWizard — the dashboard only
   // owns the mutation and the resulting navigation.
@@ -96,6 +100,14 @@ export default function DashboardPage() {
         <Logo />
         <div className="flex items-center gap-4">
           <PushToggle />
+          <Link to="/messages" className="relative text-sm text-gray-400 hover:text-brand-400">
+            💬 Messages
+            {unreadCount > 0 && (
+              <span className="absolute -top-2 -right-3 bg-brand-600 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+            )}
+          </Link>
           <Link to="/friends" className="relative text-sm text-gray-400 hover:text-brand-400">
             👥 Friends
             {pendingCount > 0 && (

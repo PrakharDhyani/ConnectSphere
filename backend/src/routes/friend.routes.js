@@ -12,6 +12,9 @@ import {
   declineRequest,
   removeFriend,
   inviteToRoom,
+  blockUser,
+  unblockUser,
+  listBlocked,
 } from "../controllers/friend.controller.js";
 
 const router = Router();
@@ -26,6 +29,13 @@ router.post("/request", validate(requestSchema), sendRequest);
 router.post("/requests/:id/accept", acceptRequest);
 router.delete("/requests/:id", declineRequest); // decline incoming / cancel outgoing
 router.post("/invite", validate(inviteSchema), inviteToRoom);
+router.get("/blocked", listBlocked);
+
+// Block routes come BEFORE `/:userId`, or Express would match "blocked" as a
+// userId and every block listing would 404 on an invalid ObjectId.
+router.post("/:userId/block", blockUser);
+router.delete("/:userId/block", unblockUser);
+
 router.delete("/:userId", removeFriend); // unfriend
 
 export default router;

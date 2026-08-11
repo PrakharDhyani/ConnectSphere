@@ -22,6 +22,7 @@ import JoinPage from "@/pages/JoinPage.jsx";
 import DashboardPage from "@/pages/DashboardPage.jsx";
 import ProfilePage from "@/pages/ProfilePage.jsx";
 import FriendsPage from "@/pages/FriendsPage.jsx";
+import MessagesPage from "@/pages/MessagesPage.jsx";
 import RoomPage from "@/pages/RoomPage.jsx";
 import NotFoundPage from "@/pages/NotFoundPage.jsx";
 
@@ -94,6 +95,9 @@ export default function App() {
         <Route path="/dashboard" element={<ProtectedRoute fullUserOnly><DashboardPage /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute fullUserOnly><ProfilePage /></ProtectedRoute>} />
         <Route path="/friends" element={<ProtectedRoute fullUserOnly><FriendsPage /></ProtectedRoute>} />
+        {/* DMs are registered-users-only for the same reason friends are: a
+            guest identity is scoped to one room and would outlive its threads. */}
+        <Route path="/messages" element={<ProtectedRoute fullUserOnly><MessagesPage /></ProtectedRoute>} />
         <Route path="/room/:roomId" element={<ProtectedRoute><RoomPage /></ProtectedRoute>} />
 
         <Route path="*" element={<NotFoundPage />} />

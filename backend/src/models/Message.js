@@ -67,10 +67,27 @@ const attachmentSchema = new Schema(
  */
 const messageSchema = new Schema(
   {
+    /**
+     * A message has exactly ONE parent: a room, or a 1:1 conversation.
+     *
+     * `room` was `required: true` until DMs landed. Making it optional is the
+     * only schema change DMs needed — everything else about a message (text,
+     * attachments, voice notes, edits, tombstones, forwarding) is identical
+     * whether it was sent to nine people or one, and duplicating all of it into
+     * a parallel DirectMessage collection would have meant maintaining every
+     * future chat feature twice.
+     *
+     * The XOR is enforced in a pre-validate hook below, because "optional" on
+     * both fields would otherwise permit a parentless message — a row nothing
+     * can ever query and nobody can ever see or delete.
+     */
     room: {
       type: Schema.Types.ObjectId,
       ref: "Room",
-      required: true,
+    },
+    conversation: {
+      type: Schema.Types.ObjectId,
+      ref: "Conversation",
     },
     sender: {
       type: Schema.Types.ObjectId,
@@ -124,6 +141,23 @@ const messageSchema = new Schema(
   { timestamps: true }
 );
 
+/**
+ * Exactly one parent: a room, or a conversation. Never both, never neither.
+ *
+ * "Neither" would be a message no query can reach — invisible, undeletable
+ * garbage. "Both" is worse than useless: it is ambiguous, and the two readers
+ * (room history and DM history) would each show a message the other thought it
+ * owned, with a delete from one side leaving the other intact.
+ */
+messageSchema.pre("validate", function ensureOneParent(next) {
+  const hasRoom = Boolean(this.room);
+  const hasConversation = Boolean(this.conversation);
+  if (hasRoom === hasConversation) {
+    return next(new Error("A message must belong to exactly one of room or conversation"));
+  }
+  next();
+});
+
 messageSchema.pre("validate", function ensureContent(next) {
   // A tombstone legitimately has neither text nor attachments.
   if (this.deletedAt) return next();
@@ -140,5 +174,9 @@ messageSchema.index({ room: 1, pinnedAt: -1 }, { sparse: true });
 // History is always "latest N in THIS room" — a compound index on
 // (room, createdAt desc) makes that query hit the index instead of scanning.
 messageSchema.index({ room: 1, createdAt: -1 });
+
+// The same query for the other kind of parent. Sparse on both sides: a message
+// has exactly one parent, so each index only ever covers half the collection.
+messageSchema.index({ conversation: 1, createdAt: -1 }, { sparse: true });
 
 export const Message = mongoose.model("Message", messageSchema);
