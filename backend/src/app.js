@@ -19,7 +19,11 @@ import { passport, configurePassport } from "./config/passport.js";
 import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import roomRoutes from "./routes/room.routes.js";
+import activityRoutes from "./routes/activity.routes.js";
 import friendRoutes from "./routes/friend.routes.js";
+import conversationRoutes from "./routes/conversation.routes.js";
+import pushRoutes from "./routes/push.routes.js";
+import translateRoutes from "./routes/translate.routes.js";
 
 // ── Error handler ──
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -87,7 +91,11 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/rooms", roomRoutes);
+app.use("/api/activities", activityRoutes);
 app.use("/api/friends", friendRoutes);
+app.use("/api/conversations", conversationRoutes);
+app.use("/api/push", pushRoutes);
+app.use("/api/translate", translateRoutes);
 
 // ── 404 & error handling (always last) ──
 app.use(notFound);

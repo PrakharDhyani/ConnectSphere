@@ -3,11 +3,13 @@ import { Routes, Route, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { bootstrapAuth } from "@/lib/api.js";
 import { connectSocket, getSocket } from "@/lib/socket.js";
+import { registerServiceWorker } from "@/lib/push.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useNotify } from "@/stores/notify.store.js";
 import ProtectedRoute from "@/components/ProtectedRoute.jsx";
 import PublicOnlyRoute from "@/components/PublicOnlyRoute.jsx";
 import Toaster from "@/components/Toaster.jsx";
+import { IncomingCallToast } from "@/components/CallInvite.jsx";
 
 import HomePage from "@/pages/HomePage.jsx";
 import LoginPage from "@/pages/LoginPage.jsx";
@@ -20,6 +22,7 @@ import JoinPage from "@/pages/JoinPage.jsx";
 import DashboardPage from "@/pages/DashboardPage.jsx";
 import ProfilePage from "@/pages/ProfilePage.jsx";
 import FriendsPage from "@/pages/FriendsPage.jsx";
+import MessagesPage from "@/pages/MessagesPage.jsx";
 import RoomPage from "@/pages/RoomPage.jsx";
 import NotFoundPage from "@/pages/NotFoundPage.jsx";
 
@@ -34,6 +37,9 @@ export default function App() {
   // /refresh whether the httpOnly cookie session is still alive.
   useEffect(() => {
     bootstrapAuth();
+    // Keep sw.js fresh for browsers that already opted into push; costs nothing
+    // for the rest (registration without a subscription shows no prompts).
+    registerServiceWorker();
   }, []);
 
   // App-wide socket for friend events — so a friend request / invite pops a
@@ -70,6 +76,9 @@ export default function App() {
   return (
     <>
       <Toaster />
+      {/* 📞 Someone rang you into a call — app-wide, so it reaches you on any
+          page (and specifically when you have muted that room). */}
+      <IncomingCallToast onAccept={(ring) => navigate(`/room/${ring.roomId}`)} />
       <Routes>
         <Route path="/" element={<HomePage />} />
 
@@ -86,6 +95,9 @@ export default function App() {
         <Route path="/dashboard" element={<ProtectedRoute fullUserOnly><DashboardPage /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute fullUserOnly><ProfilePage /></ProtectedRoute>} />
         <Route path="/friends" element={<ProtectedRoute fullUserOnly><FriendsPage /></ProtectedRoute>} />
+        {/* DMs are registered-users-only for the same reason friends are: a
+            guest identity is scoped to one room and would outlive its threads. */}
+        <Route path="/messages" element={<ProtectedRoute fullUserOnly><MessagesPage /></ProtectedRoute>} />
         <Route path="/room/:roomId" element={<ProtectedRoute><RoomPage /></ProtectedRoute>} />
 
         <Route path="*" element={<NotFoundPage />} />

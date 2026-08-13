@@ -21,6 +21,13 @@ export function isScopedGuest(user, roomId) {
   return Boolean(user?.isGuest && user.room && String(user.room) === String(roomId));
 }
 
+export async function isBanned(roomId, userId) {
+  const room = await Room.findById(roomId).select("banned").lean();
+  return Boolean(room && (room.banned || []).some((b) => b.user?.toString() === userId));
+}
+
 export async function canAccessRoom(user, roomId) {
+  // A ban trumps everything — including a guest token scoped to this room.
+  if (await isBanned(roomId, user.id)) return false;
   return isScopedGuest(user, roomId) || (await isRoomMember(roomId, user.id));
 }

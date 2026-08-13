@@ -5,9 +5,15 @@ import { api } from "@/lib/api.js";
 import { disconnectSocket } from "@/lib/socket.js";
 import { useAuthStore } from "@/stores/auth.store.js";
 import { useFriends } from "@/hooks/useFriends.js";
+import { useConversations } from "@/hooks/useDirectMessages.js";
+import { useRoomActivity } from "@/hooks/useRoomActivity.js";
+import RoomActivityPill from "@/components/RoomActivityPill.jsx";
 import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
 import Logo from "@/components/Logo.jsx";
+import Aurora from "@/components/Aurora.jsx";
+import PushToggle from "@/components/PushToggle.jsx";
+import CreateRoomWizard from "@/components/activities/CreateRoomWizard.jsx";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -17,9 +23,12 @@ export default function DashboardPage() {
   const clearAuth = useAuthStore((s) => s.clearAuth);
   const { requests } = useFriends();
   const pendingCount = requests.data?.incoming?.length || 0;
+  // Live: the inbox hook subscribes to dm:new, so this badge updates while the
+  // user sits on the dashboard rather than waiting for a refetch.
+  const { totalUnread: unreadCount } = useConversations();
   const [resent, setResent] = useState(false);
-  const [roomName, setRoomName] = useState("");
-  const [visibility, setVisibility] = useState("private");
+  // Room name/visibility now live inside CreateRoomWizard — the dashboard only
+  // owns the mutation and the resulting navigation.
   const [joinCode, setJoinCode] = useState("");
   const [formError, setFormError] = useState(null);
 
@@ -37,6 +46,14 @@ export default function DashboardPage() {
   const myRoomIds = new Set(rooms.map((r) => r.id));
   const discoverable = publicRooms.filter((r) => !myRoomIds.has(r.id));
 
+  /**
+   * Live activity for my rooms. The REST list already carries a snapshot so the
+   * first paint is truthful; this keeps it moving. Only MY rooms are watched —
+   * the server refuses rooms you are not a member of, which stops the feed
+   * being a presence oracle for private rooms you happen to know the id of.
+   */
+  const liveActivity = useRoomActivity(rooms.map((r) => r.id));
+
   // After a successful mutation, invalidate ["rooms"] — react-query refetches
   // the list automatically; no manual state juggling.
   const createRoom = useMutation({
@@ -44,7 +61,8 @@ export default function DashboardPage() {
     onSuccess: (room) => {
       queryClient.invalidateQueries({ queryKey: ["rooms"] });
       queryClient.invalidateQueries({ queryKey: ["publicRooms"] });
-      setRoomName("");
+      // No form state to reset here any more — the wizard owns its own, and we
+      // navigate away from it immediately.
       navigate(`/room/${room.id}`);
     },
     onError: (err) => setFormError(err.response?.data?.error?.message || "Could not create room."),
@@ -91,6 +109,15 @@ export default function DashboardPage() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
         <Logo />
         <div className="flex items-center gap-4">
+          <PushToggle />
+          <Link to="/messages" className="relative text-sm text-gray-400 hover:text-brand-400">
+            💬 Messages
+            {unreadCount > 0 && (
+              <span className="absolute -top-2 -right-3 bg-brand-600 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+            )}
+          </Link>
           <Link to="/friends" className="relative text-sm text-gray-400 hover:text-brand-400">
             👥 Friends
             {pendingCount > 0 && (
@@ -114,7 +141,8 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-6 py-10 space-y-6">
+      <main className="relative max-w-4xl mx-auto px-6 py-10 space-y-6">
+        <Aurora />
         {location.state?.message && (
           <p className="text-sm text-brand-300 bg-brand-950/40 border border-brand-900 rounded-lg p-3">
             {location.state.message}
@@ -138,45 +166,14 @@ export default function DashboardPage() {
 
         {/* Create / Join */}
         <div className="grid sm:grid-cols-2 gap-4">
-          <form
-            className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setFormError(null);
-              if (roomName.trim().length >= 2) createRoom.mutate({ name: roomName.trim(), visibility });
-            }}
-          >
-            <h2 className="font-semibold">Create a room</h2>
-            <Input label="Room name" value={roomName} placeholder="Daily standup"
-              onChange={(e) => setRoomName(e.target.value)} />
-            <div>
-              <span className="block text-sm text-gray-400 mb-1.5">Who can find it?</span>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { id: "private", label: "🔒 Private", hint: "invite code only" },
-                  { id: "public", label: "🌐 Public", hint: "anyone can discover" },
-                ].map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    onClick={() => setVisibility(v.id)}
-                    className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
-                      visibility === v.id
-                        ? "border-brand-500 bg-brand-600/20"
-                        : "border-gray-700 bg-gray-800 hover:border-brand-600"
-                    }`}
-                  >
-                    <span className="block font-medium">{v.label}</span>
-                    <span className="block text-[11px] text-gray-500">{v.hint}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <Button type="submit" loading={createRoom.isPending} className="w-full">Create</Button>
-          </form>
+          <CreateRoomWizard
+            creating={createRoom.isPending}
+            error={formError}
+            onCreate={(payload) => { setFormError(null); createRoom.mutate(payload); }}
+          />
 
           <form
-            className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-3"
+            className="glass-card p-5 space-y-3 anim-fade-up d1"
             onSubmit={(e) => {
               e.preventDefault();
               setFormError(null);
@@ -195,7 +192,7 @@ export default function DashboardPage() {
         {formError && <p className="text-sm text-red-400">{formError}</p>}
 
         {/* Room list */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+        <div className="glass-card p-6 anim-fade-up d2">
           <h2 className="font-semibold mb-4">Your rooms</h2>
           {isLoading ? (
             <p className="text-gray-500 text-sm">Loading…</p>
@@ -205,31 +202,42 @@ export default function DashboardPage() {
             </p>
           ) : (
             <ul className="divide-y divide-gray-800">
-              {rooms.map((room) => (
-                <li key={room.id}>
-                  <Link to={`/room/${room.id}`}
-                    className="flex items-center justify-between py-3 px-2 rounded-lg hover:bg-gray-800/60 transition-colors">
-                    <div>
-                      <p className="font-medium">
-                        {room.name}
-                        <span className="ml-2 text-[11px] text-gray-500">{room.visibility === "public" ? "🌐" : "🔒"}</span>
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        code <span className="font-mono text-gray-400">{room.code}</span>
-                        {" · "}{room.memberCount} member{room.memberCount === 1 ? "" : "s"}
-                      </p>
-                    </div>
-                    <span className="text-brand-400 text-sm">Open →</span>
-                  </Link>
-                </li>
-              ))}
+              {rooms.map((room) => {
+                // Live snapshot wins; the one from the REST list is the seed.
+                const activity = liveActivity[room.id] || room.activity;
+                return (
+                  <li key={room.id}>
+                    <Link to={`/room/${room.id}`}
+                      className="flex items-center justify-between gap-3 py-3 px-2 rounded-lg hover:bg-gray-800/60 hover:translate-x-1 border border-transparent hover:border-brand-500/30 transition-all duration-200">
+                      <div className="min-w-0">
+                        <p className="font-medium">
+                          {room.name}
+                          <span className="ml-2 text-[11px] text-gray-500">{room.visibility === "public" ? "🌐" : "🔒"}</span>
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          code <span className="font-mono text-gray-400">{room.code}</span>
+                          {" · "}{room.memberCount} member{room.memberCount === 1 ? "" : "s"}
+                          {/* `memberCount` is the roster ("ever joined"); the pill
+                              below is who is in there RIGHT NOW. Both are shown
+                              because they answer different questions. */}
+                          {activity?.present > 0 && (
+                            <span className="text-green-400">{" · "}{activity.present} active</span>
+                          )}
+                        </p>
+                        <span className="block mt-1"><RoomActivityPill activity={activity} /></span>
+                      </div>
+                      <span className="text-brand-400 text-sm shrink-0">Open →</span>
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
 
         {/* Public rooms discovery */}
         {discoverable.length > 0 && (
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+          <div className="glass-card p-6 anim-fade-up d3">
             <h2 className="font-semibold mb-1">Discover public rooms 🌐</h2>
             <p className="text-xs text-gray-500 mb-4">Open hangouts anyone can join.</p>
             <ul className="divide-y divide-gray-800">

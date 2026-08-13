@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useFriends, searchUsers } from "@/hooks/useFriends.js";
+import { useConversations } from "@/hooks/useDirectMessages.js";
 import Avatar from "@/components/Avatar.jsx";
 import Button from "@/components/ui/Button.jsx";
 import Input from "@/components/ui/Input.jsx";
@@ -9,10 +10,22 @@ import Logo from "@/components/Logo.jsx";
 const REL_LABEL = { friends: "Friends", outgoing: "Requested", incoming: "Wants to add you", none: null };
 
 export default function FriendsPage() {
-  const { friends, requests, sendRequest, accept, decline, unfriend } = useFriends();
+  const { friends, requests, blocked, sendRequest, accept, decline, unfriend, block, unblock } = useFriends();
+  const { open, totalUnread } = useConversations();
+  const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
+
+  /**
+   * "Message" opens the thread and navigates to it. Opening is idempotent
+   * server-side, so pressing it for someone you already talk to lands in the
+   * existing conversation rather than creating a second one.
+   */
+  async function messageFriend(userId) {
+    const conversation = await open.mutateAsync(userId);
+    navigate(`/messages?c=${conversation.id}`);
+  }
 
   // Debounced live search.
   useEffect(() => {
@@ -36,7 +49,17 @@ export default function FriendsPage() {
     <div className="min-h-screen">
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
         <Link to="/dashboard"><Logo /></Link>
-        <Link to="/dashboard" className="text-sm text-gray-400 hover:text-brand-400">← Dashboard</Link>
+        <span className="flex items-center gap-4">
+          <Link to="/messages" className="text-sm text-gray-400 hover:text-brand-400 flex items-center gap-1.5">
+            Messages
+            {totalUnread > 0 && (
+              <span className="min-w-[1.25rem] text-center text-[11px] font-semibold bg-brand-500 text-white rounded-full px-1.5 py-0.5">
+                {totalUnread > 99 ? "99+" : totalUnread}
+              </span>
+            )}
+          </Link>
+          <Link to="/dashboard" className="text-sm text-gray-400 hover:text-brand-400">← Dashboard</Link>
+        </span>
       </header>
 
       <main className="max-w-2xl mx-auto px-6 py-8 space-y-6">
@@ -59,6 +82,13 @@ export default function FriendsPage() {
                 </span>
                 {u.relationship === "none" ? (
                   <Button onClick={() => sendRequest.mutate(u.id)}>Add</Button>
+                ) : u.relationship === "blocked" ? (
+                  // Someone I blocked. (Someone who blocked ME never appears in
+                  // these results at all — an "Add" button that always failed
+                  // would be a way to confirm the block by probing.)
+                  <button onClick={() => unblock.mutate(u.id)} className="text-xs text-gray-500 hover:text-brand-400">
+                    Blocked — unblock
+                  </button>
                 ) : (
                   <span className="text-xs text-gray-500">{REL_LABEL[u.relationship]}</span>
                 )}
@@ -107,12 +137,48 @@ export default function FriendsPage() {
                     <span className="text-sm text-gray-200">{f.name}</span>
                     <span className="text-xs text-gray-500">{f.online ? "online" : "offline"}</span>
                   </span>
-                  <button onClick={() => unfriend.mutate(f.id)} className="text-xs text-gray-500 hover:text-red-400">Remove</button>
+                  <span className="flex items-center gap-3">
+                    <Button onClick={() => messageFriend(f.id)}>Message</Button>
+                    <button onClick={() => unfriend.mutate(f.id)} className="text-xs text-gray-500 hover:text-red-400">Remove</button>
+                    <button
+                      onClick={() => block.mutate(f.id)}
+                      className="text-xs text-gray-500 hover:text-red-400"
+                      // Unfriend is reversible in one click by either side;
+                      // block persists and refuses future requests.
+                      title="They can no longer message you or send you a request"
+                    >
+                      Block
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>
           )}
         </section>
+
+        {/* Blocked — only rendered when there is something to undo, so the page
+            does not carry a permanent reminder of people you blocked. */}
+        {(blocked.data?.length || 0) > 0 && (
+          <section className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+            <h2 className="font-semibold mb-1">Blocked ({blocked.data.length})</h2>
+            <p className="text-xs text-gray-500 mb-3">
+              They cannot message you or send you a friend request. They are not told.
+            </p>
+            <ul className="space-y-2">
+              {blocked.data.map((u) => (
+                <li key={u.id} className="flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Avatar user={u} size="sm" />
+                    <span className="text-sm text-gray-200">{u.name}</span>
+                  </span>
+                  <button onClick={() => unblock.mutate(u.id)} className="text-xs text-gray-500 hover:text-brand-400">
+                    Unblock
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {outgoing.length > 0 && (
           <p className="text-xs text-gray-600">Pending sent requests: {outgoing.map((o) => o.to.name).join(", ")}</p>

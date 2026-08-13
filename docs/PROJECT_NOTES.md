@@ -1808,11 +1808,2003 @@ swaps inside the game panels only — the rest of the app stays violet.
 accents flowed through `brand-*` utility classes, re-theming a whole section
 was one palette + ~30 class swaps.
 
+### Four games in one pass — chess, UNO, typing race, bingo
+The platform's 4th–7th games, and the proof of a thesis: after three games
+built by hand, the common shape was obvious, so this batch started with a
+**shared lobby framework** (`sockets/lobbyGame.js` + `useLobbyGame` +
+`GameLobby.jsx`): seats, host powers, bots with difficulty, start/reset,
+spectate lock, AFK deadlines, private per-seat state, tickers, and
+last-human-leaves cleanup — written ONCE. Each game then shipped as a pure
+rules module + a config object + a UI panel.
+
+- **Chess** rides `chess.js` for legality (never hand-roll castling/en
+  passant when a battle-tested MIT lib exists) and adds a real bot: easy =
+  random-ish, medium = greedy 1-ply, hard = 2-ply minimax with alpha-beta
+  over material + piece-square tables. Tests prove hard takes hanging queens
+  and finds mate-in-one. UI: animated glyph pieces, legal-move dots,
+  promotion picker, per-move clock (timeout = loss).
+- **UNO**: full 108-card engine (skip/reverse/draw2/wilds, 2p reverse=skip,
+  discard reshuffle) as a pure module with ~10 rule tests. Hands are private
+  via the framework's per-seat channel; the server auto-announces "UNO!"
+  (fun without the gotcha penalty). Bots hoard wilds and punish low-card
+  opponents at hard. CSS-only card art (gradient faces, slanted oval).
+- **Typing race**: server validates progress (monotonic + a 250-WPM clamp —
+  never trust a client that claims 2,500 chars/sec) and simulates bots as
+  WPM profiles with micro-pauses. Racetrack lanes with cars, live WPM,
+  countdown beeps, podium.
+- **Bingo**: framework ticker IS the caller (a ball every 3.5s as its own
+  animated event). Daubs and BINGO claims are server-verified — false calls
+  get publicly shamed instead of trusted.
+
+All four verified live end-to-end (17 checks: FEN sync exact after 5 moves,
+bot replies, UNO bots finished a real match, race ranked both finishers,
+bingo rejected an uncalled daub and a false BINGO). Suite: 187 → **210**.
+
+**Interview takeaway:** the marginal cost of game #7 was a fraction of game
+#1 — that's what extracting the framework at the right moment (after three
+concrete examples, not before) buys you.
+
+### Round 2 on the new games — clocks, stacking, first-to-finish, PUZZLES
+- **Chess clocks**: host picks a time control in the lobby (1/3/5/10/15 min
+  or clockless); both sides get the same budget; thinking time is deducted
+  ON move, and the framework's AFK deadline doubles as the flag-fall timer —
+  first clock to hit zero loses (`timeout` result), bots included. Needed
+  one framework addition: `lobbyEvents` (host-only settings pre-start) and
+  an `onReset` hook so rematches keep the chosen control.
+- **UNO stacking house rule**: +2 answers +2, +4 answers +4 (`u.stack`
+  accumulates); the victim may ONLY stack the same type or swallow the whole
+  pile. No cross-stacking. Bots stack when they can. The old
+  instant-penalty tests were rewritten for the new semantics.
+- **Typing race**: the FIRST finisher now ends the race for everyone
+  (standings = finishers, then distance covered); solo start = a WPM
+  speed-test with a personal stats card.
+- **Chess puzzles — GENERATED, not curated.** The question was "can we have
+  random daily puzzles?" — answer: generate them. Random sparse positions
+  (edge-biased hunted king) are validated by chess.js and then SEARCHED for
+  a forced mate (forcing-move candidates, full defense verification), so
+  every puzzle ships with a machine-checked proof of solvability. Easy =
+  mate-in-1, medium/hard = forced mate-in-2 (hard adds defenders). The
+  DAILY puzzle seeds the RNG from the date — everyone gets the same one.
+  Generation is chunked async (15 attempts per event-loop turn) so the UI
+  never freezes; typical latency 0.1–1s. Solving verifies every user move
+  keeps the mate forced (`defenseCannotEscape`), replies with a random
+  losing defense, and tracks a per-day streak in localStorage.
+- **Flake fixed**: the typing-bot test could randomly hit the bot's 6%
+  "humanizing micro-pause" on its single tick — tests that touch randomness
+  must either seed it or iterate past it.
+
+**Interview takeaway:** "generate puzzles" beats "find a puzzle API": zero
+external dependencies, offline-friendly, infinite supply — because chess.js
+makes VERIFYING a forced mate cheap, and verified-random beats curated.
+
+### Playtest polish round — refresh-proofing, auto-moves, modes, turn-pick bingo
+- **Refresh no longer ejects you from a game.** The room tab and selected
+  game were React state → F5 reset both to defaults. Now persisted in
+  sessionStorage keyed per room (`groot:view:{roomId}` / `groot:game:{...}`)
+  — per-browser-tab semantics are exactly right for "restore THIS tab where
+  it was", and it clears itself when the tab closes. (URL params were the
+  alternative; sessionStorage won because game panels are nested state the
+  router doesn't own.)
+- **Ludo auto-move**: exactly one legal token after a roll → the server plays
+  it after a 900ms beat (long enough to read the dice). No decision = no
+  wait. Guarded against races (only fires if still that color's un-acted
+  turn).
+- **Typing modes made visible**: host-picked Race (first finisher ends it)
+  vs Practice (everyone types to the end — the WPM-test mode), as lobby
+  cards with descriptions. One `mode` param through `raceOver` — the engine
+  supports both semantics with two lines.
+- **Bingo turn-pick variant** (the schoolyard classic): every card is a
+  random ARRANGEMENT of 1–25; players call numbers turn-wise; a call daubs
+  every card simultaneously (all cards share all numbers — the game is
+  pure arrangement + call strategy); first to FIVE complete lines (rows,
+  cols, diagonals; overlaps count — 12 possible lines) wins automatically,
+  server-verified. Greedy bots pick calls that maximize their own line
+  growth. Rules for both modes are written INTO the lobby. Live-verified by
+  actually winning a game 5-lines-to-bot with a call-my-own-card strategy.
+
+**Interview takeaway:** the same lobby framework absorbed a per-game mode
+system (chess time controls, typing race/practice, bingo classic/turns) with
+one generic `lobbyEvents` hook — settings are just host-only events that
+happen to fire before start.
+
+### Typing: the 60-second test + the platform's first GLOBAL leaderboard
+- **Timed mode** (replaces Practice): 60 seconds over an ENDLESS stream of
+  random common words (monkeytype-style). Implementation trick: no protocol
+  change at all — the "text" is simply 280 random words (~1,600 chars),
+  which exceeds the anti-cheat ceiling (21 chars/s × 60s = 1,260), so the
+  stream can never run dry for a legitimate typist. The UI renders a
+  sliding window (word-aligned, ~45 chars behind the cursor), the clock is
+  front and center, and only the clock can end the run.
+- **Why records come only from timed mode**: fixed duration = comparable
+  numbers. Race passages vary in length/difficulty; 60 fixed seconds makes
+  "96 wpm" mean the same thing for everyone.
+- **TypingRecord model**: one row per user (their personal best), `submit()`
+  is a race-safe conditional upsert (`findOneAndUpdate {wpm: {$lt}}` +
+  E11000-tolerant insert), top-10 = an indexed sort. Bots and sub-25-char
+  runs are excluded. The finish path sets a synchronous `_finishing` flag —
+  the 500ms ticker could fire again during the async Mongo write and
+  double-submit otherwise.
+- Live-verified with two real 60s runs: a 96-wpm run landed on the board,
+  a deliberate 36-wpm rerun did NOT override it.
+
+### Animated sticker reactions (all games) + moderation basics
+- **Stickers replace the unicode emoji reactions**: six hand-crafted animated
+  SVGs (beating heart, flickering fire, shaking angry face w/ steam, blowing
+  kiss, recoiling pistol w/ BANG burst, laughing-crying with flying tears) —
+  vectors with internal keyframes, so they scale crisply at any size with
+  ZERO image assets to load or license. One shared system
+  (`useReactions`/`ReactionBar`/`ReactionOverlay`) + a framework-level
+  `:react` event means chess/UNO/bingo/typing got reactions for free and
+  ludo migrated onto the same rails. Spectators can react too.
+- **Moderation basics** (the prerequisite for advertising public rooms):
+  - Kick (rejoinable) vs Ban (blocked at code-join, public-join AND
+    `canAccessRoom` — a ban trumps even a guest token scoped to the room).
+    Eject = drop membership + `socketsLeave` the socket.io room (games/chat
+    die instantly) + a `room:kicked` event the client turns into a polite
+    redirect. Ban list with names is owner-only info; unban restores.
+  - Slow-mode: owner picks 0/5/15/30s; enforced in the chat socket handler
+    with an in-memory per-user clock (owner exempt); the client shows the
+    server's "wait Ns" message inline. Friction, not security — per-process
+    state is fine for that.
+  - Reports: stored in Mongo with denormalized names, deduped per
+    reporter→target per room per hour. No admin UI yet — a queryable paper
+    trail is the minimum viable moderation.
+
+**Interview takeaway:** ban enforcement belongs in the ONE access chokepoint
+(`canAccessRoom`) that both REST and sockets already share — adding it there
+covered chat, games, and media in one line instead of N.
+
+### Call recording — client-side, free-tier honest
+The landing page once promised "cloud recording via a Kafka pipeline". The
+truth: server-side compositing/encoding (mediasoup plain-RTP → ffmpeg) is
+the single most expensive workload this project could run — it would eat a
+free VM whole. The 90% solution costs the server NOTHING:
+- `lib/recorder.js`: a hidden canvas composes the call each frame
+  (screen-share hero + camera strip, else auto grid; audio-only members get
+  initial tiles), WebAudio mixes every participant's audio into one track,
+  and `canvas.captureStream + MediaRecorder` writes VP9/VP8 webm in 1s
+  chunks — a crash loses at most a second. Stop → instant local download.
+  Dynamic joins/leaves work because the compositor re-reads its sources
+  every frame. ~200 lines, zero assets, zero server involvement.
+- **Transparency is non-negotiable**: a `recording:set` socket event keeps a
+  per-room recorders map; everyone gets a red banner (late joiners learn via
+  the join ack; a recorder that disconnects can't leave a stuck indicator),
+  and a blinking REC dot + watermark are baked into the video itself.
+- Next steps when wanted: "Save to Google Drive" via the existing Google
+  OAuth + incremental drive.file scope (client-side upload — server still
+  never touches video).
+
+**Interview takeaway:** when a feature has a 100% version that needs paid
+infra and a 90% version that's free, ship the 90% and say so — client-side
+MediaRecorder made "recording" a half-day feature instead of a subsystem.
+
 **Interview takeaway:** "the button does nothing" was never a button problem.
 Reproducing against the live server split client from server in one step, and
 the dev-server log held the trigger. The deeper lesson is that *reconnect is a
 state transition your app must handle* — anything the server stores per-socket
 (room membership, subscriptions) has to be re-established on every connect.
+
+### Retention & inclusion pass — push notifications, polls, live captions + translation, face filters
+Four features in one pass, all riding rails that already existed.
+
+**Web Push — "a friend started Ludo in your room", even with the tab closed.**
+- *Options:* FCM SDK (ties you to Firebase), OneSignal (free tier, third-party
+  script + data sharing), or the raw **Web Push standard with VAPID** — keys
+  are just a locally generated keypair (`npx web-push generate-vapid-keys`),
+  the browser vendors run the relay servers, $0 forever. We chose raw VAPID.
+- *What we did:* `PushSubscription` model (endpoint = natural unique key, so
+  re-subscribing upserts), `push.service.js` (VAPID-config check with the same
+  graceful-degradation convention as S3/OAuth; 404/410 responses auto-prune
+  dead subscriptions), `/api/push` routes, `public/sw.js` (service worker:
+  push → notification, click → focus-or-open the room), and a header bell
+  (`PushToggle`) that deliberately does NOT auto-prompt — permission dialogs
+  users didn't ask for get blocked forever.
+- *The trigger* hooks the existing `room:announce` event: on any activity
+  start, the server pushes to the actor's **friends** who are **room members**
+  but have **no socket in the room** (everyone in the room already got the
+  toast). Throttled to one push per room+activity per minute — toasts are
+  cheap, phone buzzes are not. The friend-invite flow also falls back to push
+  when the recipient has no live socket (`isOnline()` already existed).
+- *Challenge:* the SW suppresses the notification if a focused tab is already
+  on the target page — without that check you get a system banner for a thing
+  you're literally looking at.
+
+**Polls — "what do we do next?", one socket event, used every session.**
+- *Options:* persist in Mongo (overkill — a poll that outlives the hangout is
+  worthless), reuse the seat-based `lobbyGame` framework (wrong shape — polls
+  want ALL room members, no seats/host), or a tiny hand-rolled handler like
+  whiteboard's. Hand-rolled won: ~120 lines, in-memory `Map<roomId, poll>`,
+  one poll per room at a time.
+- *Semantics:* anyone can open one when none is running; tap to vote, tap the
+  same option to retract; only the creator (or the optional 1–5 min timer)
+  closes it; results stay up until the next poll replaces them. Votes are
+  public (names on hover) — it's a hangout, not an election.
+- Added `"poll"` to `ANNOUNCE_ACTIVITIES` → the tap-to-join toast came free.
+  UI is a card at the top of chat with live-animating gradient result bars.
+- *Tested* in `sockets.test.js`: full create→vote→retract→close cycle,
+  duplicate-poll rejection, creator-only close, non-member rejection.
+
+**Live captions + translation — the "include my grandmother" feature.**
+- *The architectural fact that decides everything:* our mediasoup SFU forwards
+  **encrypted** RTP — the server never has decodable audio, so server-side
+  transcription would need a PlainTransport tap + an STT model (real infra,
+  real money). Instead each speaker's own browser transcribes their mic with
+  the **Web Speech API** and relays text via a new `caption:say` → `caption:new`
+  socket pair (transient, rate-limited, nothing stored — exactly like `typing`).
+- *Trade-offs accepted:* recognition is Chromium-only (Firefox users still SEE
+  captions, they can't produce them) and Chrome's recognizer stops on silence —
+  the hook restarts it in `onend` until the user actually turns CC off.
+- *Translation:* viewer picks a target language; final lines (never interims —
+  they change too fast to be worth a round-trip) go through `POST /api/translate`,
+  a proxy to **LibreTranslate** — free, self-hosted MT added to docker-compose
+  (`LT_LOAD_ONLY` keeps it to the 10 languages the UI offers). Env var absent →
+  501 → captions simply stay untranslated. Client caches translations and only
+  overwrites a caption line if it still shows the same utterance (async race).
+- UI: subtitle strip fixed bottom-center so captions survive tab switches
+  (voice-while-gaming is exactly when you can't watch the chat pane); CC
+  controls live in both the call row and the floating VoiceBar.
+
+**Face filters — Snapchat energy, fully on-device.**
+- *Options:* face-api.js (abandoned), TF.js facemesh (older), or **MediaPipe
+  FaceLandmarker** (`@mediapipe/tasks-vision`) — actively maintained, 478
+  landmarks, WASM/GPU, free, on-device. Chose MediaPipe; the ~3 MB model +
+  WASM lazy-load from CDNs the first time a filter is picked, so join-call
+  latency is untouched (version pinned to match package.json exactly — wasm
+  and JS API ship as a pair).
+- *Pipeline:* raw camera track → hidden `<video>` → canvas rAF loop (draw
+  frame, `detectForVideo`, draw overlays anchored/rotated/scaled by landmarks)
+  → `canvas.captureStream(30)` → **`producer.replaceTrack()`**. The same
+  canvas→captureStream trick the recorder already proved; replaceTrack means
+  switching filters never renegotiates the call. "None" swaps the raw track
+  back and tears the pipeline down (no idle canvas burning CPU).
+- Five filters, zero image assets: vector sunglasses/moustache/dog (canvas
+  bezier art with gradients, glints, whiskers) and emoji-composited heart-eyes
+  and crown (`fillText` scales emoji crisply; hearts pulse on a sine, sparkles
+  orbit). All rotate with head tilt via the eye-line angle; two faces
+  supported.
+- *Subtlety:* `localStream` state is switched to the filtered stream so your
+  self-tile AND the recorder show exactly what the room sees, but
+  `localStreamRef` keeps pointing at the raw stream — cam/mic toggles and
+  cleanup own the real hardware track. The pipeline must never stop the raw
+  track it doesn't own.
+
+**Interview takeaway:** all four features were cheap because each rode an
+existing chokepoint: push rode `room:announce` + `isOnline()`, polls rode the
+socket/room conventions and the announce toast, captions rode the transient-
+relay pattern (`typing`) because the SFU's encryption forced client-side STT,
+and filters rode `replaceTrack` + the recorder's proven canvas pipeline.
+Feature cost is mostly determined by how well the last ten features were
+factored.
+
+### Meetings-grade pass — background effects replace face filters, Slack-style chat
+Two changes with one theme: the room should feel professional-first, playful
+on top (the platform pivot in reverse order of the games work).
+
+**Background effects (blur / virtual backgrounds), Teams/Meet style.**
+- *Why the face filters went:* Snapchat overlays read as a toy in the room
+  view we now position as "hang out AND take a call in". Background privacy
+  is the feature people actually expect from a video call in 2026. The face
+  filter code is preserved in git history if a "party mode" ever wants it.
+- *Options for segmentation:* TF.js BodyPix (old, slow), WebRTC
+  `backgroundBlur` constraint (barely shipped anywhere), or **MediaPipe
+  ImageSegmenter** with the selfie model (`@mediapipe/tasks-vision`) — same
+  library the face filters already proved, ~1 MB model, WASM/GPU, on-device.
+  Obvious continuity win: `lib/faceFilter.js` → `lib/bgFilter.js` keeps the
+  identical architecture (hidden video → canvas rAF → `captureStream` →
+  `producer.replaceTrack`), only the per-frame math changed.
+- *Compositing:* per frame, the segmenter yields a person-confidence mask →
+  drawn as soft alpha into a mask canvas (values <0.15 dropped, >0.85 solid,
+  linear ramp between — kills mask flicker), person = video ∩ mask via
+  `destination-in` with a 1.5px mask blur for feathered edges, over a
+  background layer: CSS-filter-blurred video frame (drawn over-scaled so the
+  blur doesn't leave transparent fringes), a procedural gradient scene, or an
+  uploaded photo (`object-fit: cover` math). Scenes are painted ONCE per
+  resolution — aurora/sunset/forest/graphite gradients + radial glows match
+  the platform's aesthetic with zero image assets.
+- *Robustness details:* mask polarity is resolved from `getLabels()` at load
+  (don't hard-code which confidence mask is "person"); masks are `close()`d
+  every frame (MPMask wraps GPU memory — leaking it hangs the tab); model
+  load failure degrades to plain passthrough exactly like before.
+- *Picker UI:* Meet-style thumbnail grid — the gradient swatches ARE the
+  backgrounds (CSS approximations of the canvas painters), custom photo via
+  file input → object URL → `Image` handed through `setBackground(id, img)`.
+
+**Chat window redesigned to the Slack/Teams reading model.**
+- *What changed:* left/right chat bubbles → a flat, left-aligned message
+  list. Consecutive messages from the same sender within 5 min **group**
+  under one avatar+name header; grouped lines show their timestamp only on
+  hover, in a gutter exactly as wide as the avatar (alignment is what makes
+  grouping read cleanly). **Day dividers** ("Today" / "Yesterday" / date
+  pills) replace scanning timestamps. Rows get a subtle hover wash; squared
+  avatars (Slack's cue) distinguish chat from the circular presence
+  avatars elsewhere.
+- *Composer:* one bordered container with focus ring — emoji quick-picker
+  (24 curated emoji, popover), borderless input with a "Message {room}"
+  placeholder, and a gradient paper-plane send button that lights up only
+  when there's something to send. Typing indicator is now three staggered
+  bouncing dots (`animation-delay` inline — Tailwind can't stagger).
+- *Grouping is computed at render, not stored:* `prev` message comparison in
+  the map (same sender + <5 min + same day). No schema change, no migration,
+  and history regroups correctly as messages stream in.
+- *Bonus fix:* the Tailwind `brand` palette only defined 6 of 11 shades —
+  existing classes like `brand-300`/`brand-800` were silently generating NO
+  css (Tailwind won't warn). Completed the violet scale; several existing
+  UI accents quietly came back to life.
+
+**Interview takeaway:** replacing a feature is cheaper than building one if
+the old feature was factored as pipeline + effect: `replaceTrack` plumbing,
+lazy CDN loading, and the "never stop the raw track you don't own" rule all
+carried over untouched — swapping face landmarks for segmentation masks was
+a one-file change plus UI.
+
+### Rich chat — emoji, GIFs, stickers, and file/image/video sharing
+The chat looked like Slack after the last pass but could still only send
+plain text. This pass made the message a *container* rather than a string.
+
+**The schema decision that shaped everything.** `Message.text` was `required`.
+Rather than inventing a parallel "attachment message" type, `text` became
+optional, an `attachments[]` subdocument array was added, and a `pre("validate")`
+hook enforces "text OR attachments, never neither". One collection, one
+socket event, one render path — a photo with a caption is just a message
+that has both. Attachment kinds: `image` · `video` · `audio` · `file` ·
+`gif` · `sticker`.
+
+**Upload flow: REST first, then socket.** The client POSTs files to
+`/api/rooms/:id/attachments` (multer memory storage → straight to MinIO),
+gets back descriptors, and only then emits ONE `message:send` carrying them.
+Two reasons over streaming binary through Socket.io: the socket path stays
+small and JSON-only, and a failed upload can never leave a half-written
+message in the history. Progress comes free from axios' `onUploadProgress`.
+
+**Why the socket re-validates what REST just produced.** The descriptors
+travel through the *client*, so `message:send` treats them as hostile input
+(`sanitizeAttachments`): uploads must have an origin matching our own
+`S3_ENDPOINT`/`S3_PUBLIC_URL` — otherwise anyone could paste a third-party
+URL and use the room as a link-laundering surface; GIFs must be https on a
+known provider CDN host; stickers carry no URL at all (just a registry id, since the
+art is vector code shipped with the client). Anything unrecognised is
+**dropped silently while the text is kept** — a hostile attachment shouldn't
+cost you your sentence. Live-verified: a `https://evil.example.com/x.png`
+attachment was stripped and the message stored without it.
+
+**Storage safety.** The public-read bucket policy was extended from
+`avatars/*` to `chat/*`, and keys are `chat/<roomId>/<uuid><ext>` — random,
+so the prefix is "public but unlisted" (the same trade-off Slack's own file
+links make; signed URLs would be stricter but expire, which breaks durable
+history). The user's filename never enters the key (path-traversal bait) —
+only a sanitized extension. Non-media types get
+`Content-Disposition: attachment` so nothing served from our own origin can
+execute in a user's session; media stays `inline` so it renders in the
+bubble. The MIME whitelist deliberately omits executables/scripts.
+
+**Emoji: a hand-curated list, not a library.** Every npm emoji package ships
+the full ~1,900-emoji set plus keyword indexes (300 KB–1 MB of JS). This is
+~500 emoji people actually send, with search keywords, in a few KB — zero
+dependencies, zero bundle hit, and it renders in the system font (no image
+requests). 8 categories, substring search ranked prefix-matches-first, and a
+localStorage "Recent" tray. Bonus: **jumbomoji** — a message that is only
+emoji (≤3 graphemes) renders at 4xl with no bubble. Counting needs
+`Intl.Segmenter`, because `"👨‍👩‍👧".length` is 8, not 1.
+
+**GIFs — and the provider landscape collapsing mid-build.** The first pass
+chose Tenor over Giphy (Giphy's free key is development-only, production is
+paid and approval-gated). Then a check of the actual current state found the
+bigger problem: **Google is discontinuing the Tenor API on 30 June 2026 and
+stopped issuing new keys on 13 Jan 2026** — the chosen provider was not just
+risky, it was already impossible to sign up for. Verified live, not from
+memory: Tenor's anonymous v1 endpoint returns 401, Giphy's old public beta
+key returns 403, and `api.waifu.pics` no longer resolves at all.
+
+So the GIF source became **three layers, best-available-wins**, each
+degrading into the next so the picker is never empty and never shows a broken
+image:
+
+1. **KLIPY** (`VITE_KLIPY_KEY`, optional) — full free-text search. Founded by
+   ex-Tenor engineers with a near-identical API, free tier, no credit card,
+   ads explicitly optional. WhatsApp migrated to it; Bluesky is following. It
+   is the migration path the ecosystem actually took.
+2. **OtakuGIFs** — **no key, no signup**, ~46 mapped reaction categories out
+   of 70 upstream. This is what makes the feature work the moment you clone
+   the repo, which the built-ins alone could not.
+3. **Built-in SVG cards** — 24 generated animated reactions, no network.
+
+Real GIFs are never re-hosted: the message stores the provider's CDN url, so
+our storage bill for GIFs stays exactly zero.
+
+*Two things this pass got right by refusing to guess:*
+- The Klipy response parser **walks** the `files` object for the first
+  plausible image url instead of hard-coding bucket names, because their docs
+  host blocks crawlers and I could not verify the schema. Unknown shape → the
+  item is skipped, never rendered broken.
+- The backend GIF host whitelist mixes **verified exact hosts**
+  (`cdn.otakugifs.xyz`, resolved live) with a **registrable-domain suffix
+  rule** for Klipy, whose CDN subdomain is unknowable without a production
+  key — `cdn.klipy.com` and `media.klipy.com` do not currently resolve, so
+  listing either as a literal would have been another invented URL. The
+  suffix match anchors on a dot, and tests prove `evilklipy.com`,
+  `klipy.com.evil.net` and plain-http variants are all rejected.
+
+*And one bug the verification caught before shipping:* the reaction map
+included `think`, which is a **Gifukai** action, not an OtakuGIFs one —
+searching "thinking" would have silently returned nothing. A test now reads
+the reaction names straight out of `lib/gifs.js` and checks every one against
+the live `/gif/allreactions` list (skipped offline so CI never fails on a
+third party being down).
+
+**The broken-thumbnail bug, and two wrong diagnoses before the right one.**
+The picker showed broken/empty tiles in the grid while clicking a tile worked
+perfectly. That combination already rules out dead URLs (a 404 fails both
+ways) and CSP (there is none on the Vite-served page — checked).
+
+*Wrong diagnosis #1 — payload size.* Measuring showed these are
+full-resolution GIFs averaging ~500 KB, so an 18-tile grid was ~9 MB of
+parallel requests; the obvious story was "browsers cap ~6 connections per
+host, the rest stall". Fixes shipped on that theory: **WebP** instead of GIF
+(same artwork, measured 68% smaller — `celebrate` 1,327 KB → 64 KB), shelf
+18 → 12 tiles, and per-tile load states. Grid payload dropped 9 MB → 2.85 MB.
+**The tiles were still blank.** The theory was plausible, the measurements
+were real, and the conclusion was still wrong.
+
+*Wrong diagnosis #2 — my own placeholder code.* Reading the shipped tile
+found a genuine deadlock: `loading="lazy"` on an `<img>` that starts
+`display:none` until `onLoad` fires. A lazy image that is `display:none` is
+never near the viewport, so it is never fetched, so `onLoad` never fires, so
+it stays hidden forever. Real bug, correctly fixed — **and still not why the
+tiles were blank.**
+
+*The actual cause, found by timing the failures in a real browser:* eleven of
+twelve images failed in **~10 ms**. Instant failure is not a stalled queue and
+not a big download — it is a refusal. Reproduced directly against the CDN:
+
+    2 parallel requests  → 12/12 succeed
+    3 parallel requests  →  8/12 succeed   (4 × HTTP 428)
+    12 parallel requests →  1/12 succeeds  (11 × HTTP 428)
+
+`cdn.otakugifs.xyz` has bot/abuse protection that answers **HTTP 428** above
+~2 concurrent requests. A grid of `<img>` tags fires all of them at once, so
+the grid could never work no matter how small the files were.
+
+The fix is `lib/imageQueue.js`: a global loader that keeps at most **2**
+requests in flight, staggers starts, and retries refusals with backoff. Tiles
+mount their `<img>` only once the queue reports the url is cached, so the
+render is instant and never re-hits the CDN. Verified in headless Chrome
+against live urls: **all-at-once 1/12 in 10 ms, queued 12/12 in 1.13 s.**
+
+*A near-miss worth recording separately:* the first WebP attempt **derived**
+the webp url from the gif url by swapping `/gifs/`→`/webps/` and the
+extension. All 12 test URLs 404'd — the two formats are independent random
+draws with unrelated ids (`/gifs/wave/7832e5c7….gif` vs
+`/webps/wave/967a5f2a….webp`). It only failed to ship because the check hit
+real URLs.
+
+**Lessons.** (1) *Timing is a diagnosis.* A failure at 10 ms and a failure at
+10 s have completely different causes; measuring only "did it work" hides
+that. (2) A plausible theory backed by real measurements can still be the
+wrong theory — the payload numbers were all correct and irrelevant. (3) When
+a symptom survives a fix, the fix was for a different bug; keep the fix if
+it is genuinely right (WebP and the lazy/display:none deadlock both were),
+but do not close the case.
+
+**The fallback bug — and the rule that came out of it.** The first version
+degraded (no key configured) to a "curated set of evergreen reaction GIFs"
+that were hardcoded Tenor CDN urls. **Every single one 404'd.** A Tenor CDN
+id is an opaque token you only get *from the API* — writing plausible-looking
+ones from memory produces URLs that are syntactically perfect and completely
+dead. Worse, the failure was invisible in code review: the array looked
+right, lint passed, tests passed (nothing asserted the urls resolved), and
+only clicking the tab revealed broken images. Search compounded it: with no
+key, search filtered those 12 dead entries by label, so most terms returned
+an empty panel.
+
+The fix wasn't better urls — it was removing the external dependency from the
+fallback path entirely. `lib/localGifs.js` generates **24 animated reaction
+cards as inline SVG data URIs**: bouncing/pulsing emoji, a confetti rain, and
+a typing-dots loop, each a few hundred bytes, animated with SMIL, impossible
+to 404. Three behaviours were added at the same time, because "no results"
+was the actual complaint: the shelf **shuffles** on every open, a 🎲 button
+reshuffles on demand, and a search that matches nothing shows *"nothing for
+X — here are some favourites"* over a full shelf rather than an empty box.
+(The keyless OtakuGIFs layer above later slotted in *between* real search and
+these cards, so the built-ins are now the third line of defence rather than
+the second.)
+
+*Storage/security note:* built-ins are persisted as `gifId` only, never the
+data URI. Storing client-supplied SVG markup would be an XSS foothold — the
+client re-renders the art from its own registry, and a test asserts the
+backend whitelist and the frontend registry contain exactly the same ids
+(two lists that drift silently would make picked GIFs vanish on send).
+
+**Lesson worth keeping:** a fallback whose whole job is "work when the network
+/ API is unavailable" must not itself depend on an unverifiable external URL.
+And any asset list that can't be checked by the type system needs a test that
+actually resolves it — I verified these 24 by decoding each data URI and
+asserting it parses as animated SVG, which is exactly the check the original
+Tenor urls never had.
+
+**Stickers came free.** The six animated SVG stickers built for the games'
+reaction system (`STICKERS` registry) were already vector components — the
+chat sticker tab is a second consumer of that registry, and the message
+renderer just mounts `<S.Comp size={104} />`. No new art, no assets.
+
+**UI details that matter:** paste-to-upload (clipboard screenshots are the
+#1 way people share an image), drag-and-drop with an overlay (using a
+depth *counter*, not a boolean — drag events fire per child element and a
+boolean flickers), staged thumbnails with per-file remove before sending,
+multi-image messages tiling into a grid, a lightbox with download for
+images/GIFs, native players for video/audio, and typed icon chips for
+documents. Object URLs are tracked in a ref and revoked on unmount — the
+classic blob leak.
+
+**Verification:** 20 new backend tests (**255 total green**, up from 235) plus
+live end-to-end scripts against the *running* server and MinIO — 19 checks
+covering real upload → public fetch → byte-identical round-trip →
+content-disposition → socket broadcast → durable history → hostile-URL
+rejection, and 6 more for the built-in GIF id path. Every built-in reaction
+card is validated by decoding its data URI and asserting well-formed,
+animated SVG.
+
+**Interview takeaway:** the security question in a file-sharing feature is
+not "can I upload" but "what does the server *believe* the client". Uploading
+over REST and then re-validating the descriptors at the socket boundary means
+the trust decision lives in exactly one function, and the same rule protects
+uploads, GIFs and stickers with three different policies.
+
+### WhatsApp-grade chat — sticker studio, voice notes, view-once media
+Three features, each riding rails that already existed.
+
+**Stickers: 6 → 18, plus a studio.**
+- Pack #2 is 12 new animated SVGs at a deliberately higher fidelity than pack
+  #1: gradients and inner highlights so nothing reads flat, *secondary motion*
+  (the rocket has exhaust and speed stars, the trophy has orbiting sparkles,
+  the bulb flickers on a separate cycle from its rays), and easing via
+  `keySplines` rather than linear interpolation. The old `gunshot` sticker was
+  visibly flatter than the new work, so it was rebuilt too — gradient steel,
+  wood grip, trigger guard, ejecting shell, smoke.
+- *The id-collision trap:* every animation/gradient id is namespaced
+  (`stk2-*`). Two SVGs on one page share a document, so a duplicate keyframe or
+  gradient id silently hijacks the other sticker's animation. A check asserts
+  all ids are namespaced and unique.
+- *Save & favourite* (`lib/stickerStore.js`): ☆ pins a built-in to your
+  favourites shelf, and ＋ on a received sticker copies it into your tray.
+  Both live in localStorage — they are per-person UI preferences, not shared
+  room state, so this needed **zero new endpoints and no migration**. The
+  uploaded image itself is durable in MinIO; only the "this is in my tray"
+  pointer is local.
+- *Sticker studio* (`lib/stickerMaker.js`): photo → square crop (drag/zoom) →
+  **background removed on-device** by the same MediaPipe selfie segmenter
+  `bgFilter.js` already loads for call backgrounds → white outline + drop
+  shadow → 512×512 PNG uploaded through the ordinary attachment endpoint. The
+  outline is a cheap trick: draw the silhouette repeatedly at small offsets in
+  white (`source-in` recolours the alpha), which dilates the shape without a
+  per-pixel edge walk. If the model can't load, it offers the plain crop —
+  a sticker with a background beats no sticker.
+
+**Voice notes.** MediaRecorder (the API `lib/recorder.js` already uses for
+calls) plus a WebAudio `AnalyserNode` for the live level meter. The peak array
+captured *while recording* is downsampled to 48 bars and sent **in the message
+document**, so the receiving bubble draws the real shape of the audio without
+downloading and decoding the file first. Pause/resume tracks paused time
+separately so the duration stays honest. Backend cost: zero new endpoints —
+a voice note is `kind: "audio"` with `voice: true`.
+
+**View-once media — enforced by the server, not the client.** A flag the
+client could ignore would be theatre, so:
+- the url is **stripped from the socket broadcast** entirely (otherwise any
+  client could cache it forever);
+- opening it is a `POST /messages/:id/view` that returns the url **exactly
+  once per viewer** and records the view with `$addToSet` (idempotent under a
+  double-tap race);
+- the history endpoint runs `redactForViewer`, so a spent link can never come
+  back out of `GET /messages`;
+- `viewedBy` is server-owned — the sanitiser forces it to `[]` and never
+  echoes it back, so the roster of who opened your photo never leaks;
+- the **sender peeking does not consume the recipient's view**, but can't
+  re-open it after someone else has.
+
+**Deferred deliberately:** disappearing-message timers (24h/7d/30d/90d). The
+right scope for them is a 1:1 DM, where both people opt in — a room-wide timer
+set by one owner can destroy a group's shared history. Revisit when DMs land.
+
+**Verification:** 267 tests green (up from 258). All 18 stickers were rendered
+in headless Chrome and screenshotted — which caught two that looked wrong:
+`party` was an empty box in a still frame (its confetti was mid-flight, so a
+static spray was layered underneath the animated one), and `gunshot` looked
+flat beside the new pack. Live end-to-end against the running server + MinIO:
+13 checks covering voice upload → waveform persistence → view-once broadcast
+redaction → first open 200 → second open 410 → history redaction.
+
+**Interview takeaway:** "view once" is a *server* feature wearing a client
+feature's clothes. Every one of the four leak paths (broadcast, history,
+re-open, viewer roster) had to be closed independently — and the test that
+proves it is the one asserting the second open returns 410, not the one
+asserting the button disappears.
+
+### Message actions, house rules, and call presence
+Three features, all of which are really *permission* features wearing UI.
+
+**Message actions — edit · copy · pin · forward · delete.** Every one is a
+question of "who may do this to whose message", so the rules live in one
+readable block in `chat.handlers.js` rather than scattered across handlers:
+edit is author-only; delete-for-everyone is author **or room owner**
+(moderation); pin is owner-only because the pin bar is a room-wide surface;
+delete-for-me is anyone, affecting only their own view.
+
+- *Delete for everyone is a **tombstone**, not a document removal.* The row
+  stays with its text and attachments wiped. Two reasons: the conversation
+  keeps its shape (grouping, day dividers and "X replied" don't reshuffle
+  around a hole), and a deleted id can never be silently reused. History
+  returns `deletedAt` and the client renders "🚫 This message was deleted".
+- *Delete for me* is a per-user `hiddenFor` array filtered **at the query
+  level**, so a hidden message never reaches the client that hid it — no
+  client-side filtering to forget.
+- *Editing only ever changes text.* Attachments are immutable, because an
+  innocuous photo being swapped for something else after the fact is exactly
+  the kind of trick an edit feature invites.
+- *Forwarding is restricted to **public source rooms***, which is the one
+  genuinely interesting rule here. A private room is a closed circle; letting
+  its contents be re-broadcast elsewhere would make every private
+  conversation quotable without consent. Public rooms are already open, so
+  forwarding out of them leaks nothing. The forward also carries a
+  `forwardedFrom` breadcrumb (original room + sender), so a forwarded message
+  can't pass itself off as original — and **view-once media is stripped from
+  a forward**, since re-sending it would be the obvious way to defeat it.
+
+**House rules + explainable moderation.** The owner writes up to 20 rules;
+every member can read them. `rules.updatedAt` versions the "please re-read"
+prompt — the client stores the timestamp it acknowledged, so editing the rules
+re-prompts everyone with **zero per-user rows in the database**. Kick and ban
+now take a `reason`, and the kick dialog offers the house rules as a
+numbered shortlist ("3" becomes "Rule 3: No spoilers"). The reason travels on
+the `room:kicked` event, so the person removed is told *why* rather than just
+vanishing from the room.
+
+**Call presence — "N people are in this call · tap to join".** The mediasoup
+peer map already knew who was connected; it just never told anyone. Attaching
+identity to each peer makes a roster cheap to build, and `broadcastCallState`
+sends it to the **whole room**, not just call participants — the people who
+need the banner are precisely the ones *not* in the call. The roster arrives
+two ways deliberately: a `call:state` broadcast on every join/leave, **and**
+on the `room:join` ack, because otherwise a banner would only appear if
+someone happened to join or leave while you were watching.
+
+**Ring-to-invite (the Teams gesture).** `call:ring` is a **direct per-user
+event**, not a room broadcast — the entire point is to reach someone who has
+muted the room and would never see the banner. That's also why it's the one
+notification allowed to bypass a mute, and why it is fenced: rate-limited to
+6/minute, the caller must actually be in the call, and targets must already
+be room members. Anyone with no live socket gets a Web Push instead, since an
+explicit invite should reach you with the tab closed.
+
+**Verification:** 282 tests green (up from 267 — 15 new), plus 20 live checks
+against the running server covering every permission boundary: member can't
+edit another's message, can't pin, can't set rules (403); owner *can* delete a
+member's message; forward out of a private room is refused; delete-for-me
+hides it from one person and not the other; the ban reason reaches both the
+ban list and the `room:kicked` event.
+
+*One test-harness lesson:* salting display names to avoid uniqueness
+collisions broke two **existing** tests that asserted exact names
+(`expect(cap.name).toBe("CapOwner")`). The fix was a separate `regUnique()`
+helper rather than changing `reg()` for everyone — a shared test helper is an
+API, and widening it silently is as breaking as changing production code.
+
+### Room layout: an app shell, not a document
+**The bug:** as messages arrived, the *page* grew and the whole document
+scrolled — carrying the navbar, the Room/Board/Game tabs, the room name and
+the Join call / Invite buttons off the top of the screen. Everything except
+the message list was supposed to stay put.
+
+Three causes, all of them the same mistake in different places:
+- `min-h-screen` lets the page grow past the viewport. The fix is
+  `h-screen` + `overflow-hidden` — the room is a fixed-height **app shell**,
+  and exactly one element inside it (the message list) owns `overflow-y-auto`.
+- `min-h-[70vh]` on the chat card made it stretch instead of fit.
+- **Every flex ancestor of a scroll container needs `min-h-0`.** A flex item
+  defaults to `min-height: auto`, which refuses to shrink below its content —
+  so without it the "scroll container" simply grows and pushes the page
+  taller, which is precisely the bug. This is the non-obvious one; the CSS
+  looks correct without it.
+
+The same reasoning applied outward: the Board and Game tabs now scroll
+internally (the shell can no longer grow for them), the sidebar scrolls
+independently so a long member list never drags the chat, and the in-call
+video panel is capped at `max-h-[45%]` so screen shares plus camera tiles
+can't squeeze the messages to nothing.
+
+**Two bugs the screenshots caught that the assertions did not.** Verification
+drove a real Chrome over CDP and asserted the header/composer `getBoundingClientRect().top`
+was *identical* before and after scrolling the list (0 → 0 and 616 → 616,
+page 704 = 704 so it cannot scroll). All green — but looking at the actual
+image showed the floating VoiceBar sitting on top of the sidebar's "Delete
+room" button, and on a 390px phone the header buttons overflowing the card
+with the room name squeezed into a one-character-wide column. Neither is
+expressible as "did the header move". Fixed by docking the bar bottom-right
+(and hiding it on the Room tab while idle, where the header already has Join
+call), and collapsing Invite/Copy-link to icons below `sm`.
+
+**Lesson:** geometry assertions prove the thing you thought to measure.
+Rendering the page and *looking at it* is what finds the overlap you did not
+think to assert.
+
+---
+
+## 41. Architecture: Activity Platform — Phase 1 (plugin foundation)
+
+**Goal.** Stop the app thinking in terms of built-in features. The room becomes a
+core shell (chat · video · screen share · voice · presence · moderation) and
+everything on the Board and Game surfaces becomes an **Activity Plugin**. Full
+design in `docs/ACTIVITY_PLATFORM_MIGRATION.md`.
+
+Phase 1 is the contract only: **no behaviour changes, nothing reads it yet.**
+
+### What the analysis found
+
+Better starting position than expected — two plugin-shaped things already worked:
+
+- `sockets/lobbyGame.js` **is already a plugin framework**. Games supply pure
+  callbacks (`start`, `publicState`, `botAct`, `tick`) and get
+  `ctx = {g, io, roomId, broadcast, notice, endGame}` — they never touch
+  Socket.IO directly. That is an SDK.
+- `GamesHub.jsx` is a `GAMES[]` registry + `lazy()` panels.
+
+But a measurement corrected an assumption. I claimed six games ran on the
+framework; grepping for `createLobbyGame` showed **four** (chess 210, uno 237,
+typing 149, bingo 212). **Ludo (536) and Kart (478) are bespoke** — they grew the
+logic that *became* `lobbyGame.js` and were never moved onto it. Draw & Guess
+(311) predates it. So the migration is three heavyweight conversions, not one.
+
+Kart is hardest: it runs its own `setInterval` physics loop at `TICK_HZ`
+(`kart.handlers.js:248`). Migrates last; its `destroy()` is the reference
+lifecycle test.
+
+**The actual coupling problem:** adding one game today means editing four files
+that have nothing to do with that game — `sockets/index.js` (12 hardcoded
+registrations), `RoomPage.jsx:546` (literal tab array), `RoomPage.jsx:31-44`
+(`ACT_LABEL`/`ACT_VIEW` maps), `GamesHub.jsx:28` (`GAMES[]`).
+
+### Options considered
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Is chat a plugin? | (a) everything is a plugin (b) chat stays core | **(b)** — chat is the room's substrate: games post into it, moderation acts on it, it survives activity switches, it is the fallback when a plugin fails. As a plugin it could be *uninstalled*, bricking the room. Plugins use `sdk.chat` instead. |
+| Where do manifests live? | (a) duplicate per side (b) `shared/` (c) fetch from API | **(b)** — the wizard, the engine and the server's permission check need the same facts; two copies drift. Data-only ESM, no build step. |
+| Registry contents | (a) manifests + components (b) manifests only | **(b)** — registering components pulls every plugin into the initial bundle and destroys existing lazy loading (Excalidraw ~1.8 MB). |
+| Config grammar | (a) JSON Schema (b) closed 6-type grammar | **(b)** — JSON Schema can express what no form can render (`oneOf`, `$ref`, recursion), so a generic renderer silently drops fields. Closed grammar ⇒ every valid schema renders; an unrenderable one is a boot error. |
+| Backward compat | (a) migration script (b) read-time resolver | **(b)** — absence means "everything". No batch job, no deploy ordering, no downtime, fully reversible; rooms upgrade themselves on first edit. |
+| Permissions | (a) check at call time (b) build SDK from declared list | **(b)** — an ungranted capability is `undefined`, so it fails as a TypeError at the plugin's own call site in dev, not in production in someone else's frame. **Absent beats denied.** |
+
+### Implementation
+
+```
+shared/                          ← new, data-only, imported by BOTH sides
+  package.json                   ("type":"module" — see gotcha below)
+  activities/
+    manifest.js                  contract + validateManifest() + CAPABILITIES
+    config-schema.js             6-type grammar + validate + coerce (trust boundary)
+    registry.js                  register/get/byCategory/bySurface/deps + cycle detection
+    purposes.js                  10 wizard cards
+    compat.js                    legacy resolution — the backward-compat core
+    index.js                     registers the 9 built-ins; auto-runs on import
+    <id>/manifest.js             whiteboard skribbl ludo chess uno typing bingo kart poll
+```
+
+Plus: `Room` gains `activities.installed[]`, `activities.active`, `purpose`, and
+`visibility` gains `inviteOnly`; `backend/src/index.js` imports the registry
+first so a bad manifest crashes at boot; Vite gets an `@shared` alias.
+
+**v1 SDK is five capabilities** — `room:read`, `socket:namespaced`,
+`storage:room`, `presence:read`, `events:listen`. Narrowing the scope to
+whiteboard + games cut it from ten: nothing in scope needs chat, video or AI.
+A test pins this list so adding one is a deliberate decision.
+
+### Challenges
+
+**1. `shared/` was parsed as CommonJS.** Jest failed with *"Cannot use import
+statement outside a module"*. Node resolves module type from the **nearest**
+`package.json` walking up from each file — `shared/` is a sibling of `backend/`,
+so backend's `"type": "module"` never applied. Fix: a 6-line `package.json` in
+`shared/`.
+
+**2. Duplicate `server:` key in `vite.config.js`.** I added `fs.allow` as a new
+`server` block while one already existed. Valid JS — the second silently wins —
+so `fs.allow` would have been dropped and dev imports from `shared/` would break
+with a confusing "outside of Vite serving allow list". Caught by reading the
+file back after editing. **Merging into an existing key is not the same as
+adding a key.**
+
+**3. Invented config options that did not exist.** I wrote kart arenas
+`arena`/`docks`/`canyon` from memory; the real `MAPS` are `speedway`, `forest`,
+`volcano`, `circuit`, `canyon` — only one right. Same for typing
+(`difficulty`/`passageLength` — the real modes are `race`/`timed`) and bingo
+(invented 2/4/7s; the ticker is `ms: 3500`). A manifest describes config the
+plugin will honour, so inventing settings *creates* work rather than describing
+it. **Same failure mode as the dead Tenor URLs — plausible-looking values I did
+not check.** Fixed by grepping each handler.
+
+**4. A test that failed for a real reason.** "Every purpose recommends
+something" failed on **music** — there is no music plugin yet. Tempting fix:
+add a fake `music: 0.3` weight somewhere. That would lie to the engine and put
+Bingo in front of someone who asked for music. Instead the gap is named
+(`PURPOSES_WITHOUT_PLUGINS`) with a second test asserting it is the *only* one,
+so shipping Music Room **fails** the suite as a reminder to delete the
+exemption.
+
+**5. Proving the Vite alias actually worked.** First attempt built a probe file
+that was never imported — Rollup tree-shakes it, so the green build proved
+nothing. Second attempt used a marker string, which Vite constant-folded away.
+What finally proved it: grepping `dist/` for real manifest content
+(`"Smash Karts 3D"`, `infiniteCanvas`), plus a live `curl` of
+`/@fs/.../shared/activities/purposes.js` returning 200 from the dev server —
+build path and dev path use different mechanisms (bundler vs `fs.allow`).
+
+### Verification
+
+- **77 new contract tests**, all green.
+- **Full suite: 18 suites / 359 tests green** — the 282 pre-existing tests
+  untouched, which is the actual claim being made ("no behaviour changes").
+- Backend log: `✅ 9 activity plugins registered` on real boot.
+- Vite prod build contains manifest data; dev server serves `shared/` (200).
+- **Real Mongo document** shaped like a pre-plugin room: loads through Mongoose,
+  resolves to all 9 activities at defaults, `active: null`, and `inviteOnly`
+  passes validation. Probe row deleted afterwards.
+
+Note: Mongoose materializes a missing array as `[]`, not `undefined` — which is
+why `resolveInstalled()` tests `.length > 0` rather than existence. A unit test
+alone would not have shown that; it took a real document.
+
+### Interview Q&A
+
+**Q: Why isn't chat a plugin if "everything except the room" should be?**
+Because uninstalling it would brick the room. Chat is the substrate the other
+activities post into and the fallback when a plugin fails to load. The rule:
+*if removing it bricks the room, or if two plugins would fight over the same
+hardware (mediasoup's SFU router), it's infrastructure.* VS Code doesn't make
+the text buffer an extension.
+
+**Q: Why a resolver instead of a migration?**
+A backfill must be re-run for every deploy and every row written by an older
+server, is a deploy-ordering hazard, and is hard to undo. A read-time resolver
+means old rooms behave identically with zero rows touched, and dropping the
+field returns the app to its starting state.
+
+**Q: Why not JSON Schema for plugin config?**
+Expressiveness is the wrong goal for a schema that must be *rendered*. JSON
+Schema can describe forms no generic renderer can draw, and the failure is
+silent — the setting vanishes. Six types means every valid schema renders, and
+an invalid one fails loudly at boot.
+
+**Q: How do you know adding a plugin won't break the app?**
+Six mechanisms, not conventions: adding a plugin edits no existing file; error
+boundary per plugin; manifests validate at boot; unknown ids degrade to a
+placeholder instead of white-screening; ESLint `no-restricted-imports` confines
+plugins to the SDK; `destroy()` is mandatory. Phase 6 tests guarantee #1 for
+real — building Sticky Notes must touch nothing outside its own folder.
+
+**Q: What was the most expensive mistake here?**
+Writing manifest values from memory instead of reading the handlers. Three of
+nine manifests had fabricated options. It's the same failure as the dead Tenor
+URLs earlier in the project: plausible-looking output that was never checked
+against the thing it describes.
+
+---
+
+## 42. Architecture: Activity Platform — Phase 2 (backend plugin host)
+
+**Goal.** Replace the twelve hardcoded `registerXHandlers(io, socket)` calls in
+`sockets/index.js` with one dispatcher, and migrate the first plugin
+(whiteboard) onto it — reversibly.
+
+### What the host does so plugins never have to
+
+Every plugin event now passes through one gate that: resolves the plugin →
+`canAccessRoom()` → checks the activity is installed **and** has a registered
+server module → rate limits per socket per event → builds the SDK from declared
+permissions → try/catches the handler.
+
+`whiteboard.handlers.js` repeated steps 2 and 4 **by hand, four times**. The
+migrated plugin (`activities/whiteboard/server.js`) contains only whiteboard
+logic. **Structural beats remembered: a plugin author cannot forget a step that
+is not theirs.**
+
+### Options considered
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Dispatch shape | (a) N listeners per plugin per socket (b) one dispatcher routing by id | **(b)** — the registration call must not grow as plugins are added; that is the whole point |
+| Migration safety | (a) cut over (b) parallel behind env flag | **(b)** `ACTIVITY_PLUGINS` — reverting is an env change, not a deploy. Defaults to `none`: **Phase 2 ships dark.** The old code still running by default is the only rollback that cannot itself fail |
+| Persistence | (a) move whiteboard to generic ActivityState (b) keep its own model | **(b)** — migration stays behaviour-preserving and instantly revertible; existing boards need no data migration. Moving data is a separate decision, not something to smuggle into a refactor |
+| Bus scope | (a) bridge client+server (b) server-side only | **(b)** — a bridged bus lets a client forge an event that server plugins trust as coming from a peer plugin. Crossing that gap goes through `sdk.socket`, which is access-controlled |
+
+### Challenges — three real bugs, each found a different way
+
+**1. Rejected events never answered the ack.** Five bare `return`s in the
+dispatcher. The rejection was correct; the *silence* was the bug — a client that
+awaits an ack (the normal way to send a move and wait for confirmation) hangs
+forever on every refusal. Found because a test **timed out at 30s instead of
+failing**, which is itself the tell: an assertion failure means wrong behaviour,
+a hang means nobody is answering. Now every path acks, with `Slow down`
+distinct from `Not allowed` so a client can back off rather than retry forever.
+
+**2. The host accepted plugins it wasn't serving.** With the flag off,
+`activity:join` for *any* plugin returned `{ok:true, state:null}` and put the
+socket in the activity room, because `authorize()` checked the plugin was
+installed in the room (every legacy room resolves to all 9) but never that a
+**server module was registered**. Harmless in isolation — no events were wired —
+but it is the first half of a double-broadcast bug, and it made the flag look
+like it had not taken effect.
+
+**The unit suite could never have caught this: it always ran with the flag ON.**
+Found by driving the live server with `ACTIVITY_PLUGINS=none`. A regression test
+now covers it explicitly.
+
+**3. `.env` is not watched by nodemon.** After flipping the flag I read the log,
+saw the old "activity host serving: whiteboard" line, and nearly concluded the
+rollback had failed. There is no `nodemon.json`; the default watches `*.js`
+only. `touch src/index.js` forces the restart. **A stale log line looks exactly
+like a working feature** — checking the timestamp is what distinguished them.
+
+Also: writing a throwaway script into `backend/` triggers nodemon and kills the
+server mid-test (`ECONNRESET`). Scratchpad, not the repo.
+
+### Verification — the part that mattered
+
+- **32 host tests + 391 total** across 19 suites, all green (was 359).
+- `sockets.test.js` covers the **legacy** whiteboard and runs with the flag off:
+  that is the parity check, and it passes unmodified.
+- **Live server, both directions:**
+  - flag ON → 7/7: join, broadcast, cursors, save+persist, non-member refused,
+    and **legacy `whiteboard:join` silent** (proving the flag swaps paths rather
+    than registering both)
+  - flag OFF → 3/3: legacy handler answers again, **and the plugin path is inert**
+- Flag reset to `none` afterwards.
+
+**Lesson (again, in a new costume): the tests all passed while a real bug sat in
+the flag-off path, because the suite only ever exercised one side of the switch.
+A migration flag has two states and both are production.**
+
+### Interview Q&A
+
+**Q: Why an env flag instead of just cutting over?**
+Because the rollback has to be cheaper than the migration. An env var reverts in
+seconds without a rebuild; a revert commit needs a deploy at the exact moment
+you least want one. Default `none` means the new path is opt-in until exercised.
+
+**Q: Why does the host ack even when it refuses?**
+An accepted event and a dropped one must be distinguishable by a client that
+awaits. Silence is indistinguishable from a lost packet, so a well-behaved
+client either hangs or retries forever. The reason is vague and identical for
+"unknown event" and "not allowed" so probing cannot enumerate what exists —
+but throttling is distinct, because that one the client should act on.
+
+**Q: Why keep the whiteboard's own Mongo model?**
+A refactor should change one thing. Moving the data at the same time would make
+the diff impossible to verify and the rollback lossy. `ActivityState` exists for
+plugins that have no model yet; whiteboard can move later, deliberately.
+
+---
+
+## 43. Architecture: Activity Platform — Phase 3 (frontend runtime)
+
+**Goal.** Delete the three hand-maintained lists in `RoomPage.jsx` that had to
+be edited to add a game, and give plugins a mount point that contains their
+failures.
+
+### What was hardcoded, and what replaced it
+
+| Was | Now |
+|---|---|
+| `[["room","💬 Room"],["board","🖊️ Board"],["game","🎮 Game"]]` | tabs derived from the room's installed activities |
+| `ACT_LABEL` — id → "started Ludo 🎲" | `describe(id)` from manifest `name` + `icon` |
+| `ACT_VIEW` — id → which tab | `tabFor(id)` from manifest `surface` |
+| `GamesHub`'s `GAMES[]` + a `lazy()` per game | `activities/registry.jsx`, one line per plugin |
+
+Tabs are now **derived, not listed** — a room with no games shows no Game tab,
+and the Board tab is labelled from the whiteboard manifest ("🖊️ Whiteboard").
+
+### Design decisions
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Tab-switch behaviour | (a) unmount (b) keep mounted, `hidden` | **(b)** — unmounting a live Ludo game to glance at chat loses the board; GamesHub already works around this with `sessionStorage`. Comes with the `display:none` trap (below) |
+| Where the tab logic lives | (a) in the hook (b) pure module in `shared/` | **(b)** — the frontend has **no test runner**, and this decides what every user sees at the top of the room. Pure + dependency-free ⇒ the backend suite covers it. The hook is a 3-line `useMemo` |
+| Lazy loading | (a) registry holds components (b) registry holds loaders, `lazy()` derived | **(b)** — keeps a separate `LOADERS` map so a chunk can be *warmed* on hover without mounting. Vite needs literal `import()`, so it cannot be built from a loop |
+| Failure containment | error boundary per activity | a crashing plugin shows a card in its own tab; chat and the call keep running |
+
+### Challenges
+
+**1. The `display:none` trap, again.** Keeping activities mounted-but-hidden is
+right for state, but canvases and lazily-loaded images inside a hidden subtree
+do not size or load correctly — and a 3D game happily renders at full frame
+rate into a canvas nobody can see. `ActivityHost` dispatches
+`activity:hidden` / `activity:shown` DOM events so canvas panels can pause,
+without every existing panel needing a rewrite. Same class of bug as the GIF
+thumbnails.
+
+**2. `call` and `board` are not plugin ids.** `ACT_LABEL` contained both:
+`call` is **core** (mediasoup is deliberately not a plugin) and `board` is a
+legacy alias for `whiteboard`. Routing them through a manifest lookup would
+have silently degraded "started the call 📞" to "started an activity" — a
+regression that reads like a translation bug, not a refactor. Both are handled
+explicitly (`CORE_ACTIVITIES`, `ACTIVITY_ALIASES`) and covered by tests.
+
+**3. Reached into React internals for preloading.** First version of
+`preloadActivity()` poked at `lazy()`'s `_payload`/`_init`. Not public API and
+would break on a React upgrade. Replaced with a plain loader map — calling the
+same `import()` twice is free, the module registry caches it.
+
+**4. I was querying the wrong database for two phases.** Every `mongosh` check
+used `groot`; the app uses **`connectsphere`** (`MONGO_URI`). So "0 rooms, 0
+users" looked like a wiped DB and sent me chasing a non-existent bug. The real
+DB had **85 users and 47 rooms**.
+
+That turned into the best verification of the whole migration: resolving **all
+47 real rooms — 40 of them true pre-plugin legacy rows — through the compat
+layer. 47/47 resolve to 9 activities with `active: null`.** Far stronger
+evidence than the synthetic probe row from Phase 1. *An empty result is a claim
+about your query before it is a claim about the data.*
+
+**5. The browser test could not log in.** The app keeps its access token in a
+**closure, not localStorage** (deliberate: XSS can read localStorage). So a
+`fetch()` login gives the SPA nothing. The new `layout-check.mjs` drives the
+real login form via the native input setter + `input` event — which also
+exercises the path a user actually takes.
+
+### Verification
+
+- **413 tests / 20 suites green** (was 391); 22 new room-view tests.
+- **Layout invariant re-checked after every edit**, against a real room with 45
+  messages (806px of overflow): page fixed at **704 = 704**, header **0 → 0**,
+  composer **636 → 636**, Board and Game tabs never scroll the page.
+- **Screenshots read, not just assertions** — the lesson from the layout fix.
+  Room and Whiteboard tabs both render correctly, VoiceBar docked without
+  overlap.
+- Frontend production build clean.
+
+### Interview Q&A
+
+**Q: Why keep activities mounted when hidden?**
+Because unmounting destroys state. Leaving a Ludo game to check a message and
+returning to an empty board is a bug users would report as "the game reset".
+The cost is that hidden canvases keep rendering, which is why the host tells
+them they are hidden.
+
+**Q: You put UI logic in a `shared/` folder — isn't that a layering violation?**
+It would be if it were UI. It is a pure function from room data to
+`{tabs, describe, tabFor}` — no React, no DOM. Putting it there bought real
+test coverage for the code that decides what every user sees, in a project
+whose frontend has no test runner. The React binding stayed in the frontend.
+
+**Q: What would have caught the `call` regression?**
+The test that asserts every legacy activity id produces a real phrase rather
+than the "started an activity" fallback. Written because `ACT_LABEL` had ten
+entries and only eight were plugins — the mismatch is the tell.
+
+---
+
+## 44. Feature: Room Creation Wizard + Recommendation Engine (Phase 4)
+
+**Goal.** The original brief's FIRST TASK: replace "name + Create" with
+name → visibility → purpose → recommended activities → per-plugin settings.
+
+### The decision that shaped everything: the skip button
+
+Creating a room used to be one text field and a click. A five-step wizard
+everyone must walk through would be a **downgrade** for the person who already
+knows what they want — the single most likely way this feature makes the
+product worse. So **"Skip & create" is present from step 1 onward**, and
+skipping stores no activities, which resolves to the legacy "everything"
+default. The server contract stayed additive (`{name, visibility}` is still
+valid), so old clients and the fast path are the same code path.
+
+### Options considered
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Recommendations | (a) `if (purpose === "coding")` (b) weighted scoring over manifest data | **(b)** — a hardcoded map needs editing for every new plugin AND every new purpose (the N×M problem the plugin system exists to kill). Each manifest declares its own `recommendedFor`, so a plugin arrives knowing where it belongs |
+| Tiering | (a) absolute score cutoff (b) relative + floor/cap | **(b)** — an absolute cutoff empties the list for weak purposes ("music"); a pure ratio leaves a shortlist of ONE when a plugin dominates (Coding → Whiteboard). Floor 4, cap 6 |
+| Where recommendations run | (a) client (b) server | **(b)** — the co-occurrence table and future personalisation improve without shipping a bundle. Client keeps a static fallback: a recommendation is a nicety and must never block creation |
+| Config forms | one generic renderer | the payoff for the closed six-type grammar — **zero per-plugin form code**, and an unrenderable field is impossible by construction |
+| Config validation | server-side `coerceConfig` | same trust boundary as `sanitizeAttachments`: unknown keys dropped, numbers clamped, bad types defaulted |
+
+### Explainable by construction
+
+Because the score is a **sum of named signals**, the UI can say *why*:
+"Made for Study rooms", "Pairs well with Ludo", "Popular choice". That is the
+difference between a recommendation feeling deliberate and feeling random —
+and it costs nothing once scoring is data-driven rather than hardcoded.
+
+### Challenges
+
+**1. First tuning pass produced one-item shortlists.** `cutoff = top * 0.6`
+looked principled but gave Coding → *only* Whiteboard, and Study → *only*
+Whiteboard. A "shortlist" of one reads as broken, not selective. Fixed with a
+floor (4) and cap (6). Also discovered already-selected plugins were competing
+for recommendation slots — suggesting what the user just picked wastes the
+list. Both found by **printing the output for all ten purposes** rather than
+trusting the formula.
+
+**2. The production build passed with a reference to a deleted variable.**
+Removing `roomName` state from the dashboard left `setRoomName("")` in the
+mutation's `onSuccess` — a guaranteed `ReferenceError` on *every successful
+room creation*. Vite bundled it happily; only grepping for stale references
+caught it. **A green build is not a green program**: bundlers resolve modules,
+they do not check that identifiers exist.
+
+**3. Numeric select values round-trip as strings.** `<option value>` is always
+a string, so `maxElements: 50000` would have come back as `"50000"` and failed
+server coercion. The renderer maps the chosen option back to its declared type.
+
+### Verification
+
+- **443 tests / 21 suites green** (was 413); 30 new.
+- **15 live API checks**: legacy body still 201s and stores no activities;
+  wizard payload stores config + pinned version; `maxPlayers: 9999` → clamped
+  to 4; unknown key dropped; `"yes please"` → default `true`; unknown plugin id
+  → 400; `inviteOnly` hidden from discovery; all 10 purposes return
+  recommendations.
+- **15 live UI checks** driving the real browser through all five steps:
+  4 recommendations pre-selected with reasons, "More activities (5)" collapsed,
+  generic renderer produced **3 toggles + 1 dropdown from the manifest alone**,
+  room created and landed on `/room/:id` with the right tabs.
+- **Screenshots read** — the wizard renders correctly at each step.
+- Layout invariant re-checked; lint clean.
+
+### Interview Q&A
+
+**Q: Why not just hardcode which activities suit which purpose?**
+Because that table is N×M and lives in the centre of the app: every new plugin
+and every new purpose edits it. Manifest-declared affinity means a plugin
+arrives self-describing and no shared file changes. It also gives explainability
+free — a hardcoded list cannot tell you why.
+
+**Q: Isn't a 5-step wizard worse than one text field?**
+It would be if it were mandatory. "Skip & create" is available from step 1, so
+the fast path is unchanged and the wizard is opt-in depth. The steps also stay
+additive server-side, so nothing about them is load-bearing.
+
+**Q: Why validate plugin config on the server when the form already constrains it?**
+The form constrains a cooperative client. `curl` is not one. It is the same
+reasoning as `sanitizeAttachments` — anything a browser sends is untrusted, so
+config is clamped against the plugin's own schema before it reaches Mongo.
+
+---
+
+## 45. Feature: Activity Management — add/remove plugins in a live room (Phase 5)
+
+**Goal.** The thing the plugin system was for: an owner can add, remove and
+reconfigure a room's activities *after* it exists, and everyone's tabs follow
+immediately.
+
+### Design decisions
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| API shape | (a) add/remove/patch endpoints (b) replace the whole set | **(b) `PUT /:id/activities`** — the client already holds the full list, and one write means two owners toggling at once cannot interleave into a half-applied state. Also makes "Cancel" correct for free: nothing is sent until Save |
+| Who may add/remove | owner only | it changes the room for everyone |
+| Who may *switch* the open activity | **any member** | starting a game is participation, not administration. Gating it on ownership makes the room worse for no security gain — anyone who can join can already play |
+| Legacy rooms | materialize on first edit | the implicit "everything" becomes explicit exactly when the owner expresses an opinion. Still no bulk migration, ever |
+| Omitted `config` on update | means "leave it alone" | the alternative — reset to defaults — would silently wipe every other activity's setup whenever one was toggled |
+
+### The bug that mattered: an empty list meant two opposite things
+
+`installed: []` is ambiguous. Mongoose materialises a missing array as empty,
+so it means "never configured" — but it is *also* what you get when the owner
+removes everything. The resolver treated both as legacy, so **removing every
+activity handed all nine straight back**: precisely the opposite of the
+request.
+
+Fixed with `activities.configured`, set on the first edit. After that an empty
+list is a deliberate chat-only room and is honoured; before it, absence still
+means "everything". Three tests pin the distinction, including the raw
+resolver case:
+
+```js
+resolveInstalled({ activities: { installed: [] } })                    // → 9
+resolveInstalled({ activities: { installed: [], configured: true } })  // → 0
+```
+
+**Found by a live API test, not by unit tests** — the unit tests all asserted
+the *populated* cases, which is exactly where an ambiguity like this hides.
+
+### Two more real bugs
+
+**`addedAt` was rewritten on every save.** I read install provenance from
+`resolveInstalled()`, which normalises entries down to
+`{id, config, enabled, version}` and *drops* `addedBy`/`addedAt`. So
+`prior?.addedAt || new Date()` always took the second branch, rewriting history
+for activities that had not changed. Now read from the raw subdocuments. Caught
+by a test asserting the timestamp is stable across an unrelated edit — worth
+writing precisely because nothing user-facing would have shown it.
+
+**Removing the tab you are looking at left a blank pane.** The tab bar is
+derived from installed activities, so when the owner removes the Game tab a
+member sitting on it renders nothing. `RoomPage` now falls back to the Room tab
+whenever `view` stops existing — the room tab is core and can never be removed,
+so it is always a safe destination.
+
+### Verification
+
+- **463 tests / 22 suites green** (was 443); 20 new.
+- **18 live API checks**: materialization, config preservation, clamping on
+  update, non-owner 403, member-can-switch-active, active pointer cleared on
+  removal, empty list respected, malformed body rejected.
+- **Two-browser live test** — the claim that actually matters. Owner unticks
+  seven games and saves; the *other member's* Game tab disappears **without a
+  refresh** (socket `room:activities-changed`), and re-enabling Ludo brings it
+  back. A single-tab test could not have shown this.
+- Screenshot read: the manager panel groups by category, scrolls internally,
+  and pins Save/Cancel.
+- Layout invariant re-checked: 704 = 704, header 0 → 0, composer 636 → 636.
+
+### Interview Q&A
+
+**Q: Why replace the whole activity set instead of PATCHing one at a time?**
+Concurrency and cancellability. The client already has the full list, so a
+single write removes any interleaving between two owners editing at once, and
+"Cancel" needs no compensating request because nothing was sent.
+
+**Q: Why can any member switch the active activity but only the owner install one?**
+They are different kinds of action. Installing changes what the room *is* and
+affects everyone persistently; switching is ordinary use, and anyone who can
+join can already start a game. Gating participation behind ownership adds
+friction without adding safety.
+
+**Q: How did the empty-list bug survive the unit tests?**
+Because every unit test asserted a populated list. The ambiguity only existed
+in the empty case, and "empty" was the one state that meant two different
+things depending on history the resolver could not see. The fix was to make
+that history explicit rather than to guess better.
+
+---
+
+## 46. Feature: Sticky Notes — the first new plugin (Phase 6)
+
+**Goal.** Build one genuinely new activity end to end and find out whether the
+plugin API actually holds. The migration plan states the pass condition in
+advance: *if it touches any file outside its own three folders plus two
+registration lines each, the architecture failed and gets fixed first.*
+
+Sticky Notes was chosen because it is small enough that a wrong API shows up in
+a day: a shared board of draggable coloured notes, exercising `sdk.socket`,
+`sdk.storage`, `sdk.presence` and the config grammar.
+
+### The verdict: the architecture failed the test, and was fixed first
+
+Writing the plugin took a fraction of the session. Two platform defects blocked
+it, and **both were fixed as platform work rather than worked around inside the
+plugin** — a workaround would have let the API's first real test pass while
+leaving the defect for plugin #2.
+
+**Defect 1 — the room shell could only ever render one non-game plugin.**
+`buildRoomView` did `bySurface("board")[0]`: it took the *first* board plugin
+and silently dropped the rest. `surface: "tab"` aliased onto `"board"` too, so
+Sticky Notes would have collided with Whiteboard and never rendered — no error,
+no log, just a tab showing the wrong plugin. Invisible while whiteboard was the
+only board-ish plugin; a hard blocker the moment a second one existed.
+Now `tab` is its own surface and each such plugin gets `tab:<id>`, a slot it
+cannot share.
+
+**Defect 2 — the tab bar was manifest-driven but the tab BODY was not.**
+Phase 3 deleted the hardcoded tab *array* and left `<WhiteboardPanel roomId/>`
+hardcoded as the board body. So the bar said "Sticky Notes" and the pane
+underneath rendered the whiteboard. Each tab now carries the `activityId` it
+renders and the shell mounts `<ActivityHost>`, so **RoomPage.jsx names no plugin
+at all** — the `lazy`/`Suspense` imports became dead and were removed.
+
+**Defect 3 — there was no client SDK.** The server had spoken
+`activity:join`/`activity:event` since Phase 2, but *nothing in the frontend
+ever spoke it*: every panel still imported `socket.js` and emitted bespoke event
+names. The whiteboard "migration" was server-side only. Sticky Notes would have
+had to invent a client for the protocol inside its own folder, where no other
+plugin could reuse it. Built once as platform: `activities/sdk.js` +
+`useActivitySdk.js`.
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Where positions live | (a) pixels (b) fractions 0–1 | **(b)** two people on a phone and a 4K monitor must see the same layout; pixels put a note off-screen for the smaller board. Clamping also stops a hostile client parking a note at x=10⁹ where nobody can reach it to delete it |
+| Optimistic updates | (a) everywhere (b) dragging only | **(b)** a note lagging the cursor feels broken, so dragging is local-first; everything else waits for the broadcast so there is one source of truth. Optimistic *creation* would render a note the server may refuse (board full) and yank it back |
+| Who may edit vs delete | edit = author only; delete = configurable | rewriting someone's words under their name is a different act from removing a note. Delete is the destructive one, so it is the one exposed to config (`author`/`anyone`/`owner`) |
+| Move echo | broadcast vs toOthers | **toOthers** — echoing the position back at the dragger fights their own cursor mid-gesture |
+| Plugin state | (a) module-level Map (b) `sdk.storage` | **(b)** whiteboard keeps a `scenes` Map only because it predates the storage SDK and its migration was behaviour-preserving. A new plugin has no excuse: storage already does the memory layer, debounced write-behind and release-on-empty |
+
+### The migration flag meant the opposite thing for a native plugin
+
+`ACTIVITY_PLUGINS` defaults to `none` and that was right for Phase 2: "off"
+means *the legacy handler runs instead*. Sticky Notes has no legacy handler, so
+"off" would have meant the activity was **silently dead** — a tab that renders
+and never syncs, with nothing in the logs. Worse than not shipping it.
+
+Fixed by separating the two cases: `NATIVE_PLUGIN_IDS` are always served,
+because there is nothing else that could serve them. The flag still governs
+everything being migrated *from* something, which is the only case it was built
+for.
+
+### The compat resolver did its job, and the first test draft failed because of it
+
+The suite's first run refused every join. Cause: `createRoom` sent only a name,
+so the room stored no `activities` field, resolved as **legacy**, and
+`LEGACY_ACTIVITY_IDS` deliberately excludes Sticky Notes.
+
+That is the resolver working exactly as designed — a 2026 plugin must not
+appear retroactively in 2025's rooms — and the fix was for the *test* to install
+the plugin the way a real user does, not to add the id to the legacy list. A
+test asserts that `compat.js` never mentions `sticky-notes`, so nobody "fixes"
+it that way later.
+
+### The bug no test could have caught: the SDK was a ref
+
+`useActivitySdk` first held the built SDK in a `useRef`. The SDK is created
+*inside* an effect, so it does not exist on the first render — and consumers
+subscribe to broadcasts in their own `useEffect(..., [sdk])`.
+
+A ref assignment does not re-render. So that effect would run exactly once with
+`sdk === null`, and **never again**: the board would load its initial state
+through the join ack and then sit there deaf to every subsequent update, with
+nothing in the console to say why. The failure looks like "realtime is broken
+sometimes", which is the worst kind of bug report.
+
+Fixed by making the SDK `useState`, so building it re-renders and dependent
+effects actually re-run.
+
+**Found by re-reading the diff, not by a test** — and no test in this repo could
+have found it: the 18 new tests drive real sockets but never mount React, and
+the frontend has no test runner. It is a reminder that the socket-level suite
+proves the *protocol*, not the *binding*, and the binding is new code too.
+
+### The bug only a real pointer could find: the note was undraggable
+
+`startDrag` began with what looks like an obviously correct guard:
+
+```js
+if (e.target.closest("button, textarea")) return;  // let controls work
+```
+
+But the textarea fills almost the entire note (`flex-1` inside a 176×176 card),
+so this left roughly a 20-pixel frame of grabbable surface. **The note was, in
+practice, undraggable** — on a plugin whose entire premise is dragging notes
+around.
+
+Every backend test passed, because they call `move` directly over the socket and
+never touch a pointer. The 12-check live script passed for the same reason. It
+took a CDP-driven Chrome dispatching real `Input.dispatchMouseEvent` presses at
+the note's centre to show it: **moved 0px**.
+
+Fixed the way real sticky-note apps behave — drag from anywhere, and let the
+textarea claim the gesture only once it is already focused:
+
+```js
+if (e.target.closest("button")) return;                                   // × stays clickable
+if (e.target.tagName === "TEXTAREA" && document.activeElement === e.target) return;  // already typing
+e.preventDefault();                                                        // don't steal focus
+```
+
+With `preventDefault()` the textarea no longer focuses natively, so focus is
+restored on pointer-up *only when the pointer never moved* (4px of slack — a
+click is never perfectly still). A tap edits; a drag moves. That distinction is
+the whole interaction, and no assertion in the repo expressed it before.
+
+### Guarantee #1 is now checked mechanically, not asserted in a comment
+
+```js
+const mustNotMention = ["backend/src/sockets/index.js", "frontend/src/pages/RoomPage.jsx",
+  "frontend/src/components/GamesHub.jsx", "shared/activities/room-view.js",
+  "shared/activities/compat.js", "shared/activities/recommend.js", ...];
+for (const p of mustNotMention) expect(read(p)).not.toContain("sticky-notes");
+```
+
+If a future change makes the shell, the dispatcher or the wizard name this
+plugin, the test fails — and it should, because that is the coupling the whole
+system exists to prevent. The fix is to make the platform generic again, not to
+add a file to the allowlist.
+
+**Final footprint:** 3 new files (manifest, server, panel) + 3 registration
+lines. Zero edits to the dispatcher, the wizard or the recommendation engine.
+
+### What came for free — the actual payoff
+
+Nothing below required a line of code beyond the manifest:
+
+- The **recommendation engine** ranks it #1 for "team" and #2 for brainstorm and
+  meeting rooms, with the generated reason *"Made for brainstorm rooms"* —
+  purely from `recommendedFor` weights.
+- The **creation wizard** renders its three settings via the generic
+  `ConfigSchemaForm`.
+- The **activity manager** can install and remove it in a live room.
+- The room announces **"started Sticky Notes 📝"** from the manifest name + icon.
+- It got its own **8 KB lazy chunk**; no bundle regression.
+- Hostile config is clamped by the existing trust boundary: `maxNotes: 99999 →
+  500`, `allowDelete: "everyone" → "author"`.
+
+### Verification
+
+- **481 tests / 23 suites green** (was 463 / 22); 18 new, driven through real
+  socket.io clients rather than by calling the module in-process.
+- **12 live checks against the running dev server and the real `connectsphere`
+  database** — not the in-memory harness. The one that matters: both users
+  disconnect, `destroy()` fires, storage flushes to Mongo, and a fresh
+  connection gets the notes back *with the moved position intact*. That is the
+  debounced write-behind and the teardown path proven outside the test doubles.
+- Live checks also confirmed a forged `authorId` is ignored, an off-board
+  position is clamped to `{x:1,y:0}`, and a non-author is refused on both edit
+  and delete.
+- **Real-browser pass over CDP** (Chrome 150, two isolated browser contexts, no
+  new dependencies — same approach as the earlier `tabs-test.mjs`). This is what
+  caught the undraggable-note bug above, which every other layer of testing
+  passed. It also confirmed, by screenshot rather than assertion:
+  tabs render as `💬 Room · 🖊️ Whiteboard · 📝 Sticky Notes` (manifest-driven);
+  the panel mounts through `ActivityHost` with all six colour swatches; the note
+  renders at a real 176×176 with its author name; **Whiteboard and Sticky Notes
+  coexist** (the defect that blocked Phase 6); the sticky board survives a tab
+  switch; the layout invariant holds (`scrollH 788 == clientH 788`); zero console
+  errors.
+- Test-isolation notes for the next person driving Chrome over CDP:
+  - **Fresh `--user-data-dir` per run.** Otherwise the httpOnly refresh cookie
+    restores the *previous* run's user, and the room renders "Not a member" —
+    which looks exactly like an access-control bug and is not one.
+  - **Log in by driving the real form.** The access token is deliberately
+    memory-only (zustand, never localStorage), so there is no store to prime
+    from outside the app.
+  - **Reuse the seeded demo accounts** (`demo01.3vqqo@example.com` …, password
+    `Password123`) rather than registering. The auth limiter is 20 req/15 min and
+    register+login per run exhausts it in a few iterations.
+  - The room URL is `/room/:roomId` (**singular**), not `/rooms/`.
+  - `ws` is already a transitive dependency, so a ~90-line CDP client needs no
+    new packages — no Puppeteer/Playwright install required.
+- Server-authority tests prove a forged `authorId` is ignored, an off-board
+  position is clamped, 5000-char text is truncated to 280, and a colour outside
+  the palette falls back rather than reaching another user's CSS.
+- `toOthers` vs `broadcast` is pinned by a test that asserts the dragger does
+  **not** receive its own move echo — a silent-timeout case that would otherwise
+  only show as a jittery drag in a real browser.
+- Build check: Sticky Notes lands in its own chunk, not the main bundle.
+
+### Interview Q&A
+
+**Q: You set a pass condition and it failed. Why is that a good outcome?**
+Because it failed *cheaply and on purpose*. The whole point of building a small
+plugin first was to find the wrong assumptions while they cost a day instead of
+a fortnight. Three defects surfaced — a single-slot surface, a half-generic tab
+body, a protocol with no client — and every one of them would have been far more
+expensive to discover on the code editor or the AI tutor. A test that can only
+pass tells you nothing.
+
+**Q: Why not just special-case Sticky Notes in RoomPage and move on?**
+Because the plugin would then be evidence of nothing. The architecture's claim
+is "adding a plugin edits no existing file"; a plugin that ships by editing
+existing files does not test the claim, it hides that the claim is false. And
+the cost is not saved, only deferred and multiplied — plugin #3 pays it again.
+
+**Q: Why are positions fractions rather than pixels?**
+Because the board is a different size for every viewer. Pixel coordinates
+encode one person's viewport into shared state, so a note placed on a 4K monitor
+lands off-screen on a phone. Fractions make position a property of the *board*
+rather than of whoever happened to place the note — and clamping to 0–1 doubles
+as a safety bound, since an unreachable note is also an undeletable one.
+
+**Q: Why is deletion configurable but editing always author-only?**
+They are different acts. Deleting removes something from a shared wall, which is
+a moderation question with legitimately different answers per room. Editing
+rewrites someone's words *while keeping their name on them* — there is no room
+where that is the desired default, so it is not offered as an option.
+
+**Q: Why does the client SDK have no `storage.set`?**
+Because the browser is not a trusted writer. If a client could write room state
+directly, note authorship and the board cap would be advisory. State reaches the
+client through the `join` ack, which is already access-controlled, and changes
+go back as events the server validates and applies itself.
+
+**Q: The note was undraggable and nothing caught it. Why not?**
+Because every layer of testing bypassed the thing that was broken. The socket
+tests call `move` directly — they prove the server applies and broadcasts a
+position, which it did, perfectly. The live script does the same over a real
+connection. Neither dispatches a pointer, and the bug was entirely in *deciding
+when a pointer press becomes a drag*. The lesson is not "the tests were bad" but
+that a guard like `closest("button, textarea")` reads as obviously correct and is
+only wrong in combination with the layout — a textarea that happens to fill the
+card. That combination does not exist in any test; it exists on screen.
+
+**Q: 481 tests were green and you still shipped a bug. What does that say about the tests?**
+That they test the layer they test. The suite drives real socket.io clients, so
+it proves the wire protocol, the authorization gates and the persistence path —
+and it proved all of those correctly. The SDK-as-a-ref bug lived in the React
+binding, which no backend test mounts and which the frontend has no runner for.
+The honest conclusion is not "write more tests" but "know which claims your
+tests are making": a green socket suite is evidence about the protocol and
+silent about everything above it. That is also why the live two-user script
+against the running server exists — it is the cheapest thing that exercises the
+layers the suite cannot see.
+
+---
+
+## 47. Migration: Polls onto the plugin host (first client+server migration)
+
+**Goal.** Move an existing activity — server *and* client — fully onto the
+plugin system. Sticky Notes proved a new plugin could be built on it; this
+proves an old one can be moved onto it without changing what users see.
+
+Poll is second in the migration order for one reason: **it is the first plugin
+with a timer.** A poll can auto-close after a duration, so its `destroy()` must
+clear a pending `setTimeout`. That is the same failure mode as Kart's
+`setInterval` physics loop at a quarter of the size — a rehearsal for the hard
+one, deliberately scheduled before it.
+
+### The gap the timer exposed: `sdk.socket.detached()`
+
+Every socket capability was scoped to the socket that triggered the current
+event. Correct for request/response, and useless the moment a plugin needs to
+speak *later* — a poll auto-closing, a turn clock expiring, a physics tick. Those
+fire with no socket in scope.
+
+My first draft reached for `sdk.__internal.io`, which does not exist and should
+not: a plugin holding `io` can address every room on the server, which breaks
+capability isolation (guarantee #5). Keeping the whole sdk alive past its request
+is no better — it pins the socket and the room document in memory for as long as
+the timer runs.
+
+So the SDK gained a **detached broadcaster**: a frozen object closing over the
+activity key alone, able to reach this plugin in this room and nothing else — the
+same boundary as the rest of the socket API, without the expiry.
+
+```js
+const wire = sdk.socket.detached();          // captured while the request lives
+poll.timer = setTimeout(() => closePoll(wire, roomId), dur * 1000);
+```
+
+This is platform work every remaining timer-based plugin needs, which is exactly
+what migrating in size order is for.
+
+### Decisions
+
+| Decision | Options | Chosen — why |
+|---|---|---|
+| Poll state | (a) `sdk.storage` (b) module-level `Map` | **(b)**, the opposite of Sticky Notes. Polls are explicitly ephemeral — "a poll that outlives the hangout has no value". `sdk.storage` writes through to Mongo, so using it would *change* behaviour. A migration moves where code lives; it does not quietly alter what it does |
+| Who may close | creator only → **creator or owner** | the old handler allowed only the creator, which left a room stuck with an open poll if they disconnected. The owner can always end something disruptive in their own room |
+| `maxOptions` config | trusted vs clamped | config may only **tighten** the ceiling, never raise it past the server's hard 6 — a room setting is not a licence to make the server serialize more |
+
+### What the client migration actually removed
+
+`usePoll` lost a **400 ms sleep**. It used to `setTimeout(..., 400)` before
+`poll:sync`, because sync needed room membership and the room join was issued by
+`useRoomChat` on the same `connect` tick — so it raced, and the fix was to guess
+a delay. `sdk.socket.join()` *is* the sync: one access-controlled round trip
+returning current state in its ack. Nothing to race, no number to guess.
+
+It also lost the `p.roomId === roomId` filter on every inbound event, because
+namespaced sockets deliver only this room's activity traffic. The check became
+structural instead of remembered.
+
+### Two bugs caught while migrating
+
+**`room:announce` nearly went missing.** The old `create` emitted it so the room
+got a tap-to-join toast. It is **core**, not plugin traffic — every activity
+emits it (call, board, ludo…) — so dropping it during the rewrite would have
+silently removed "started Polls 📊" for anyone not already on the room tab.
+
+**`PollPanel` mounted unconditionally.** Harmless while polls were a global
+socket event; after the migration it means joining an activity the room may not
+have installed. `overlayActivities` was computed by `buildRoomView` and never
+consumed — so the overlay surface got the same registry-driven treatment the
+tabs did, and RoomPage stopped naming `PollPanel` at all.
+
+### The flag is per-plugin, and so is the migration
+
+`ACTIVITY_PLUGINS` switches the **server** to the host. The **client** must
+already speak the plugin protocol, or the halves desynchronise: the server stops
+listening for the legacy events the client still emits, and the activity dies
+silently. I set `ACTIVITY_PLUGINS=whiteboard,poll` locally and immediately
+reverted to `poll` — whiteboard's server module is done but `WhiteboardPanel`
+still imports `socket.js`, so enabling it would have broken the whiteboard.
+Now documented at the flag itself.
+
+### Verification
+
+- **500 tests / 24 suites green** (was 481 / 23); 19 new.
+- The auto-close test **waits the real 15 seconds**. Jest fake timers were the
+  obvious shortcut and do not work: freezing the clock also freezes socket.io's
+  delivery, so the broadcast never arrives and the test fails for a reason
+  unrelated to the code. A test-only seam to shrink `MIN_DURATION` would be
+  worse — production bent to suit a test.
+- `destroy()` test proves the pending timer is cleared and the poll freed when
+  the room empties. A leak would hold the broadcaster and the poll alive for up
+  to ten minutes, then broadcast into an empty room.
+- **10/10 live checks** against the running dev server: create, live delivery to
+  the other user, vote counting with voter names, retract-on-same-option, late
+  joiner, concurrent-poll refusal, close, and votes rejected after close.
+
+### Interview Q&A
+
+**Q: Why did poll keep a module-level Map when Sticky Notes was told not to?**
+Because they mean different things. Sticky Notes is a shared artefact people
+expect to find later, so it belongs in `sdk.storage` with its debounced
+write-behind. A poll is a moment — the original handler says so explicitly. Using
+storage would have persisted something the product deliberately does not persist,
+which is a behaviour change smuggled inside a refactor. The rule I applied is
+that a migration moves code, and any change in what users experience has to be a
+separate, visible decision.
+
+**Q: Why not just give the plugin `io` for its timer?**
+Because `io` addresses every room on the server. The whole point of building the
+SDK from declared capabilities is that a plugin's reach is bounded by what it
+asked for; handing over `io` to solve a scheduling problem would make that
+boundary decorative. `detached()` keeps the same reach as the plugin's normal
+socket API — this plugin, this room — and only relaxes the *lifetime*, which is
+the single thing the timer actually needed.
+
+**Q: The client migration deleted a 400ms setTimeout. Why does that matter?**
+Because it was a guess standing in for a guarantee. The old sync raced the room
+join, and 400ms was a number that made the race usually come out right — on a
+fast local connection. The SDK replaced it with a round trip whose ack *is* the
+state, so the ordering is enforced rather than hoped for. Deleting a magic
+number is usually a sign the design underneath got more honest.
+
+---
+
+## 48. Correction: polls are core again, and the last hardcoded list dies
+
+Five fixes from one round of real use. Three were bugs; two were the plugin
+system not being finished where it mattered most to a user.
+
+### Polls came back OUT of the plugin system
+
+§47 migrated polls onto the host. It worked — and it was the wrong call.
+
+The mistake was conflating two properties: **"runs on the plugin
+architecture"** and **"the user may uninstall it"**. Migrating polls gave them
+both, so polls appeared in the creation wizard as an *optional* feature you
+could decline. A room where you cannot ask a quick question is a downgrade, not
+a configuration.
+
+So polls went back to `sockets/poll.handlers.js`, always registered, alongside
+chat and voice. The rule this settles, now written at the registry itself:
+
+> If uninstalling it makes the room **worse for everyone** rather than merely
+> **different**, it is infrastructure.
+
+Same test that keeps chat and video out of the plugin set. Reverted the poll
+plugin, its client hook and its 19 tests; **kept `sdk.socket.detached()`**,
+which is genuine platform work every remaining timer-based plugin needs.
+
+**Can polls be a plugin?** Technically yes — the migration passed 19 tests and
+10 live checks. That is exactly why it is worth being explicit that "we can" is
+not "we should".
+
+### The games bug: `GamesHub` held its own hardcoded list
+
+Reported as *"I selected a few games but all the games are coming in the room"*.
+Not a server bug — the room stored the right two. `GamesHub.jsx` had a literal
+`GAMES[]` array of all seven plus seven `game === "x" && <Panel/>` branches, and
+never looked at what the room installed.
+
+This was **the fourth coupling point the migration plan named in §1.3** and the
+last one standing. Phase 3 made the tab *bar* manifest-driven and stopped there;
+the arcade behind it kept its own list. Now it renders from
+`useRoomActivities().gameActivities` and mounts each panel through
+`ActivityHost` — a game appears by being installed and nowhere else.
+
+Two things fell out of it:
+
+- **A stale `sessionStorage` game had to be handled.** Play Ludo, have the owner
+  uninstall it, refresh — you would land in a game the room no longer has, whose
+  socket events the server now refuses. Falls back to the picker.
+- **`ActivityHost` now forwards extra props.** Kart's Exit button is an `onExit`
+  callback; swallowing it would have left the button rendered and dead. The host
+  stays generic — it forwards what the caller supplies without knowing what any
+  of it means.
+
+### The toggle overflowed its track
+
+`w-5` knob in a `w-11` track with `translate-x-5` from `left: 0` put the knob's
+right edge at 40px in a 44px track when off, and over the border when on.
+Anchored with `left-0.5` and translated 20px: 2 + 20 + 20 = 42, leaving a
+symmetric 2px inset at both ends. Rows also got `min-w-0` on the label — a flex
+child's default `min-width: auto` refuses to shrink below its content, which is
+what pushed controls outside the card when a setting name was long.
+
+### Purposes are multi-select
+
+A room is often "Fun + Study", and forcing one pick made the user discard half
+their intent before recommendations were even computed.
+
+**Scoring takes the BEST fit across the selected purposes, not the average.**
+Averaging punishes specialists — precisely what someone picking two purposes is
+asking for — and would rank a bland generalist above Chess for a study room.
+Summing is worse: a plugin with weak ties to four purposes would outrank a
+perfect fit for one, and the score would grow without bound.
+
+The reason text names the purpose a plugin *actually* matched, so with
+Fun + Study selected the whiteboard reads "Made for study rooms" rather than
+borrowing whichever purpose happened to be first in the array.
+
+`kind` is retained as `kinds[0]` so every room stored before multi-select, and
+every reader that only knows `kind`, keeps working.
+
+**Caught by a test, not by reading:** Joi strips unknown keys, so `kinds` was
+silently dropped at the validator and never reached the controller. The
+persistence tests failed while the scoring tests passed — which located it
+immediately.
+
+### Plugins moved to a header button
+
+The activity manager was at the bottom of a scrolling sidebar behind a toggle:
+the room's most structural setting was its hardest to find. Now a 🧩 **Plugins**
+button sits in the room header and opens the manager as a modal — foreground,
+and wide enough to show settings without squeezing them into 260px.
+
+### Verification
+
+- **490 tests / 23 suites green.** Nine new (multi-purpose scoring and
+  persistence), 19 removed with the poll plugin.
+- **8/8 real-browser checks**: arcade shows exactly the two installed games;
+  three purpose cards selected at once; 🧩 Plugins in the header; polls present
+  but not a tab; every toggle knob measured inside its track and inside the
+  panel; zero console errors.
+- Screenshots read, not just asserted — the arcade image is the actual proof
+  that "all seven games" became "Chess and UNO".
+
+### Interview Q&A
+
+**Q: You migrated polls to the plugin system and then reverted it. Wasn't that wasted work?**
+The code was reverted; the decision was the deliverable. It surfaced a
+distinction I had been eliding — that being *built* as a plugin and being
+*optional* to the user are independent, and the plugin system was quietly
+coupling them. That is now a written rule at the registry, so the next
+borderline activity gets decided rather than defaulted. It also produced
+`sdk.socket.detached()`, which survives the revert because every timer-based
+plugin still needs it.
+
+**Q: The games bug was reported as a server problem. How did you find it?**
+By checking the claim rather than the symptom. The room document had the right
+two activities and the API returned them, so the data was never wrong — which
+meant the list being rendered came from somewhere else. It was a hardcoded array
+in the component, and it had been flagged in the migration plan a year of work
+earlier as one of four coupling points. Three had been fixed; this was the one
+nobody had revisited because the tab bar above it looked correct.
+
+**Q: Why best-fit rather than averaging for multiple purposes?**
+Because of what the user is expressing. Picking Fun and Study is not "find me
+things that are moderately both" — it is "this room does two things, serve them
+both well". Averaging optimises for the compromise candidate and demotes the
+best game *and* the best study tool simultaneously, which is the one outcome
+nobody asked for.
+
+---
+
+## 49. Groundwork: the SDK gains a deferred private channel (games migration, part 1)
+
+**Goal.** Start migrating the four framework games (chess, uno, typing, bingo).
+Ended up establishing *how* they can be migrated at all, which was the real
+blocker.
+
+### The finding: the games cannot migrate without a decision about `io`
+
+`sockets/lobbyGame.js` is already a plugin framework — the migration plan says
+so (§1.2): games supply pure callbacks and never touch socket.io. So the honest
+migration is **one adapter, not four rewrites**; writing four near-identical
+server modules would duplicate the seat/bot/timer logic the framework exists to
+share, and every future lobby game would pay the same tax.
+
+The obstacle is that the framework's `ctx` — `broadcast`, `notice`, `emit`,
+`endGame` — is built by `makeCtx(io, roomId)`, and **`io` addresses every room
+on the server.** Handing it to a plugin would make guarantee #5 (a plugin cannot
+reach app internals) decorative. I caught myself writing `sdk.socket.__io` twice
+before naming the problem: an invented back door is still a back door.
+
+The resolution: every game callback uses those four methods and nothing else, so
+`ctx` can be **rebuilt on the detached broadcaster**, which reaches this plugin,
+in this room, and nothing else. No new hole; the framework's shared `games` Map
+keeps state identical to the legacy path, so only the transport differs.
+
+### What shipped: `detached()` completed
+
+`sdk.socket.detached()` (added in §47 for poll's auto-close timer) gained the
+two things a seat-based game needs from outside a request:
+
+| Added | Why a request-scoped version cannot do it |
+|---|---|
+| `toUser(userId, event, payload)` | UNO's private hand is dealt by a **bot timer**, not by the player's own request — there is no socket to answer |
+| `roomMembers()` | send each seated player their own private state in one pass; returns `{userId, socketId}` only, never socket objects, which would carry `.server` and arbitrary `emit` |
+
+That is the whole diff. The adapter itself is **not** in this commit.
+
+### Why the adapter was parked rather than shipped
+
+It is half-built. Moves, lobby settings, sync, reactions and `destroy()` are
+done and lint clean — but the **seat lifecycle** (join/leave/start/reset/bots)
+still lives inside the framework's `register()`, which the host bypasses.
+Finishing it means either reimplementing that lifecycle in the adapter — the
+duplication this approach exists to avoid — or refactoring `lobbyGame.js` to
+separate its transport from its seat logic.
+
+That is a real piece of design, not a finishing touch, and the four games work
+correctly today on their legacy handlers. Shipping a half-adapter would have put
+a second, partial code path next to a working one for no user-visible gain.
+**490 tests / 23 suites still green**; the parked work is in the session
+scratchpad.
+
+### Interview Q&A
+
+**Q: You set out to migrate four games and shipped two SDK methods. Is that a failure?**
+It is the phase finding what it was for. The interesting output was not code but
+a decision: that the games can migrate *without* weakening capability isolation,
+and how. The two methods are the part of that answer which stands on its own and
+is needed regardless of when the adapter lands. The alternative — passing `io`
+to plugins — would have shipped all four games this session and quietly voided
+the guarantee the whole architecture is built to keep.
+
+**Q: Why not just finish the adapter?**
+Because the remaining piece is not adapter work, it is a refactor of
+`lobbyGame.js` to split transport from seat management. Doing that badly, at the
+end of a long session, next to four games that currently work, is how you get a
+regression nobody notices until a game night. The parked file loses nothing —
+the hard part (rebuilding `ctx` without `io`) is done and written down.
+
+---
+
+## 50. Migration: four framework games on ONE adapter (client + server)
+
+Chess, UNO, Typing Race and Bingo now run through the plugin host — server and
+client — with **no per-game plugin code at all**.
+
+### The shape of the migration
+
+The plan called these "four near-mechanical migrations". They are mechanical
+because they were already thin configs over `sockets/lobbyGame.js`, which §1.2
+identifies as an SDK in its own right: *"the plugin contract should extend it,
+not replace it."* Taken literally, that means **one adapter, not four rewrites**.
+Writing four server modules would have duplicated seat/bot/timer handling four
+times and charged every future lobby game the same tax — re-introducing the N×M
+coupling the plugin system exists to remove, inside the plugin system.
+
+The whole cost per game is one line:
+
+```js
+export const chessServer = adaptLobbyGame("chess", chess, chess.cfg);
+```
+
+Same on the client: `useLobbyGame` is one hook shared by all four panels, so
+migrating the hook migrated every game. `ChessPanel`, `UnoPanel`, `TypingPanel`
+and `BingoPanel` were not touched.
+
+### The refactor that made it possible
+
+`lobbyGame.js` mixed two things: **seat rules** (join/leave/start/reset/bots) and
+**transport** (socket listeners, `io` broadcasts). The rules lived inline inside
+`register()`, so a plugin could not reach them without reimplementing them.
+
+Extracted into `lobby.seats` — pure state mutations that return `{ok}`/`{error}`
+and never emit. The legacy registration now calls them too, so there is exactly
+one implementation of "only the host may start" rather than one per transport.
+That is what let §49's parked adapter be finished rather than duplicated.
+
+### `ctx` rebuilt without `io`
+
+Every game callback uses `ctx.broadcast/notice/emit/endGame` and nothing else,
+so `pluginCtx()` rebuilds those four on `sdk.socket.detached()` — which reaches
+this plugin, in this room, and nothing else. The framework's `makeCtx` and
+`broadcastFor` close over `io` and are now explicitly documented as **legacy
+path only**. A plugin never receives them, so guarantee #5 holds.
+
+The three timers (AFK, bot turn, tick) are re-armed on the same detached wire.
+They fire long after the request that armed them, which is exactly why
+`detached()` exists.
+
+### The bug: `members()` was reading the wrong channel
+
+UNO's private hands never arrived. The `roomMembers()` I added in §49 enumerated
+the **room** channel — but activity clients join `act:<id>:<roomId>` and need
+never be in `room:<id>` at all. The hands were addressed to an empty set.
+
+Renamed to `members()` and pointed at the activity channel, which is also more
+correct in principle: a plugin's audience is whoever opened *the plugin*, not
+whoever is sitting in chat. Deduplicated by user, since one person with two tabs
+is one player.
+
+**Caught by a test written for the adapter**, not by reading — the public state
+tests all passed, because public state was fine.
+
+### Parallel-run preserved
+
+`useReactions` now listens on **both** `<prefix>:react` and
+`activity:<id>:react`, and sends through the SDK when given one. Ludo, Kart and
+Draw & Guess still share that hook and are unmigrated, so forking it would have
+meant two copies. This way a migrated game works with the flag on *or* off —
+the property that made reverting the poll migration painless in §48.
+
+### Verification
+
+- **520 tests / 24 suites green** (was 490 / 23); 30 new, all driving the
+  adapter through real socket.io clients.
+- Seat lifecycle is tested with `it.each` across all four games — the point of
+  one adapter is that the same assertions must hold for every game.
+- **16/16 live checks** against the running dev server: all four seat, start and
+  reach "playing" for the second player; a real chess move (e2–e4) is applied by
+  the engine and broadcast; a UNO hand of 7 reaches its owner privately;
+  reactions arrive on the namespaced channel.
+- One live assertion was wrong and got fixed rather than accepted: I grepped the
+  FEN for `"e4"`, but a pawn on e4 appears as `4P3` in the board field — the
+  check would have passed on the starting position too. Now it reads rank 4
+  explicitly.
+
+### Interview Q&A
+
+**Q: Why one adapter instead of four server modules?**
+Because the four games differ only in their rules, and their rules were already
+separated from their plumbing by `lobbyGame.js`. Four modules would have
+duplicated the plumbing — the seat logic, the bot timers, the AFK clock — four
+times, and a fifth lobby game would have paid it again. The adapter makes the
+marginal cost of the next one a single line, which is the same argument the
+plugin system makes about the room shell, applied one level down.
+
+**Q: What did you have to change in `lobbyGame.js`, and why was that safe?**
+I split seat management out of the socket registration into `lobby.seats`, and
+made the legacy path call it too. Safe because both callers now share one
+implementation — if the extraction were wrong, the existing games would break
+immediately and loudly, and their tests run on every commit. The alternative
+(copying the rules into the adapter) is what would have been unsafe: two copies
+that drift silently.
+
+**Q: The UNO bug — why did the tests miss it at first?**
+Because I only had tests for public state, which was working. Private state is a
+different channel with a different addressing scheme, and I had assumed the two
+audiences were the same set of people. Writing the adapter's own test suite is
+what surfaced it, and the fix improved the capability rather than patching the
+call site: `members()` now means "who is in this activity", which is the honest
+answer to the question a plugin is actually asking.
+
+---
+
+## 51. Migration: the whiteboard client, and `sdk.socket.post()`
+
+The whiteboard's **server** module has been a plugin since Phase 2. Its
+**panel** was the last piece still speaking raw `whiteboard:*` socket events —
+which is why `ACTIVITY_PLUGINS=whiteboard` would have broken it, and why §47
+had to document "the flag is per-plugin and so is the migration". Both halves
+now speak the same protocol, and the flag is finally safe to turn on for it.
+
+The mapping was direct: `update` / `pointer` / `pointerLeft` / `save` already
+existed on the server module, so the panel lost its `whiteboard:join` round
+trip (the join ack carries the scene) and its manual listener teardown.
+
+### The one thing that needed a new capability: `post()`
+
+`sdk.socket.emit()` returns a promise and arms a **10-second timeout per call**,
+so a caller that awaits can tell a dropped connection from a refusal. Right for
+a move or a save. Wrong for a stream: the whiteboard sends ~20 scene updates and
+~16 pointer moves per second, which would keep *hundreds* of timers alive for
+results nobody reads.
+
+So the client SDK gained `post()` — fire-and-forget, no ack, no timer. The
+distinction is not laziness but semantics:
+
+> Cursor positions and scene deltas are **superseded by the next one**. A lost
+> frame is invisible; a leaked timer is not. A move or a save has no successor,
+> so it must be acknowledged.
+
+Every high-rate plugin from here on wants this, which is why it belongs in the
+SDK rather than in the whiteboard.
+
+### Verification
+
+- **520 tests / 24 suites** still green (no new tests: the whiteboard's server
+  behaviour was already covered by `activities.host.test.js`, and this change is
+  entirely client-side).
+- **6/6 live checks** against the running server with two users: both join, a
+  new board starts empty, a scene update reaches the other user, a live cursor
+  is relayed with identity, an explicit save reports its element count, and —
+  the one that matters — **the scene survives everyone leaving**, proving
+  `destroy()` still flushes to Mongo through the plugin path.
+- The dev server now serves six plugins: `sticky-notes, whiteboard, chess, uno,
+  typing, bingo`.
+
+### Interview Q&A
+
+**Q: Why add `post()` rather than just ignoring the promise `emit()` returns?**
+Because ignoring it does not stop the cost. `emit()` allocates a promise and a
+10s timer per call whether or not anyone awaits them; at 36 messages a second
+that is a few hundred live timers on a busy board, all to resolve values that
+are discarded. The fix had to be at the point where the timer is armed. It also
+makes the intent legible: `post` says "this is a frame in a stream", `emit` says
+"I need to know this landed" — and a reader can tell which one a call site meant.
 
 ---
 
@@ -1874,12 +3866,788 @@ games hub, both server-authoritative + responsive, live-verified.
 toasts when someone starts a call/board/game), and **mic on every tab**
 (audio-only "Join voice" + a persistent VoiceBar). Verified: ready-up gate.
 
+**Done — Activity Platform, Phases 1–6 (§41–46):** the app is now an activity
+platform rather than a feature-based app. Manifest contract + registry +
+closed config grammar (§41) · backend plugin host, one dispatcher replacing 12
+hardcoded registrations, capability SDK (§42) · frontend runtime, manifest-driven
+tabs (§43) · room creation wizard + data-driven recommendation engine (§44) ·
+live activity management (§45) · **Sticky Notes, the first genuinely new plugin,
+which failed the guarantee-#1 test and got the architecture fixed first** (§46).
+**481 tests / 23 suites green.**
+
+**Done — §47 polls migration, then §48 REVERTED it: polls are core again.**
+Being *built* as a plugin and being *optional* are independent properties, and
+conflating them made polls declinable in the wizard. Kept
+`sdk.socket.detached()` (needed by every timer-based plugin). §48 also killed
+the last hardcoded activity list (`GamesHub`), made purposes multi-select, moved
+the activity manager to a 🧩 Plugins header button, and fixed the config-form
+toggle overflow. **490 tests / 23 suites green, 8/8 browser checks.**
+
+**Done — the four framework games, client + server (§50).** Chess · UNO ·
+Typing · Bingo on ONE adapter over `lobbyGame.js`, one line per game, no
+per-game plugin code. Required splitting seat rules from transport in the
+framework (`lobby.seats`) so both paths share one implementation.
+**520 tests / 24 suites, 16/16 live checks.**
+
+**Done — whiteboard client (§51).** Both halves are now plugins; added
+`sdk.socket.post()` for high-rate fire-and-forget traffic. Six plugins served:
+`sticky-notes, whiteboard, chess, uno, typing, bingo`.
+
+**Done — Draw & Guess, client + server (§52).** The first bespoke migration: no
+framework underneath, five interlocking timers on `detached()`, and the first
+plugin whose correctness depends on the private `toUser()` channel. Logic ported
+verbatim so the diff against `game.handlers.js` is reviewable.
+**537 tests / 25 suites green.** Seven plugins served.
+
+**Done — Ludo, client + server (§53).** Colour-keyed seats (so `lobby.seats` was
+the wrong shape to adapt to) and six timers on `detached()`. The bot/human shared
+code path survives untouched. Four config fields declared in Phase 1 finally have
+a reader. **560 tests / 26 suites green.** Eight plugins served.
+
+**Done — Smash Karts, client + server (§54). PHASE 2 IS COMPLETE.** The only
+activity running its own simulation; `destroy()` clearing its 30Hz physics loop
+is the reference lifecycle test, asserted by watching the tick stop rather than
+by reading the handle. Added two SDK capabilities: `detached().stream()`
+(volatile emit, for lossy high-rate traffic) and `sdk.lifecycle.onHidden/onShown`
+— which finally gave plugins a door into the `activity:hidden` events
+`ActivityHost` had been dispatching, unused, since Phase 3. **581 tests / 27
+suites green.** Nine plugins served; `ACTIVITY_PLUGINS=all` now means all.
+
+**Done — Phase 7 marketplace seams (§55). THE ACTIVITY PLATFORM IS COMPLETE.**
+Version drift is now legible (`shared/activities/version.js`; `resolveActivities`
+carries a `version` record per entry) and manifest provenance is gated at
+`registerPlugin()`, failing CLOSED — a remote origin is refused unless a verifier
+is installed. Redis-backed state was audited and deliberately NOT built: Mongo
+already provides durability, nothing shares state (no socket.io Redis adapter,
+one VM, mediasoup pins to a single node), and it would be untestable with no
+second process. The seam is what the phase owed and the seam stands.
+**608 tests / 28 suites green.**
+
+**Done — legacy handlers and the migration flag deleted (§56).** ~1,550 net
+lines gone; `sockets/index.js` names no game at all. Surfaced a live bug on the
+way: skribbl/ludo/kart were registering their legacy handler AND their plugin
+(no `legacyHandlerEnabled` guard), so each room held two independent game
+instances. `typing:leaderboard` was rescued out of `registerTypingHandlers` into
+core `leaderboard.handlers.js` — it is global, not per-room, so it could not
+become a plugin event. **604 tests / 28 suites green.**
+
+**Done — direct messages and blocking (§57).** A purpose-built `Conversation`
+model (not a hidden room — `listMyRooms` would have leaked every DM into the
+dashboard), `Message.room` relaxed to "room XOR conversation", pair uniqueness
+enforced by a unique key + upsert so simultaneous opens cannot fork a thread,
+and blocking as a third `Friendship` state that survives re-requests and never
+announces itself. Friends turned out to be **already built** — the roadmap entry
+was stale; what was missing was blocking and a way to message anyone.
+**646 tests / 30 suites, 11/11 live checks.**
+
+**Next — the deferred backlog:**
+- **Disappearing-message timers (24h/7d/30d/90d)** — now unblocked. They belong
+  in a DM where both parties opt in, which is why they waited for §57. Needs a
+  TTL/sweep design that deserves its own pass.
+- **Manual browser pass.** Three migrations (§52–54) and now the DM UI are
+  verified by socket/REST-level tests only. The 3D arena's pause-on-hidden in
+  particular is a battery fix you can only really confirm by watching it.
+- Redis behind `storage.js` **if and when** a second backend instance becomes
+  real — which also needs `@socket.io/redis-adapter` and a mediasoup story.
+- Phase 7 marketplace seams: version resolution, dependency graph, plugin state
+  behind an interface (an in-process `Map` today — pre-existing, does not survive
+  a restart or scale horizontally), manifest signature hook, remote manifests.
+- `inviteOnly` is stored and fails closed everywhere visibility is read, but
+  `joinRoom()` does not consult it — it currently behaves as private. Do not
+  advertise it as "invite required" until the invite mechanism exists.
+
 **Next:**
+0. **Direct messages (1:1)** — the prerequisite for disappearing-message
+   timers (24h/7d/30d/90d), which belong in a two-person conversation both
+   parties opt into rather than a room-wide switch one owner controls.
 1. **Friends system** (requests, friends list, invite friends to a room/activity) —
    the one deferred item; a standalone persistent subsystem, its own build.
 2. **Manual browser tests** across all activities (2 tabs) + guest link.
 3. **Responsive pass** polish; watch-party (synced YouTube); rename (French, TBD).
 4. Merge the branch chain into `develop`; later coturn (TURN) for real-network calls.
+
+## 52. Migration: Draw & Guess — the first bespoke plugin (client + server)
+
+Skribbl now runs through the plugin host, both halves. It is the first migration
+with **no framework underneath it**: the four framework games cost one adapter
+line each because `lobbyGame.js` was already an SDK, and whiteboard's server
+module had existed since Phase 2. This one is 311 lines of its own lobby, its
+own scoring, and five interlocking timers.
+
+### Options considered
+
+| Option | Verdict |
+|---|---|
+| Rewrite the game on `lobbyGame.js` first, then adapt | **No.** Skribbl's lobby is genuinely different — spectators, per-turn drawer rotation, ready-flags that reset on game end. Forcing it into the seat framework would have been a rewrite disguised as a migration, with the regressions hidden inside the "improvement" |
+| Port the logic verbatim, change only the transport | **Yes.** The diff against `game.handlers.js` is then reviewable line by line: same scoring curve, same hint schedule, same spectator policy, same host election |
+| Keep `io` in the module for the timers | No — a plugin holding `io` can address every room on the server, which is the capability boundary the SDK exists to draw |
+
+### What actually changed
+
+Only the lines that named the transport:
+
+```
+io.to(roomKey(roomId)).emit("game:x")  →  bus.broadcast("x")
+io.to(`user:${id}`).emit("game:x")     →  bus.toUser(id, "x")
+canAccessRoom / socket.rooms / allow() →  deleted — the host does all three
+```
+
+The third line is the payoff: the legacy handler re-implemented access control
+and rate limiting by hand in nine places. The plugin implements none of it.
+
+### `detached()` is the whole story
+
+**Every** state transition in this game fires from a timer, not a request: the
+15s choose clock, the 75s turn clock, two hint reveals at 50%/75%, the 5s reveal
+gap. Request-scoped `sdk.socket` is dead the moment its event returns, so a
+timer holding one emits into the void — and the failure is *silent*: the game
+just stops advancing, with nothing in the logs. `sdk.socket.detached()` (built
+for polls in §49, generalised in §50) is exactly the broadcaster a turn clock
+needs, and this plugin is its heaviest user.
+
+The bus is stored **per room and refreshed on every join**, not captured
+per-event. That is what makes the timer chain survive the drawer disconnecting
+mid-turn — the object only closes over the activity key, so any member's is
+equivalent, but one built from a socket that has since dropped is not guaranteed
+to outlive it.
+
+### The private channel, finally exercised
+
+The migration plan scheduled draw-guess *after* the framework games for one
+reason: the drawer must learn the real word while guessers see only a mask. That
+is `sdk.socket.toUser()`, and this is the first plugin to depend on it for
+correctness rather than convenience. Two tests pin it down — one asserts the
+non-drawer never receives `choices`, the other that the guesser's state carries
+`word: null` and a mask that is not the word. Both would pass a one-player smoke
+test regardless, which is why they are assertions and not eyeballing.
+
+### Ephemeral state is a decision, not an oversight
+
+Sticky Notes routes through `sdk.storage` so a board survives a restart. This
+one deliberately does not: a half-finished turn restored after a crash resumes
+with a word nobody is drawing and a clock that already expired. Games are
+ephemeral; `destroy()` clearing the five timers is the only cleanup that matters.
+
+### Config the legacy handler hardcoded
+
+`maxRounds`, `turnSeconds` and `hints` were constants in `game.handlers.js`
+(3, 75_000, always-on). The manifest had declared them as `configSchema` since
+Phase 1 with nothing reading it; the plugin now reads all three from
+`sdk.meta.config`, so the wizard's per-room settings finally do something.
+
+### Client: the hook was the seam
+
+`useSkribbl.js` held the entire socket surface, so migrating it migrated the
+game. `GamePanel` was written against the hook's return value and needed only
+the canvas transport forwarded. `GameCanvas` was the one component reaching for
+`getSocket()` directly — it now takes `draw`/`clear`/`onDraw`/`onClear` as
+props, which means it would work over any transport at all.
+
+Also gone: the separate `game:sync` round-trip. `sdk.socket.join()` returns the
+state in its ack, so there is no window where the UI is mounted but stateless.
+
+`room:announce` stays on the core socket — it is room traffic that drives the
+tap-to-join toast, not plugin traffic, and the plugin SDK deliberately cannot
+send it. Same precedent as `WhiteboardPanel` (§51).
+
+**537 tests / 25 suites green** (17 new). Seven plugins served:
+`sticky-notes, whiteboard, chess, uno, typing, bingo, skribbl`.
+
+### Interview answer: "what makes a migration safe to review?"
+
+That the diff is boring. Every interesting decision in this one was made in the
+*plan* — migrate in size order, build `detached()` before the timer-heavy
+plugins, build `toUser()` before the one with a private channel — so by the time
+the code was written there was nothing left to invent. The two plugins left
+(`ludo`, `kart`) need no new SDK capability, which is the actual evidence the
+platform is finished: the last two migrations are labour, not design.
+
+---
+
+## 53. Migration: Ludo — colour-keyed seats and six timers
+
+Ludo now runs through the plugin host, both halves. Second bespoke migration,
+and the last one before Kart.
+
+### Why this is not an `adaptLobbyGame()` one-liner
+
+Ludo **grew** the seat/bot/AFK logic that later became `lobbyGame.js`, but was
+never moved onto it — so the resemblance is ancestral, not structural. Its seats
+are **colour-keyed** (red/green/yellow/blue), not a flat player list: the board
+has four fixed positions, turn order is a list of colours, and a token's legal
+moves are computed from its colour's track. `lobby.seats` models seats as an
+ordered array of users, which is exactly the wrong shape. Adapting would have
+meant translating colour↔index on every call — more code than the transport
+swap, and a fresh class of off-by-one bug in the turn rotation.
+
+So: the same choice as §52. Port the rules verbatim, change only the transport.
+
+### Six timers, all on `detached()`
+
+Turn clock, AFK clock, auto-move, bot roll, bot move, and the 1.2s dead-dice
+pause. Every one fires with no socket in scope. The failure mode if this is got
+wrong is the nastiest kind: a bot game simply **stops advancing**, silently,
+with nothing in the logs — so the test that matters is "a bot seated first takes
+its turn with no human input at all". That one assertion exercises the whole
+detached chain end to end.
+
+### The invariant worth preserving
+
+`doRoll`/`doMove` take no socket: a human's event validates identity and then
+calls them, and a bot's timer calls the same functions. Bots therefore
+**physically cannot make a move a human couldn't** — they only choose among
+`g.movable`, which the server built. That property survives the migration
+untouched, because those functions never knew about sockets in the first place.
+They take the bus instead of `io` now: same shape of dependency, far smaller
+blast radius.
+
+### What the host deleted
+
+The legacy `disconnecting` handler had to ask *"is any HUMAN seated player still
+connected?"* so a table of bots would not run forever. The host's teardown
+already answers the stronger question — is *anyone* still in this activity — so
+that logic is gone entirely and a bot-only table is freed for the same reason an
+empty one is.
+
+`onJoin` deliberately does **not** seat you, unlike skribbl. That matches the
+legacy split (`ludo:sync` read state; `ludo:join` took a colour) and it matters
+here because four seats are scarce: someone opening the tab to watch must not
+consume one.
+
+### Config that was declared in Phase 1 and read by nothing
+
+`maxPlayers`, `allowBots`, `botDifficulty` and `turnTimer` were all in the
+manifest's `configSchema` with no reader. All four are now live. `turnTimer: 0`
+("Off") is the one with a trap — the idiomatic `Number(cfg.turnTimer) || DEFAULT`
+turns 0 into 30s and silently re-enables auto-play in a room that switched it
+off. It reads through `Number.isFinite` instead, and there is a test pinning it.
+
+### The test race worth writing down
+
+Five tests hung on a game that had started perfectly well. `start` broadcasts
+its state **synchronously**, so a listener armed after `await send(…, "start")`
+has already missed it. The fix is a `startAndWait()` helper that arms the
+listener *before* sending. The tempting alternative — a short sleep — is the
+same race with a longer fuse, and it would have passed locally and flaked in CI.
+
+**560 tests / 26 suites green** (23 new). Eight plugins served:
+`sticky-notes, whiteboard, chess, uno, typing, bingo, skribbl, ludo`.
+
+### Interview answer: "how do you know a migration preserved behaviour?"
+
+You don't, from the diff alone — you know it from what the diff *can't* touch.
+Both bespoke migrations moved zero rules: the scoring curves, the capture
+logic, the AFK strike counting are byte-identical, so the only thing review has
+to check is the transport. Everything genuinely new (per-room config) is
+additive and separately tested. That is what makes "the diff is boring" a safety
+property rather than a compliment.
+
+---
+
+## 54. Migration: Smash Karts — the last one, and the reference lifecycle test
+
+Kart now runs through the plugin host. **Phase 2 is complete**: every activity
+with a server module is a plugin, and `ACTIVITY_PLUGINS=all` finally means all
+of them.
+
+### What made this one different
+
+Every other plugin is event-driven — something happens because someone did
+something. Kart runs a fixed 30 Hz `setInterval` that advances physics whether
+or not anyone speaks, and streams a world snapshot at ~15 Hz. That single fact
+is why the plan scheduled it last.
+
+**The obligation:** a leaked `setTimeout` fires once into an empty room —
+wasteful, bounded. A leaked `setInterval` simulating ten karts pins a core for
+the life of the *process*, and nothing in any log ever mentions it: the room is
+gone, the players left, and a CPU is quietly at 100%. `destroy()` clearing that
+loop is the reason the **host** owns teardown rather than each plugin.
+
+The test asserts it by **observing the loop's effect, not its handle** — record
+`g.tick`, tear down, wait, assert the tick has not moved. A handle nulled while
+the closure still runs would sail past `expect(g.loop).toBeNull()` and still
+burn the core forever. That distinction is the whole value of the test.
+
+### Two SDK capabilities this migration added
+
+**`detached().stream()`** — volatile emit. The legacy handler used
+`io.to(room).volatile.emit(...)`, meaning a congested client *drops* stale
+frames instead of queueing them. For a continuous simulation that is the
+difference between degrading and breaking: reliable delivery on bad wifi builds
+a backlog that only grows, and the player ends up watching a match seconds
+behind real time with no way to catch up. Every previous plugin sent discrete
+events that must arrive, so nothing had needed it. Deliberately **not** the
+default — lobby and end-of-match broadcasts must be reliable, and an author
+reaching for "send this fast" should have to say they also mean "and losing it
+is fine".
+
+**`sdk.lifecycle.onHidden/onShown`** — this one closed a two-phase-old gap.
+`ActivityHost` has dispatched `activity:hidden`/`activity:shown` DOM events
+since Phase 3, but **no plugin could reach them**: the events fire on a wrapper
+element the panel holds no reference to. A panel that wanted them had to walk
+the DOM with `closest("[data-activity]")` — exactly the shell-coupling that
+guarantee #1 exists to prevent. The SDK does the walking now, and the listeners
+are torn down by `destroy()` alongside the socket ones (the host element
+outlives a plugin remount, so a stale DOM handler leaks the same way).
+
+That unblocked obligation #2 from the kart manifest, which had been written down
+since Phase 1 and never implemented: **a hidden 3D game kept rendering at full
+frame rate into a canvas nobody could see.** The arena now skips
+`composer.render()` while hidden and stops the engine sound, but keeps the RAF
+loop alive — a full teardown would take seconds to rebuild and lose the match.
+Pausing the *expensive* part is the fix; unmounting is not.
+
+### The reconnect bug that deleted itself
+
+The legacy hook wired `socket.on("connect", sync)` by hand because an arena can
+start *and end* while a player is disconnected. `useActivitySdk` already rejoins
+on reconnect and the join ack carries the snapshot, so catching up became the
+same code path as arriving. The hand-rolled re-sync is simply gone.
+
+### Config declared in Phase 1, read by nothing until now
+
+`maxPlayers`, `allowBots`, `matchLength` and `map` — the fourth complete set
+across the three bespoke migrations. Rooms can now cap the arena below ten,
+disable bots, pick a map and set match length without touching the host's
+in-game controls.
+
+**581 tests / 27 suites green** (21 new). Nine plugins served.
+
+### Interview answer: "when is an architecture actually finished?"
+
+When the last thing you build with it needs nothing new. Kart needed two SDK
+additions, so on that test the platform was *not* finished before this — and
+both additions are revealing. `stream()` is a genuinely new capability class
+(lossy transport). `lifecycle` was a capability the runtime already had and
+never exposed, which is the more common shape of architectural debt: not a
+missing feature, but a feature with no door into it. Phase 3 built the events;
+it took the plugin that needed them to notice nobody could listen.
+
+---
+
+## 55. Phase 7: marketplace seams — and one deliberately not built
+
+The last phase of the Activity Platform. It is explicitly **"architecture
+only"**: there is no marketplace, no remote manifest and no signing key, so the
+work is not a feature but a set of decisions that are expensive to retrofit.
+
+### Two of the three were already standing
+
+Auditing before building was most of the value here. `version` was already a
+required semver field validated in `manifest.js`; `requires[]` was already
+validated with cycle detection in `registry.validateDependencies()`; plugin
+state already routed through the `storage.js` interface rather than bare `Map`s.
+The migration doc had listed all three as "to do" since Phase 1.
+
+What was genuinely missing was smaller and sharper than the plan implied.
+
+### Version resolution: a pin nobody read
+
+`installed[].version` has been pinned at install since Phase 4, preserved across
+every edit, and carried by the compat resolver. **Nothing ever compared it.** So
+a plugin could go 1.0.0 → 2.0.0, rewrite its config grammar, and every existing
+room would silently adopt the new one — precisely the scenario pinning was
+introduced to prevent. A pin nobody reads is a comment.
+
+`shared/activities/version.js` compares them and `resolveActivities()` now
+carries `version: {pinned, current, status, compatible, needsAttention}` on
+every entry. Design calls worth recording:
+
+- **Only the MAJOR matters.** A major bump is the author declaring a break;
+  minor and patch are by definition safe to adopt, which is what makes them
+  minor and patch. Treating every bump as a migration would turn a typo fix in a
+  description into an upgrade prompt, and a badge that cries wolf gets ignored.
+- **`ahead` is its own status**, not "breaking". A pin *newer* than the build
+  means a rolled-back server or a room synced from another environment — the fix
+  is on the server, not in the room, and merging the two would send someone to
+  the wrong place.
+- **Unparseable sorts EQUAL, not lower.** "I cannot tell" and "this is older"
+  are different claims; conflating them makes a corrupt pin look like a pending
+  upgrade.
+- **Not a resolver that runs old code.** One build ships one implementation per
+  plugin. Keeping several live needs versioned modules and a loader — a
+  marketplace might justify that, a single-server hangout app never will. This
+  makes drift *legible*; policy sits on top.
+
+### Provenance: the hook, and why it fails closed
+
+`shared/activities/provenance.js` installs a verifier at `registerPlugin()` —
+the one path every manifest takes, on both server boot and bundle init, so it
+cannot be bypassed by a caller who forgets to ask. Same reasoning that put shape
+validation there rather than at each call site.
+
+The load-bearing decision is the **default with no verifier installed**: a
+manifest with no `origin` is treated as built-in and accepted; one claiming a
+remote origin is **refused**. The opposite default — allow everything until
+someone installs a policy — means that the day remote manifests become possible
+they are trusted by default, and the security review happens after the feature
+ships. Failing closed costs nothing today (nothing has a remote origin) and is
+the only default that stays correct if this seam is forgotten for a year.
+
+An installed verifier applies to **built-ins too**, not just strangers. A policy
+that cannot inspect first-party plugins is a filter, not a kill switch.
+
+### The one I did NOT build: Redis-backed plugin state
+
+The plan says "plugin state store interface (in-memory now, Redis later)". I
+audited it and did not build it, because the premise does not hold yet:
+
+1. **Durability already exists.** `storage.js` write-behinds to Mongo on a 3s
+   debounce with a final flush on release. Redis would add no durability.
+2. **The only benefit is cross-process sharing, and nothing shares.** There is
+   no `@socket.io/redis-adapter` in the stack, so a second backend instance
+   could not route sockets today regardless of where plugin state lived.
+   `DEPLOYMENT.md` is explicit: one Oracle Always-Free VM, one backend, with
+   mediasoup pinning the architecture to a single node anyway.
+3. **Doing it properly is a bigger change than it sounds.** The in-process
+   memory layer is the *authority* between flushes. Making a second server
+   correct means Redis becomes the source of truth rather than a cache — which
+   is a redesign of the hot path, not a driver swap.
+
+So the honest state is: the **seam** is what Phase 7 owed, and the seam exists —
+every plugin goes through `createStorage()` and none holds a `Map` of its own.
+Swapping the backing is a change to one file whenever a second instance becomes
+real. Building it now would be speculative work with no consumer, and it would
+be *unverifiable* work: there is no second process to test it against.
+
+### A real flake, found and fixed on the way
+
+The whiteboard rate-limit test failed intermittently (2 runs in 6). The
+tempting read was "my change broke it" — but the failing assertion was
+`toBeGreaterThan(0)`: **nothing** was relayed, in a test whose subject is that
+*too much* is relayed. Checking against a stash confirmed it failed identically
+without the change.
+
+Cause: the test fires 120 fire-and-forget events immediately after
+`twoInRoom()`, which resolves on the join ack — not the instant the sender's own
+event path is ready. When the burst won that race every event was refused. The
+fix is one awaited round-trip before the flood: the burst is still a burst, it
+just starts from a known-open channel. 8/8 green after. A sleep would have been
+the same race with a longer fuse.
+
+**608 tests / 28 suites green** (27 new).
+
+### Interview answer: "how do you decide what NOT to build?"
+
+By asking what would *verify* it. Version resolution and the provenance hook are
+both testable today: I can pin a room to 0.9.0 and assert the drift is reported,
+install a hostile verifier and assert registration refuses. Redis-backed state
+has no such test available — there is no second process — so it would ship as
+untested code defending against a scenario the deployment cannot produce. The
+seam is the deliverable; the implementation waits for a consumer that can prove
+it works.
+
+---
+
+## 56. Cleanup: deleting the legacy handlers and the migration flag
+
+The last step of the Activity Platform. **~1,550 net lines deleted** (1,738
+removed, 186 added), and `sockets/index.js` no longer names a single game.
+
+### The flag had to go because its fallback did
+
+`ACTIVITY_PLUGINS` was a per-plugin rollback: anything not listed kept its
+original `sockets/*.handlers.js` registration, so old and new ran side by side
+and a migration reverted with an env var instead of a deploy. It did that job
+honestly through eight migrations.
+
+Once every activity was a plugin (§54), "off" no longer meant "run the old
+handler" — it meant **the activity is silently dead**, which is the precise
+failure `NATIVE_PLUGIN_IDS` was invented to prevent. A rollback switch whose
+fallback no longer exists is not a safety feature; it is a loaded gun pointed at
+production. Rollback is now what it is everywhere else: deploy the last commit.
+
+### A live bug the cleanup surfaced
+
+`registerGameHandlers`, `registerLudoHandlers` and `registerKartHandlers` were
+registered **unconditionally** — they never got the `legacyHandlerEnabled()`
+guard the other four had. So after §52–54, skribbl, ludo and kart were each
+running a plugin AND a legacy handler, with separate `games` Maps: two
+independent game instances per room.
+
+It was not user-visible, because the two halves listen on different event names
+(`ludo:*` vs `activity:ludo:*`) and every migrated client speaks only the
+latter. But the legacy handlers still registered listeners, still held state,
+and still ran timers for any socket that spoke the old protocol. I introduced
+that when adding the plugins without gating their predecessors; deleting the
+files fixes it by construction, which is the argument for doing this cleanup
+now rather than "once it has soaked".
+
+### What could NOT be deleted
+
+The four framework games' rule definitions live in `chess.handlers.js` and
+friends and are imported by `lobbyGameAdapter`. Only their `register*Handlers`
+exports were dead. Those files are now the rules and nothing else — they keep
+their `.handlers.js` names so the diff stays reviewable, which is a small lie in
+the filename worth less than a confusing rename in the same commit.
+
+### The trap: a live feature hiding inside a dead function
+
+`registerTypingHandlers` did two things — register the game (dead) and serve
+`typing:leaderboard` (very much alive; `TypingPanel` calls it after every timed
+run). Deleting the function wholesale would have broken the records panel with
+nothing in the logs.
+
+It did not move into the typing plugin either, because **it is not per-room**: a
+leaderboard is global, readable by anyone authenticated, and the plugin host
+correctly refuses an activity event from someone whose room has not installed
+that activity. Right rule for gameplay, wrong rule for a scoreboard. So it moved
+to `sockets/leaderboard.handlers.js` as core, alongside chat and polls, and is
+verified against the running server rather than only in tests.
+
+### How the dead tests failed, which is the interesting part
+
+Two suites drove the deleted events. The whiteboard one did not error — it
+**hung for the full 30s timeout**, because it awaited an ack from an event
+nobody was listening for. A deleted socket handler produces no stack trace; the
+symptom is silence. That is worth remembering as the signature of this class of
+mistake, and it is why the leaderboard got a live check rather than trust.
+
+Both suites' assertions were already covered against the plugin path
+(`activities.skribbl.test.js`, `activities.host.test.js`), so they were deleted
+rather than ported.
+
+### A test-only trap I nearly walked into
+
+Replacing the "plugin with no server module" test needed a synthetic manifest.
+The tidy-looking undo — `__resetRegistry()` then `registerBuiltInActivities()` —
+is a trap: the latter short-circuits on its own `registered` flag, so the
+re-register is a no-op and every later test in the file would run against an
+EMPTY catalogue. Added `__unregisterPlugin(id)` to remove exactly one instead.
+
+**604 tests / 28 suites green.** Nine plugins, one dispatcher, no flag.
+
+### Interview answer: "when do you delete the old path?"
+
+The instinct is "after it has soaked" — keep the fallback until the new code has
+proven itself. That is right while the fallback is *reachable*. It inverts the
+moment the fallback stops being a fallback: three handlers here were running in
+parallel with their replacements, holding duplicate state, because the guard
+that was supposed to disable them was never applied. Dead code that still
+executes is worse than deleted code, and you cannot tell the difference by
+reading the config — only by reading the registration.
+
+---
+
+## 57. Feature: Direct messages (1:1) and blocking
+
+The last two items on the deferred list. DMs are a new `Conversation` model
+rather than a hidden room; blocking is a third state on the existing
+`Friendship` row rather than a new collection.
+
+### The friends system was already built
+
+Worth recording, because the roadmap said otherwise: requests, accept/decline,
+unfriend, search with relationship annotation, room invites, guest exclusion and
+a `FriendsPage` all existed and were tested. The note listing it as pending was
+stale. What was genuinely missing was **blocking** and **any way to message
+someone**, so that is what this section is.
+
+### Options for storing a DM
+
+| Option | Verdict |
+|---|---|
+| A hidden `Room` (`visibility: "dm"`) | Tempting — it inherits chat, attachments, voice notes and moderation for free. **Rejected:** the inheritance runs the wrong way. A Room carries an owner, a join code, activities, bans and a growable member list, and every one is meaningless or wrong between two people ("who owns this conversation?"). Worse, `listMyRooms()` is `Room.find({members: userId})`, so every DM would appear in the dashboard until something remembered to filter it — a leak that **fails open** and looks exactly like a room you forgot about |
+| A separate `Conversation` collection | **Chosen.** Purpose-built and small. The cost is that `Message` had to learn a second kind of parent, and that cost turned out to be one hook and one index |
+
+### `Message.room` became "room XOR conversation"
+
+The only schema change DMs needed. Everything else about a message — text,
+attachments, voice notes, edits, tombstones — is identical whether it went to
+nine people or one, and a parallel `DirectMessage` collection would have meant
+maintaining every future chat feature twice.
+
+The XOR is enforced in a pre-validate hook, because "optional on both" permits a
+**parentless message**: a row no query can reach, that nobody can see or delete.
+"Both" is worse — ambiguous, with each reader thinking it owns the message and a
+delete from one side leaving the other intact.
+
+### One thread per pair, enforced by the database
+
+Two people can press "message" on each other in the same instant. A
+find-then-create races into two threads for one pair, after which each person
+types into a thread the other never sees — and **both sides look correct in
+isolation**, which is what makes it so hard to spot.
+
+`key` is the two user ids sorted and joined, so (A,B) and (B,A) produce the same
+string, and a unique index makes the duplicate physically impossible. The open
+handler upserts on that key rather than checking first: the race is resolved
+where it can actually be resolved. A test fires four simultaneous opens from
+both sides and asserts one conversation.
+
+### Friendship is a live gate, not a door you walk through once
+
+Re-checked on every send, not cached at open. Checking once would leave a thread
+opened while friends writable forever — so unfriend and block would remove
+someone from your list while their messages kept arriving. **An unread badge
+from a person you just blocked is precisely what blocking is meant to prevent.**
+
+### Blocking: a third state, not a new collection
+
+`status: "blocked"` on the same `Friendship` row, plus `blockedBy`.
+
+- A separate `Block` collection would mean two sources of truth for "may these
+  two interact?", and every check consulting both and agreeing. Here the one row
+  IS the answer: a blocked pair is not `accepted`, so every existing friendship
+  check — including the DM gate — refuses them without knowing what a block is.
+- It gives blocking the property that matters: it **survives**. Unfriend deletes
+  the row and they can re-add in one click; a block keeps it, and the unique
+  pair index means they cannot create a fresh one either.
+- **It does not announce itself.** A blocked re-request gets the same 404 an
+  unknown user id gets, and a blocked send gets the same wording as an unfriend.
+  Telling someone "you are blocked" turns a block into a notification — a
+  persistent one. From their side it is indistinguishable from the account
+  having gone away.
+- Someone who blocked ME is hidden from search entirely; an "Add" button that
+  always failed would be a way to confirm the block by probing. My own blocks
+  stay visible so I can lift them.
+- Unblocking leaves them **strangers, not friends again**. Silently restoring a
+  friendship you had blocked would be a dangerous surprise.
+
+### Delivery: personal rooms, not a room per conversation
+
+Room chat groups sockets into `room:<id>` because a room has many members coming
+and going. A DM has exactly two participants who already sit in `user:<id>`, so
+delivery is two targeted emits. No join/leave lifecycle per thread — and, more
+importantly, **a DM arrives while the recipient is looking at something else**,
+which is the entire point of an inbox. A per-thread room would only deliver to
+people who already had it open, i.e. the people who least need telling.
+
+The same choice gives multi-device for free: the sender's *other* sockets get
+the message too, but not the sending socket (it already has it from the ack).
+
+### Two smaller decisions worth keeping
+
+**Clearing is per-user.** "Delete conversation" hides everything up to that
+moment for me only; either side being able to erase a shared history unilaterally
+is a footgun. The thread reappears if they write again.
+
+**The inbox does its unread counts in ONE aggregate**, not a `countDocuments`
+per thread. That N+1 only hurts the users with the most conversations — i.e.
+exactly when the inbox has become useful.
+
+### A circular import avoided rather than tiptoed around
+
+`dm.handlers.js` needs `canMessage`/`loadConversation`, and importing them from
+the controller would have closed `sockets/index → dm.handlers → controller →
+sockets/index` (for `io`). ESM tolerates that, which is what makes it dangerous:
+nothing crashes, but `io` is read mid-initialisation and lands `undefined`. The
+symptom would be "DM notifications silently do not send", with a stack trace
+pointing nowhere near the import graph. The shared rules moved to
+`services/conversation.service.js`, a leaf that imports no sockets.
+
+**646 tests / 30 suites green** (42 new), plus **11/11 live checks** against the
+running server — routes actually mounted, handlers actually registered, both
+halves agreeing on one instance.
+
+### Interview answer: "when is reuse the wrong instinct?"
+
+The hidden-room design would have been less code today and more wrong every
+week after. Reuse is right when the new thing IS the old thing with different
+data; it is wrong when it is the old thing minus half its concepts. A DM is a
+Room minus owner, join code, activities, bans and moderation — and "minus" is
+the tell. Every one of those fields would have needed a rule saying "not for
+DMs", and the first one anybody forgot (`listMyRooms`) leaks private
+conversations into a public list.
+
+---
+
+## 58. Feature: live room activity on the dashboard cards
+
+Room cards showed `memberCount` — how many people have EVER joined. A room with
+three members looked identical whether it was empty or had all three mid-game,
+so the number stopped meaning anything past a couple of rooms. **"2 people are
+playing Ludo" is an invitation; "3 members" is a filing cabinet.**
+
+Cards now show both, because they answer different questions: the roster count,
+a green "N active" when anyone is present, and a rotating pill naming what is
+actually happening.
+
+### Nothing is stored
+
+All three facts already existed inside the room and were never surfaced outside
+it:
+
+| Signal | Source |
+|---|---|
+| present | sockets in `room:<id>` |
+| on a call | mediasoup peers (`callParticipants`) |
+| in an activity | sockets in `act:<plugin>:<id>` |
+
+Reading them live rather than storing a "currently playing" flag means there is
+nothing to keep in sync, nothing to clean up when a tab closes, and **no way for
+the card to disagree with reality**. A stored flag would need a heartbeat, an
+expiry and a reconciliation job — three new things that can be wrong — to answer
+a question the connection already answers by existing.
+
+Counts are **distinct people, not sockets**. One person with three tabs is one
+person; a card claiming "3 people are here" for one user would be a lie that
+makes the whole feature untrustworthy.
+
+### Phrasing comes from the manifest
+
+Keyed on `category` (games → "playing", creativity → "creating on"), so a new
+plugin gets a sensible sentence for free. A hardcoded id→verb map would have
+quietly broken guarantee #1 — adding a plugin is supposed to edit no existing
+file, and the first person to ship one would wonder why the dashboard called it
+"using".
+
+A short per-plugin override list exists only where the category verb reads
+wrong: "brainstorming on the whiteboard", not "creating on Whiteboard".
+
+### A polled subscription, deliberately
+
+The dashboard is in none of the room's socket rooms — that is the entire point,
+it is showing rooms you are *not* in. The "correct" fix is emitting on every
+presence/call/activity transition, which means editing `chat.handlers`,
+`media.handlers` and the activity host, then keeping three call sites in sync
+forever. The failure when one is missed is a card that is confidently wrong
+until refresh, which is worse than one that is four seconds late.
+
+So `dashboard:watch` recomputes from socket.io membership on a 4s tick: one
+place to be right, and it cannot drift because it never accumulates state. The
+tick is unhurried on purpose — this is ambient information, and a faster poll
+would spend real CPU to move a number a second sooner.
+
+**Membership is verified per room**, not assumed from the request. Without that
+check anyone could ask "who is in room X?" for a room they had never joined,
+turning an ambient nicety into a presence oracle for private rooms.
+
+### Rotation over stacking
+
+A room can genuinely have three things running (a call, a whiteboard, a game).
+Stacking makes every card a different height and pushes the list around as
+people come and go — motion unrelated to what the user is looking at. One line
+that cycles keeps the layout still. The `title` carries all of them at once, so
+a screen reader hears the full picture rather than a third of it at a random
+moment.
+
+### A pre-existing flake this work exposed
+
+The full suite failed **17 suites / 351 tests** on one run and passed entirely
+on the next, with no code change between. Not a regression: `startHarness()`
+boots a separate `MongoMemoryServer` per suite, and Jest's default worker count
+on a 16-core box is ~15 — fifteen concurrent mongod processes, Express apps and
+socket.io servers. The new socket-heavy suite pushed it past the tipping point,
+and resource starvation reads exactly like a code regression.
+
+Capped at `maxWorkers: 4`. Costs about a minute of wall-clock; a flaky suite
+costs far more than that, and worse, it teaches you to re-run instead of read
+the failure. **3/3 clean full runs after.**
+
+**657 tests / 31 suites green** (11 new), plus **13/13 live checks** against the
+running server — including the actual rendered sentences.
+
+### Interview answer: "why not just store it?"
+
+Because the stored version has a failure mode the derived version cannot have.
+A `currentActivity` column drifts the moment a process dies mid-session, a tab
+closes without firing an unload, or two servers disagree — and it drifts
+*silently*, showing a game that ended an hour ago. Deriving from live socket
+membership means the worst case is being four seconds stale, and staleness that
+bounded is not a bug, it is a refresh rate.
+
+---
 
 ## Note: No Paid Cloud Services
 
@@ -1896,5 +4664,6 @@ reach for a paid service defaults to a free-tier or self-hosted alternative inst
 | TURN server (WebRTC NAT traversal) | Twilio TURN | Self-hosted **coturn**, or Metered.ca free tier |
 | Deployment | AWS/paid k8s | **Render** / **Railway** / **Fly.io** free tiers, or Oracle/GCP always-free VMs |
 | Monitoring | Paid APM | **Grafana Cloud** free tier |
+| GIF search (chat) | Giphy paid production plan (and Tenor's API shuts down 30 Jun 2026) | **KLIPY** free tier (`VITE_KLIPY_KEY`, no credit card) → **OtakuGIFs** (no key at all) → 24 **self-generated animated SVG** cards (`lib/localGifs.js`). Real GIFs are never re-hosted, so storage cost is zero |
 
-*Last updated: 2026-07-29 (Smash Karts: cinematic graphics pass — bloom pipeline, living backgrounds, Volcano map; shaped arenas with curvy spline tracks — Grand Circuit ring + Canyon blob; 5 maps total)*
+*Last updated: 2026-08-11 (§58 — LIVE ROOM ACTIVITY on the dashboard cards. memberCount is a roster ("ever joined") and said nothing about whether a room was empty or mid-game; cards now also show a green "N active" and a rotating pill — "2 people are brainstorming on Whiteboard", "1 person is playing Ludo", "2 people are on a call". Nothing is stored: present/in-call/in-activity are read from socket.io membership, mediasoup peers and act:<plugin>:<room> rooms, so there is no heartbeat, no expiry, no reconciliation job and no way for the card to disagree with reality — a stored flag drifts silently and shows a game that ended an hour ago. Counts are distinct PEOPLE, not sockets. Phrasing is keyed on manifest CATEGORY so a new plugin gets a sentence for free (a hardcoded id→verb map would break guarantee #1), with a short override list only where the category verb reads wrong. The dashboard is in none of the room's socket rooms by definition, so it subscribes via dashboard:watch and the server recomputes on a slow 4s tick — one place to be right rather than three transition hooks kept in sync forever — with per-room membership verified so the feed cannot become a presence oracle for private rooms. ALSO fixed a pre-existing flake this exposed: 17 suites / 351 tests failed on one run and all passed on the next, because startHarness boots a MongoMemoryServer PER SUITE and Jest's default ~15 workers on a 16-core box starve each other; capped at maxWorkers 4, 3/3 clean runs after. 657 tests / 31 suites, 13/13 live checks. Previously §57 — DIRECT MESSAGES (1:1) and BLOCKING. DMs are a purpose-built Conversation model, NOT a hidden Room: a Room carries an owner, join code, activities, bans and a growable member list, all meaningless between two people, and listMyRooms() is Room.find({members:userId}) so every DM would have leaked into the dashboard until something remembered to filter it — a leak that fails OPEN. Message.room relaxed to "room XOR conversation" via a pre-validate hook (optional-on-both would permit a parentless row nothing can query, see or delete). Pair uniqueness is enforced by the DATABASE: `key` is the two ids sorted+joined behind a unique index, and open upserts rather than find-then-create, because two people pressing "message" simultaneously would otherwise fork into two threads where each types into one the other never sees — and both sides look fine in isolation. Friendship is re-checked on every send, not cached at open, or unfriending would leave the thread writable forever. Blocking is a THIRD state on the same Friendship row (+blockedBy) rather than a Block collection, so one row is the single answer to "may these two interact?"; it survives re-requests (unlike unfriend, which deletes the row), never announces itself (a blocked re-request gets the same 404 an unknown id gets; a blocked send gets the same wording as an unfriend), hides the blocker from search, and unblocking leaves them strangers rather than silently restoring a friendship. Delivery is to `user:<id>` personal rooms, not a socket.io room per thread, so a DM arrives while the recipient is looking at something else — the point of an inbox — and multi-device works for free. Also: the friends system was ALREADY BUILT and the roadmap entry was stale. 646 tests / 30 suites, 11/11 live checks. Previously §56 — legacy handlers and the ACTIVITY_PLUGINS flag DELETED: ~1,550 net lines gone (1,738 removed, 186 added), and sockets/index.js no longer names a single game. The flag had to go because the thing it fell back TO was gone — with every activity a plugin, "off" meant the activity was silently dead rather than served by the old path, which is a loaded gun rather than a safety feature. The cleanup surfaced a LIVE bug: registerGameHandlers/registerLudoHandlers/registerKartHandlers were registered unconditionally, never given the legacyHandlerEnabled() guard the other four had, so skribbl/ludo/kart each ran a plugin AND a legacy handler with separate games Maps — two independent instances per room, invisible only because the halves listen on different event names. Deleting the files fixes it by construction. The trap avoided: typing:leaderboard lived inside registerTypingHandlers and is a live feature, so it moved to core leaderboard.handlers.js rather than dying with the function — it is global, not per-room, so it could not become a plugin event; verified against the running server. Note how the dead tests failed: the whiteboard one HUNG for its full 30s timeout rather than erroring, because it awaited an ack from an event nobody was listening for. A deleted socket handler has no stack trace; the symptom is silence. 604 tests / 28 suites. Previously §55 — Phase 7 marketplace seams, so THE ACTIVITY PLATFORM IS COMPLETE (all 7 phases). Two of the three items were already standing (version field, requires[] with cycle detection, the storage interface) — auditing before building was most of the value. What was genuinely missing: nothing ever COMPARED the pinned version, so a plugin could go 1.x→2.x and every room would silently adopt the new grammar, which is the exact scenario pinning existed to prevent. shared/activities/version.js now compares them and resolveActivities carries {pinned,current,status,compatible,needsAttention}; only MAJOR counts as breaking, `ahead` is its own status (rolled-back server, fix is server-side not room-side), unparseable sorts EQUAL not lower. Provenance gates at registerPlugin() — the one path every manifest takes — and FAILS CLOSED: remote origin refused unless a verifier is installed, because the opposite default means remote manifests are trusted by default the day they become possible. Redis-backed state audited and deliberately NOT built: Mongo already gives durability, no socket.io Redis adapter exists so nothing could share state anyway, deployment is one VM with mediasoup pinning to one node, and it would ship untested with no second process to verify against. Also fixed a genuine pre-existing flake — the whiteboard rate-limit test failed on toBeGreaterThan(0) (nothing relayed) not the cap, because 120 fire-and-forget events raced the join; confirmed against a stash that it predated the change. 608 tests / 28 suites. Previously §54 — Smash Karts migrated, client AND server: THE LAST MIGRATION, so PHASE 2 IS COMPLETE and ACTIVITY_PLUGINS=all finally means all nine. The only activity running its own simulation (30Hz setInterval physics), which is why its destroy() was always the reference lifecycle test — asserted by recording g.tick, tearing down, waiting and checking the tick has NOT moved, because a nulled handle with a live closure would pass a naive check and still burn a core forever. Added two SDK capabilities: detached().stream() for volatile/lossy high-rate traffic (reliable delivery on bad wifi builds a backlog the player can never catch up from), and sdk.lifecycle.onHidden/onShown, which finally gave plugins a door into the activity:hidden DOM events ActivityHost had been dispatching since Phase 3 with no way for a panel to reach them — unblocking the kart manifest's obligation #2, a hidden 3D game rendering at full frame rate into a canvas nobody can see. The legacy hand-rolled reconnect re-sync deleted itself: useActivitySdk rejoins and the join ack carries the snapshot. 581 tests / 27 suites, nine plugins served. Previously §53 — Ludo migrated, client AND server: the second bespoke plugin. NOT an adaptLobbyGame() one-liner because its seats are colour-keyed (four fixed board positions, turn order is a list of colours) while lobby.seats models an ordered array of users — adapting would have meant colour↔index translation on every call. Six timers (turn, AFK, auto-move, bot roll, bot move, dead-dice) all on detached(); the bot/human shared code path — doRoll/doMove take no socket, so bots cannot make a move a human couldn't — survives untouched. The host's teardown deleted the legacy "is any HUMAN still connected?" check outright. maxPlayers/allowBots/botDifficulty/turnTimer were declared in Phase 1 with no reader and are now live, with turnTimer:0 ("Off") read through Number.isFinite so `|| DEFAULT` cannot silently re-enable the AFK clock. 560 tests / 26 suites, eight plugins served. Previously §52 — Draw & Guess migrated, client AND server: the first BESPOKE plugin, with no framework underneath it. Game logic ported verbatim so the diff against game.handlers.js is reviewable; only the transport lines changed. Five interlocking timers run on `sdk.socket.detached()`, stored per-room and refreshed on join so the chain survives the drawer disconnecting mid-turn; the private `toUser()` word channel is now load-bearing and pinned by two tests. maxRounds/turnSeconds/hints were hardcoded constants and are now read from the manifest's configSchema. On the client the hook WAS the seam: GameCanvas took its transport as props and GamePanel was untouched apart from forwarding it. 537 tests / 25 suites, seven plugins served. Previously §51 — whiteboard CLIENT migrated, so both halves are finally plugins and the flag is safe to turn on for it; added `sdk.socket.post()` for high-rate fire-and-forget traffic, because `emit()` arms a 10s ack timer per call and the board sends ~36 messages/sec. Six plugins now served. Previously §50 — the four framework games (chess/uno/typing/bingo) migrated onto the plugin host, client AND server, via ONE adapter over the existing lobbyGame framework: one line per game, zero per-game plugin code, four untouched panels. Enabled by splitting seat rules from transport in lobbyGame.js so both paths share one implementation, and by rebuilding the framework's ctx on sdk.socket.detached() so no plugin ever holds `io`. 520 tests / 24 suites, 16/16 live checks. Previously §48 — polls reverted to core: "built as a plugin" and "optional to the user" are independent, and conflating them made polls declinable in the creation wizard. Killed the last hardcoded activity list (GamesHub showed all seven games regardless of what the room installed — the 4th coupling point from the migration plan, and the last one standing), made room purposes multi-select with best-fit scoring, moved the activity manager to a 🧩 Plugins header button, fixed the config-form toggle overflow. 490 tests / 23 suites, 8/8 browser checks. Previously §47: polls migrated onto the plugin host, client + server. Forced `sdk.socket.detached()` for plugins that must speak after their request ends, which every remaining timer-based plugin needs; deleted a 400ms sleep that was standing in for a guarantee. 500 tests / 24 suites green, 10/10 live checks. Previously: Activity Platform Phase 6 — Sticky Notes, the first plugin built after the plugin system. It failed the guarantee-#1 test: three platform defects surfaced (single-slot surface, half-generic tab body, no client SDK) and were fixed as platform work before the plugin shipped. Final footprint 3 files + 3 registration lines; guarantee #1 is now enforced by a test rather than a comment. Verified at three levels because each caught what the one below could not: 481 tests / 23 suites green · 12 live socket checks against the running server · 11 real-browser CDP checks, which found the note was undraggable — the textarea covered the whole card — and confirmed the fix moves it 341px live on the other user's screen.)*

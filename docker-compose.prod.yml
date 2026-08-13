@@ -71,7 +71,13 @@ services:
     networks: [groot]
 
   web:
-    build: ./frontend
+    build:
+      context: ./frontend
+      # Vite inlines VITE_* at BUILD time, so this cannot be passed as a
+      # runtime `environment:` entry — by then the bundle is already written.
+      # Optional: unset simply means the GIF picker uses its keyless fallbacks.
+      args:
+        VITE_KLIPY_KEY: ${VITE_KLIPY_KEY:-}
     restart: unless-stopped
     depends_on: [backend]
     environment:

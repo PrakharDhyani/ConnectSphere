@@ -194,6 +194,31 @@ services:
       - cs_network
 
   # ──────────────────────────────────────────────
+  # LibreTranslate — free, self-hosted machine translation
+  #
+  # Used by the live-captions feature: the backend proxies
+  # POST /api/translate → this container. First start downloads the language
+  # models (~1 GB), so give it a few minutes before translation works.
+  # LT_LOAD_ONLY keeps memory sane by loading only the languages the caption
+  # UI offers — add codes here and in frontend Captions.jsx together.
+  #
+  # Backend env var: LIBRETRANSLATE_URL=http://localhost:5050
+  # ──────────────────────────────────────────────
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    container_name: cs_libretranslate
+    restart: unless-stopped
+    ports:
+      - "5050:5000"
+    environment:
+      LT_LOAD_ONLY: en,hi,es,fr,de,pt,ja,zh,ar,ru
+      LT_DISABLE_WEB_UI: "true"
+    volumes:
+      - libretranslate_data:/home/libretranslate/.local
+    networks:
+      - cs_network
+
+  # ──────────────────────────────────────────────
   # MinIO — S3-compatible object storage (free, self-hosted)
   #
   # What it does:
@@ -235,6 +260,7 @@ services:
 volumes:
   mongo_data:
   redis_data:
+  libretranslate_data:
   zookeeper_data:
   zookeeper_logs:
   kafka_data:

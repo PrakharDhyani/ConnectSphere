@@ -1,8 +1,39 @@
 import Joi from "joi";
 
+/**
+ * Create a room.
+ *
+ * `purpose` and `activities` are OPTIONAL and additive — the original
+ * `{name, visibility}` body stays valid, so older clients (and the one-click
+ * "just make me a room" path in the wizard) keep working unchanged. That is
+ * what makes the wizard safe to roll out.
+ *
+ * Per-plugin `config` is deliberately NOT validated here: Joi cannot know each
+ * plugin's schema. It is validated and clamped against the manifest's
+ * configSchema in the controller (coerceConfig) — the same trust boundary as
+ * sanitizeAttachments for chat. Joi only enforces the envelope.
+ */
 export const createRoomSchema = Joi.object({
   name: Joi.string().trim().min(2).max(100).required(),
-  visibility: Joi.string().valid("public", "private").default("private"),
+  visibility: Joi.string().valid("public", "private", "inviteOnly").default("private"),
+  purpose: Joi.object({
+    // The primary purpose; kept for clients that predate multi-select.
+    kind: Joi.string().trim().max(30).allow(null, ""),
+    // The full multi-select. Bounded generously — the controller filters to
+    // known ids and de-duplicates, so this only has to stop an absurd payload.
+    kinds: Joi.array().items(Joi.string().trim().max(30)).max(20).optional(),
+    // Only meaningful when "custom" is among the kinds; harmless otherwise.
+    text: Joi.string().trim().max(200).allow(null, ""),
+  }).optional(),
+  activities: Joi.array()
+    .max(32) // more than the catalogue; a guard, not a policy
+    .items(
+      Joi.object({
+        id: Joi.string().trim().max(32).required(),
+        config: Joi.object().unknown(true).default({}),
+      })
+    )
+    .optional(),
 });
 
 // Rename is the same single-field rule as create — kept separate so the two

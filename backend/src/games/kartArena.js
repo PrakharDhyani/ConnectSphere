@@ -549,9 +549,12 @@ export function stepWorld(g, dt, now) {
   g.bullets = liveBullets;
 
   // ── Pickups ──
+  // Any active-state flip sets pickupsDirty — the snapshot layer only ships
+  // the pickup list when it actually changed (it's ~1.5KB × 15Hz × N clients
+  // of dead weight otherwise).
   for (const pad of g.pickups) {
     if (!pad.active) {
-      if (now >= pad.readyAt) pad.active = true;
+      if (now >= pad.readyAt) { pad.active = true; g.pickupsDirty = true; }
       continue;
     }
     for (const p of players) {
@@ -587,6 +590,7 @@ export function stepWorld(g, dt, now) {
       }
       pad.active = false;
       pad.readyAt = now + PICKUP_RESPAWN_MS;
+      g.pickupsDirty = true;
       break;
     }
   }
