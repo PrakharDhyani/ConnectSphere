@@ -212,16 +212,16 @@ docker compose -f docker-compose.prod.yml logs -f backend
 
 Wait for `🚀 Groot backend running on port 5000`.
 
-### 1.8 Create the MinIO bucket (once)
+### 1.8 The MinIO bucket — nothing to do
 
-Avatars and chat attachments need it to exist:
+`storage.service.js` calls `ensureBucket()` before every upload: it creates the
+bucket named by `S3_BUCKET` on first use and applies a public-read policy scoped
+to the `avatars/` and `chat/` prefixes. No `mc` commands, no manual step.
 
-```bash
-docker compose -f docker-compose.prod.yml exec minio sh -c \
-  'mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" \
-   && mc mb -p local/connectsphere \
-   && mc anonymous set download local/connectsphere'
-```
+Just make sure `S3_BUCKET` in `.env.production` matches whatever you want it
+called — the value is arbitrary, but `S3_PUBLIC_URL` must resolve to
+`https://<domain>/s3`, since object URLs are built as
+`<S3_PUBLIC_URL>/<bucket>/<key>`.
 
 ### 1.9 Verify — do not skip this
 
