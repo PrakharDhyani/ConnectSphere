@@ -13,7 +13,7 @@
     "@excalidraw/excalidraw": "^0.18.1",
     "@hookform/resolvers": "^3.6.0",
     "@tanstack/react-query": "^5.45.1",
-    "axios": "^1.7.2",
+    "axios": "^1.20.0",
     "clsx": "^2.1.1",
     "framer-motion": "^11.2.12",
     "mediasoup-client": "^3.21.0",
